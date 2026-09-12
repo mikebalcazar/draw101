@@ -98,14 +98,17 @@ const Entrada = (() => {
       // Rectángulo: lo tecleado es ancho (X) o alto (Y); el otro lado sigue al
       // cursor, y el signo lo pone hacia dónde está el cursor.
       const dx = p[0] - base[0], dy = p[1] - base[1];
-      const sx = dx < 0 ? -1 : 1, sy = dy < 0 ? -1 : 1;
-      return bl.campo === "ancho" ? [base[0] + sx * bl.valor, p[1]] : [p[0], base[1] + sy * bl.valor];
+      const v = Math.abs(bl.valor);
+      return bl.campo === "ancho"
+        ? [base[0] + signoMedida(bl.valor, dx) * v, p[1]]
+        : [p[0], base[1] + signoMedida(bl.valor, dy) * v];
     }
     if (bl && base) {
       const dx = p[0] - base[0], dy = p[1] - base[1];
       let largo = Math.hypot(dx, dy);
       let ang = Math.atan2(dy, dx) * 180 / Math.PI;
-      if (bl.campo === "longitud") largo = bl.valor;
+      // Longitud negativa: la misma medida, hacia el lado contrario del cursor.
+      if (bl.campo === "longitud") { largo = Math.abs(bl.valor); if (bl.valor < 0) ang += 180; }
       else ang = bl.valor;
       p = [base[0] + largo * Math.cos(ang * Math.PI / 180),
            base[1] + largo * Math.sin(ang * Math.PI / 180)];
@@ -117,6 +120,15 @@ const Entrada = (() => {
    * línea de comando: una longitud (o un ángulo, si el foco está en el
    * segundo campo). Vale sólo mientras la herramienta pide un punto con
    * dirección y hay punto base. */
+  /* Signo de una medida tecleada (Mike, 12-sep-2026): «-4» quiere decir hacia
+   * la izquierda (o hacia abajo), aunque el ratón esté a la derecha. Sin signo,
+   * la medida es un tamaño y la dirección la pone el cursor, como antes.
+   * `dCursor` es cursor − base en ese eje. */
+  function signoMedida(valor, dCursor) {
+    if (valor < 0) return -1;
+    return dCursor < 0 ? -1 : 1;
+  }
+
   function bloqueoTecleado() {
     if (!pendiente || !pendiente.base || !(pendiente.direccion || pendiente.dinamica === "xy")) return null;
     const xy = pendiente.dinamica === "xy";
@@ -127,10 +139,9 @@ const Entrada = (() => {
     else if (act === $("#cmd")) { campo = xy ? "ancho" : "longitud"; texto = act.value; }
     else return null;
     const t = String(texto).trim();
-    if (campo !== "angulo" && !/^\d+(\.\d+)?$/.test(t)) return null;
-    if (campo === "angulo" && !/^-?\d+(\.\d+)?$/.test(t)) return null;
+    if (!/^-?\d+(\.\d+)?$/.test(t)) return null;
     const n = parseFloat(t);
-    if (!isFinite(n) || (campo !== "angulo" && n <= 0)) return null;
+    if (!isFinite(n) || (campo !== "angulo" && n === 0)) return null;
     // Si el campo trae lo que la propia caja escribió (la medida del cursor),
     // no es un tecleo: sólo cuenta lo que la persona cambió.
     if (act.dataset.propio === t) return null;
@@ -176,8 +187,12 @@ const Entrada = (() => {
       $("#din-e1").textContent = "X";
       $("#din-e2").textContent = "Y";
       const v1 = $("#din-v1"), v2 = $("#din-v2");
-      if (document.activeElement !== v1) { const t = mm(Math.abs(dx)); if (v1.value !== t) { v1.value = t; v1.dataset.propio = t; } }
-      if (document.activeElement !== v2) { const t = mm(Math.abs(dy)); if (v2.value !== t) { v2.value = t; v2.dataset.propio = t; } }
+      // El campo ya fijado muestra lo tecleado, con su signo («-300»): así se
+      // ve que va a la izquierda y no se pierde el signo al rematar.
+      const tx = (bloqueo && bloqueo.campo === "ancho") ? mm(bloqueo.valor) : mm(Math.abs(dx));
+      const ty = (bloqueo && bloqueo.campo === "alto") ? mm(bloqueo.valor) : mm(Math.abs(dy));
+      if (document.activeElement !== v1 && v1.value !== tx) { v1.value = tx; v1.dataset.propio = tx; }
+      if (document.activeElement !== v2 && v2.value !== ty) { v2.value = ty; v2.dataset.propio = ty; }
     } else if (base) {
       const dx = p[0] - base[0], dy = p[1] - base[1];
       $("#din-e1").textContent = "Long";
@@ -204,8 +219,11 @@ const Entrada = (() => {
     if (!isFinite(v1) || !isFinite(v2)) return null;
     if (!base) return [v1, v2];
     if (pendiente.dinamica === "xy") {
-      const sx = estado.cursor.x < base[0] ? -1 : 1, sy = estado.cursor.y < base[1] ? -1 : 1;
-      return [base[0] + sx * Math.abs(v1), base[1] + sy * Math.abs(v2)];
+      // Lo fijado con Enter manda sobre lo que muestre la caja.
+      const ancho = (bloqueo && bloqueo.campo === "ancho") ? bloqueo.valor : v1;
+      const alto = (bloqueo && bloqueo.campo === "alto") ? bloqueo.valor : v2;
+      const sx = signoMedida(ancho, estado.cursor.x - base[0]), sy = signoMedida(alto, estado.cursor.y - base[1]);
+      return [base[0] + sx * Math.abs(ancho), base[1] + sy * Math.abs(alto)];
     }
     return [base[0] + v1 * Math.cos(v2 * Math.PI / 180),
             base[1] + v1 * Math.sin(v2 * Math.PI / 180)];
@@ -267,9 +285,9 @@ const Entrada = (() => {
     // convertía una coordenada en una longitud de 300.1 mm y la línea se iba a
     // otro lado. Sólo un número pelado, con punto decimal si acaso.
     const t = String(texto).trim();
-    if (!/^\d+(\.\d+)?$/.test(t)) return false;      // «100,50» y «@100<45» no
+    if (!/^-?\d+(\.\d+)?$/.test(t)) return false;    // «100,50» y «@100<45» no
     const n = parseFloat(t);
-    if (!isFinite(n) || n <= 0) return false;
+    if (!isFinite(n) || n === 0) return false;
     if (pendiente.dinamica === "xy") {
       // Rectángulo por la línea de comandos (Mike, 9-sep-2026): «clic origen
       // → teclear ancho Enter → teclear alto Enter → se crea». Sin cajita
@@ -277,18 +295,18 @@ const Entrada = (() => {
       // hacia donde esté el cursor.
       if (!bloqueo || bloqueo.campo !== "ancho") {
         bloqueo = { campo: "ancho", valor: n };
-        Comandos.pedir(`${Tr("Alto")} (${mm(n)} ${U()} × ?)`);
+        Comandos.pedir(`${Tr("Alto")} (${mm(Math.abs(n))} ${U()} × ?)`);
         alMoverse();
         return true;
       }
       const base = pendiente.base;
-      const sx = estado.cursor.x < base[0] ? -1 : 1, sy = estado.cursor.y < base[1] ? -1 : 1;
-      entregar([base[0] + sx * bloqueo.valor, base[1] + sy * n]);
+      const sx = signoMedida(bloqueo.valor, estado.cursor.x - base[0]), sy = signoMedida(n, estado.cursor.y - base[1]);
+      entregar([base[0] + sx * Math.abs(bloqueo.valor), base[1] + sy * Math.abs(n)]);
       return true;
     }
     if (!pendiente.direccion) return false;
     bloqueo = { campo: "longitud", valor: n };
-    Comandos.pedir(`${pendiente.mensaje} · ${mm(n)} ${U()} fijos — apunta y haz clic`);
+    Comandos.pedir(`${pendiente.mensaje} · ${mm(Math.abs(n))} ${U()} fijos — apunta y haz clic`);
     alMoverse();
     return true;
   }
@@ -548,7 +566,7 @@ const Entrada = (() => {
       // querer decir «el alto es el del ratón».
       if (pendiente.dinamica === "xy" && pendiente.base && document.activeElement === $("#din-v1")) {
         const valor = parseFloat($("#din-v1").value);
-        if (isFinite(valor) && valor > 0) bloqueo = { campo: "ancho", valor };
+        if (isFinite(valor) && valor !== 0) bloqueo = { campo: "ancho", valor };
         $("#din-v2").select();
         alMoverse();
         return true;
@@ -578,7 +596,7 @@ const Entrada = (() => {
     pedirPunto, pedirTexto, pedirNumero, textoRecibido, cancelarTexto,
     ultimoValor, recordarValor,
     cancelar, clicEnLienzo, alMoverse, alTeclear, opcionTecleada,
-    parsearCoordenadas, puntoDelCursor, entregar, fijarLargo, previaLargo, numeroTecleado,
+    parsearCoordenadas, puntoDelCursor, entregar, fijarLargo, previaLargo, numeroTecleado, signoMedida,
     get largoFijo() { return !!bloqueo; },
     get activa() { return !!pendiente; },
     get esperandoTexto() { return !!pendienteTexto; },

@@ -1172,7 +1172,7 @@ function pintarHule(c = ctx) {
     c.font = "600 11px Cifras, Raleway, sans-serif";
     c.fillStyle = css.getPropertyValue("--acc2").trim();
     c.textAlign = "center"; c.textBaseline = "middle";
-    const etiqueta = mm(previa.valor);
+    const etiqueta = mm(Math.abs(previa.valor));  // el signo es dirección, no tamaño
     const ex = (bx + px) / 2 + nx * 12, ey = (by + py) / 2 + ny * 12;
     const w = c.measureText(etiqueta).width + 8;
     c.save(); c.fillStyle = css.getPropertyValue("--lienzo").trim() || "#fff"; c.globalAlpha = 0.85;
