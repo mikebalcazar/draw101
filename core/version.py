@@ -21,13 +21,30 @@ Numeración: `mayor.menor.parche`.
 
 from __future__ import annotations
 
-VERSION = "X.0.2"
-FECHA = "2026-09-10"
+VERSION = "0.20.2"
+FECHA = "2026-09-12"
 
 # Qué trae cada entrega, en el idioma del taller y no en el del código.
 # La más nueva arriba. Lo que se lista aquí es lo que el comando VERSION
 # enseña en la consola.
 BITACORA: list[dict] = [
+    {
+        "version": "0.20.2",
+        "fecha": "2026-09-12",
+        "cambios": [
+            "Medidas negativas: «-300» en el ancho o el alto de un RECTÁNGULO "
+            "(en la cajita X/Y o en la línea de comandos) dibuja hacia la "
+            "izquierda o hacia abajo, esté donde esté el ratón. Sin signo, "
+            "como siempre: el tamaño lo pone el número y la dirección el cursor. "
+            "Vale igual para la longitud de LÍNEA y demás comandos con medida "
+            "fija: «-200» va al lado contrario del cursor.",
+            "El campo ya fijado de la cajita muestra lo tecleado con su signo "
+            "(«-300»), y ese valor manda al rematar con Enter.",
+            "Todo lo de X.0.2 (pruebas t001–t015 y el arreglo de la cota al "
+            "ESTIRAR) más la prueba t016 de medidas negativas: 17 "
+            "comprobaciones tecleando de verdad en el navegador.",
+        ],
+    },
     {
         "version": "X.0.2",
         "fecha": "2026-09-10",
