@@ -39,6 +39,21 @@ const T = {
     escala: f,
     espejo: false,
   }),
+  /* Escala en UNA dirección (Mike, 12-sep-2026): el vector base→referencia es
+   * el eje; sólo se estira la componente de cada punto sobre ese eje, la
+   * perpendicular queda igual. Un mueble de 900 de ancho pasa a 1000 sin
+   * tocar el alto. `u` es el eje unitario y `k` el factor sobre él. */
+  escalarEje: (c, u, k) => ({
+    punto: (p) => {
+      const dx = p[0] - c[0], dy = p[1] - c[1];
+      const t = dx * u[0] + dy * u[1];
+      return [c[0] + dx + (k - 1) * t * u[0], c[1] + dy + (k - 1) * t * u[1]];
+    },
+    angulo: (a) => a,
+    escala: 1,          // radios, alturas de texto y bloques no cambian
+    espejo: false,
+    eje: { u, k },
+  }),
   espejo: (a, b) => {
     const dx = b[0] - a[0], dy = b[1] - a[1];
     const largo2 = dx * dx + dy * dy || 1;
@@ -212,9 +227,25 @@ async function transformarSeleccion(ids, t, accion, copia = false) {
   const ents = await traer(ids);
   const cambios = {};
   const agregar = [];
-  let ajenas = 0;
+  const borrar = [];
+  let ajenas = 0, arcos = 0, bulges = 0;
   const sel = new Set(ids);
   for (const ent of ents) {
+    // Escala en una dirección: un círculo deja de ser círculo. Se cambia por
+    // la elipse exacta (borrar + agregar); un arco no tiene entidad exacta
+    // aquí y se deja quieto avisando; los arcos de polilínea (bulge) se
+    // aproximan: se estira la cuerda y se conserva el bulge.
+    if (t.eje && !copia && ent.tipo === "circulo") {
+      const { u, k } = t.eje;
+      const r = ent.radio;
+      const mayor = k >= 1 ? [u[0] * r * k, u[1] * r * k] : [-u[1] * r, u[0] * r];
+      agregar.push({ tipo: "elipse", capa: ent.capa, color: ent.color, tipo_linea: ent.tipo_linea,
+                     centro: t.punto(ent.centro), eje_mayor: mayor, razon: k >= 1 ? 1 / k : k });
+      borrar.push(ent.id);
+      continue;
+    }
+    if (t.eje && ent.tipo === "arco") { arcos++; continue; }
+    if (t.eje && ent.tipo === "polilinea" && (ent.puntos || []).some((v) => v[2])) bulges++;
     const c = transformar(ent, t, sel);
     if (!c) { ajenas++; continue; }
     // Una copia de una cota no sigue pegada a la pieza original: sería una
@@ -222,13 +253,47 @@ async function transformarSeleccion(ids, t, accion, copia = false) {
     if (copia) agregar.push({ ...ent, ...c, id: undefined, ...(ent.tipo === "cota" ? { liga: [] } : {}) });
     else cambios[ent.id] = c;
   }
-  await aplicarOperacion({ accion, cambios, agregar });
+  await aplicarOperacion({ accion, cambios, agregar, borrar });
+  if (arcos) Comandos.eco(`${arcos} arco(s) no se escalan en una sola dirección: se quedaron como estaban.`, "malo");
+  if (bulges) Comandos.eco(`${bulges} polilínea(s) con arcos: los arcos se aproximaron (cuerda estirada, curvatura igual).`);
   if (ajenas) {
     Comandos.eco(`${ajenas} entidad(es) del archivo original no se movieron: ` +
                  "este programa todavía no sabe qué son.", "malo");
   }
   return Object.keys(cambios).length + agregar.length;
 }
+
+/* Escalar en una dirección  ·  Mike (12-sep-2026): «sólo se incrementa escala
+ * en el vector que se seleccionó el origen y referencia». Base → referencia
+ * define el eje y lo que mide hoy; el punto nuevo (o el factor) dice lo que
+ * debe medir sobre ese eje. Un snap fuera del eje se proyecta al eje. */
+Comandos.registrar({
+  nombre: "ESCALARD", alias: ["ESD", "SCD", "ESCALAD"],
+  ayuda: "Escala sólo en una dirección: punto base, referencia (define el eje) y punto nuevo (o factor)",
+  correr: async () => {
+    const ids = await Seleccion.pedir({ mensaje: "Selecciona lo que se escala en una dirección" });
+    if (!ids.length) return;
+    const c = await Entrada.pedirPunto({ mensaje: "Punto base" });
+    const r1 = await Entrada.pedirPunto({
+      mensaje: "Punto de referencia: marca el eje y lo que mide hoy", base: c,
+      hule: (q) => ({ tipo: "linea", a: c, b: q }),
+    });
+    const L0 = Math.hypot(r1[0] - c[0], r1[1] - c[1]);
+    if (L0 < 1e-9) return Comandos.eco("El punto de referencia es el mismo que la base.", "malo");
+    const u = [(r1[0] - c[0]) / L0, (r1[1] - c[1]) / L0];
+    const sobreEje = (q) => ((q[0] - c[0]) * u[0] + (q[1] - c[1]) * u[1]) / L0;
+    const r2 = await Entrada.pedirPunto({
+      mensaje: "Punto nuevo: hasta dónde debe llegar sobre el eje (o teclea el factor)", base: c, numero: true,
+      hule: conFantasma(ids, c, (q) => T.escalarEje(c, u, Math.max(1e-9, sobreEje(q)))),
+    });
+    const k = Array.isArray(r2) ? sobreEje(r2) : r2.numero;
+    if (!(k > 1e-9)) return Comandos.eco("El factor tiene que ser mayor que cero (el punto nuevo quedó atrás de la base).", "malo");
+    if (Math.abs(k - 1) < 1e-12) return Comandos.eco("Factor 1: nada que hacer.");
+    await transformarSeleccion(ids, T.escalarEje(c, u, k), `Escalar en una dirección ${ids.length}`);
+    Comandos.eco(`Escaladas ${ids.length} entidad(es) ×${mm(k)} sobre el eje.`);
+    Seleccion.limpiar();
+  },
+});
 
 /* ===================================================================== */
 /* Borrar                                                                */
