@@ -74,7 +74,15 @@ const Entrada = (() => {
     //    resultado: era trabajo de cuadro entero para nada.
     const ref = pendiente ? Osnap.buscar(p, base, null, { cotas: !!pendiente.osnapCotas }) : null;
     estado.ref = ref;
-    if (ref) return ref.p;
+    // Mike (12-sep-2026): «el valor tecleado es el valor final, no importa
+    // ángulo, dirección o snaps». Antes el snap se devolvía aquí mismo y se
+    // saltaba el bloqueo (paso 4): una línea de 200 se iba al endpoint que
+    // hubiera a 150 en el camino, y una X tecleada se perdía al agarrar un
+    // snap. Con algo tecleado, el snap sólo aporta dirección (o la otra
+    // coordenada) y sigue el camino normal hasta el bloqueo.
+    const blPrevio = bloqueo || bloqueoTecleado();
+    if (ref && !blPrevio) return ref.p;
+    if (ref) p = ref.p;
 
     // 2. Ortho  ·  feature 14  (y Shift lo invierte mientras dure: ver base.js)
     if (orthoActivo() && base) {
@@ -93,7 +101,7 @@ const Entrada = (() => {
     //    fijado: Mike escribía «600» en la cajita y daba clic, y la línea
     //    salía hasta donde estaba el ratón, no de 600. El número tecleado
     //    manda; el clic sólo pone la dirección.
-    const bl = bloqueo || bloqueoTecleado();
+    const bl = blPrevio;
     if (bl && base && (bl.campo === "ancho" || bl.campo === "alto")) {
       // Rectángulo: lo tecleado es ancho (X) o alto (Y); el otro lado sigue al
       // cursor, y el signo lo pone hacia dónde está el cursor.

@@ -21,13 +21,33 @@ Numeración: `mayor.menor.parche`.
 
 from __future__ import annotations
 
-VERSION = "0.20.2"
+VERSION = "0.20.3"
 FECHA = "2026-09-12"
 
 # Qué trae cada entrega, en el idioma del taller y no en el del código.
 # La más nueva arriba. Lo que se lista aquí es lo que el comando VERSION
 # enseña en la consola.
 BITACORA: list[dict] = [
+    {
+        "version": "0.20.3",
+        "fecha": "2026-09-12",
+        "cambios": [
+            "El valor tecleado manda sobre el snap. Una LÍNEA de «200» mide 200 "
+            "aunque el ratón agarre un endpoint a 150 en el camino; el snap sólo "
+            "da la dirección. En RECTÁNGULO, con la X tecleada, el snap ya no "
+            "borra el valor: aporta la Y y la X sigue siendo la tecleada. Igual "
+            "con ORTHO: el snap se proyecta al eje.",
+            "ESCALARD (ESD, SCD): escala en UNA sola dirección. Base → referencia "
+            "marca el eje y lo que mide hoy; el punto nuevo (o el factor) dice lo "
+            "que debe medir sobre ese eje. Lo perpendicular no se toca: un mueble "
+            "de 900 de ancho pasa a 1000 sin cambiar el alto. Los círculos se "
+            "vuelven la elipse exacta; los arcos sueltos no se escalan y se avisa.",
+            "Pruebas t017 (tecleado vs. snap, 11 comprobaciones) y t018 "
+            "(ESCALARD, 13 comprobaciones). Se comprobó que en COPIAR el espacio "
+            "ya confirma el valor como Enter, en la cajita y en la línea de "
+            "comandos (venía de X.0.2).",
+        ],
+    },
     {
         "version": "0.20.2",
         "fecha": "2026-09-12",
