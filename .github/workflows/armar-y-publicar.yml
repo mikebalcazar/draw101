@@ -179,9 +179,10 @@ jobs:
           git config user.name "draw101 (Armar y publicar)"
           git config user.email "mike@forespot.com"
           RAMA="claude/carga-draw101-$VER"
-          git checkout -q --orphan "$RAMA"
-          git rm -rfq . > /dev/null
-          cp -r ../salida/carga carga
+          # Desde main, no huérfana: una rama huérfana NO dispara
+          # publicar-instalador.yml (medido por Jr. el 13-sep con shape101).
+          git checkout -q -b "$RAMA"
+          rm -rf carga && cp -r ../salida/carga carga
           git add carga
           git commit -qm "carga: draw101 $VER (armada por Actions de draw101)"
           git push -q origin "$RAMA"
