@@ -1,0 +1,114 @@
+--- a/core/dibujo.py
++++ b/core/dibujo.py
+@@ -15,10 +15,35 @@
+ from . import cotas as mod_cotas
+ from .documento import Documento
+ 
+-# Cuántos segmentos por vuelta completa. 72 = uno cada 5°; a la vista de un
+-# plano de taller no se distingue de una curva, y no ahoga al lienzo.
++# Cuántos segmentos por vuelta completa, como máximo. 72 = uno cada 5°; a la
++# vista de un plano de taller no se distingue de una curva, y no ahoga al lienzo.
+ SEGMENTOS = 72
+ MIN_SEG = 6
++# Medido el 13-sep-2026 (objetivo 1, fluidez, camino C): en un plano de
++# 21 700 entidades, 390 000 de los 425 000 vértices que viajan al navegador
++# eran círculos y arcos a 72 segmentos fijos, sin importar el radio. Un barreno
++# de ⌀5 no necesita 73 puntos: la cuerda de un polígono de 16 lados a ese
++# radio se separa del círculo 0.05 mm, que no se ve ni se corta. La regla:
++# tantos segmentos como pida no separarse más de FLECHA_MAX mm de la curva,
++# entre MIN_SEG y SEGMENTOS por vuelta. Los círculos grandes siguen a 72.
++FLECHA_MAX = 0.05
++# Se probó redondear las coordenadas a milésimas antes de mandarlas (13-sep):
++# el JSON bajaba 40 % (19 → 12 MB en el plano de prueba) pero el redondeo en
++# Python costaba 0.6 s por apertura y el navegador no ganaba nada medible.
++# No se hizo. La geometría del osnap tampoco se redondea: los grips comparan
++# con la entidad exacta (tolerancia 1e-6) y se rompían (t007).
++
++
++def _segmentos_por_vuelta(r: float) -> int:
++    if r <= 0:
++        return MIN_SEG
++    c = 1 - FLECHA_MAX / r
++    if c <= -1:
++        return MIN_SEG
++    if c >= 1:
++        return SEGMENTOS
++    n = math.ceil(math.pi / math.acos(c))
++    return max(MIN_SEG, min(SEGMENTOS, n))
+ 
+ 
+ def _arco_puntos(cx, cy, r, a0, a1, sentido=1):
+@@ -26,7 +51,7 @@
+     barrido = (a1 - a0) * sentido
+     while barrido < 0:
+         barrido += 2 * math.pi
+-    n = max(MIN_SEG, int(SEGMENTOS * barrido / (2 * math.pi)) + 1)
++    n = max(MIN_SEG, int(_segmentos_por_vuelta(r) * barrido / (2 * math.pi)) + 1)
+     return [[cx + r * math.cos(a0 + sentido * barrido * i / n),
+              cy + r * math.sin(a0 + sentido * barrido * i / n)]
+             for i in range(n + 1)]
+@@ -86,7 +111,7 @@
+     barrido = t1 - t0
+     if barrido <= 0:
+         barrido += 2 * math.pi
+-    n = max(MIN_SEG, int(SEGMENTOS * barrido / (2 * math.pi)) + 1)
++    n = max(MIN_SEG, int(_segmentos_por_vuelta(max(a, b)) * barrido / (2 * math.pi)) + 1)
+     pts = []
+     for i in range(n + 1):
+         t = t0 + barrido * i / n
+--- a/ui/base.js
++++ b/ui/base.js
+@@ -88,12 +88,34 @@
+   return { empieza, termina, mientras, get activo() { return visible; } };
+ })();
+ 
++/* Llamadas lentas al motor, anotadas solas (13-sep-2026, objetivo 1,
++ * fluidez, camino C). Medido en el plano de prueba de 21 700 entidades: pintar
++ * un cuadro cuesta 40–60 ms, pero pedir `/api/trazos` entero cuesta 1–2 s y
++ * una operación que no manda parche obliga a pedirlo. Cuando Mike dice «se
++ * puso lentísimo», la pregunta es qué llamada fue: esto la deja anotada con
++ * su ruta, cuánto tardó, cuánto pesó y si hubo recarga completa. PERF lo
++ * imprime junto a los cuadros lentos. */
++const DiagApi = { llamadas: [], umbral: 150 };
++function _anotarLlamada(ruta, ms, bytes, recarga) {
++  DiagApi.llamadas.push({ t: Date.now(), ruta: ruta.split("?")[0], ms, kb: Math.round(bytes / 1024), recarga });
++  if (DiagApi.llamadas.length > 40) DiagApi.llamadas.shift();
++}
++
+ const api = async (ruta, opciones) => {
+   Ocupado.empieza(ruta);
++  const tInicio = performance.now();
+   try {
+     const r = await fetch(ruta, opciones);
+     let cuerpo = null, fallo = null;
+-    try { cuerpo = await r.json(); } catch (e) { fallo = e; cuerpo = {}; }
++    let bytes = 0;
++    try {
++      const texto = await r.text();
++      bytes = texto.length;
++      cuerpo = JSON.parse(texto);
++    } catch (e) { fallo = e; cuerpo = {}; }
++    const ms = performance.now() - tInicio;
++    const recarga = ruta.startsWith("/api/trazos") || (cuerpo && "parche" in cuerpo && cuerpo.parche === null);
++    if (ms >= DiagApi.umbral || recarga) _anotarLlamada(ruta, ms, bytes, recarga);
+     if (!r.ok) throw new Error(cuerpo.detail || `Error ${r.status}`);
+     // Una respuesta buena que no se pudo leer (demasiado grande para el
+     // navegador, o rota) es un error, no un objeto vacío: con `{}` el
+--- a/ui/comandos.js
++++ b/ui/comandos.js
+@@ -411,6 +411,15 @@
+     // Los cuadros lentos que se anotaron solos desde que se abrió el plano
+     // (ver Diag en vista.js): es la pista cuando «se puso lentísimo» pasó
+     // hace un rato y aquí no se reproduce.
++    // Y las llamadas al motor que tardaron o que obligaron a recargar todo
++    // (ver DiagApi en base.js): es la otra mitad del «se puso lentísimo».
++    if (typeof DiagApi !== "undefined" && DiagApi.llamadas.length) {
++      const recargas = DiagApi.llamadas.filter((l) => l.recarga).length;
++      r.push(`llamadas al motor lentas (> ${DiagApi.umbral} ms) o con recarga completa: ${DiagApi.llamadas.length} (recargas completas: ${recargas})`);
++      for (const l of DiagApi.llamadas.slice(-12)) {
++        r.push(`   · ${new Date(l.t).toLocaleTimeString()} ${l.ruta} ${l.ms.toFixed(0)} ms · ${l.kb} KB${l.recarga ? " · RECARGA COMPLETA" : ""}`);
++      }
++    }
+     if (typeof Diag !== "undefined" && Diag.cuadros.length) {
+       r.push(`cuadros lentos anotados (> ${Diag.umbral} ms): ${Diag.cuadros.length}`);
+       for (const c of Diag.cuadros.slice(-12)) {
