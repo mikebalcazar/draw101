@@ -1,0 +1,399 @@
+--- a/core/dibujo.py
++++ b/core/dibujo.py
+@@ -15,10 +15,35 @@
+ from . import cotas as mod_cotas
+ from .documento import Documento
+ 
+-# Cuántos segmentos por vuelta completa. 72 = uno cada 5°; a la vista de un
+-# plano de taller no se distingue de una curva, y no ahoga al lienzo.
++# Cuántos segmentos por vuelta completa, como máximo. 72 = uno cada 5°; a la
++# vista de un plano de taller no se distingue de una curva, y no ahoga al lienzo.
+ SEGMENTOS = 72
+ MIN_SEG = 6
++# Medido el 13-sep-2026 (objetivo 1, fluidez, camino C): en un plano de
++# 21 700 entidades, 390 000 de los 425 000 vértices que viajan al navegador
++# eran círculos y arcos a 72 segmentos fijos, sin importar el radio. Un barreno
++# de ⌀5 no necesita 73 puntos: la cuerda de un polígono de 16 lados a ese
++# radio se separa del círculo 0.05 mm, que no se ve ni se corta. La regla:
++# tantos segmentos como pida no separarse más de FLECHA_MAX mm de la curva,
++# entre MIN_SEG y SEGMENTOS por vuelta. Los círculos grandes siguen a 72.
++FLECHA_MAX = 0.05
++# Se probó redondear las coordenadas a milésimas antes de mandarlas (13-sep):
++# el JSON bajaba 40 % (19 → 12 MB en el plano de prueba) pero el redondeo en
++# Python costaba 0.6 s por apertura y el navegador no ganaba nada medible.
++# No se hizo. La geometría del osnap tampoco se redondea: los grips comparan
++# con la entidad exacta (tolerancia 1e-6) y se rompían (t007).
++
++
++def _segmentos_por_vuelta(r: float) -> int:
++    if r <= 0:
++        return MIN_SEG
++    c = 1 - FLECHA_MAX / r
++    if c <= -1:
++        return MIN_SEG
++    if c >= 1:
++        return SEGMENTOS
++    n = math.ceil(math.pi / math.acos(c))
++    return max(MIN_SEG, min(SEGMENTOS, n))
+ 
+ 
+ def _arco_puntos(cx, cy, r, a0, a1, sentido=1):
+@@ -26,7 +51,7 @@
+     barrido = (a1 - a0) * sentido
+     while barrido < 0:
+         barrido += 2 * math.pi
+-    n = max(MIN_SEG, int(SEGMENTOS * barrido / (2 * math.pi)) + 1)
++    n = max(MIN_SEG, int(_segmentos_por_vuelta(r) * barrido / (2 * math.pi)) + 1)
+     return [[cx + r * math.cos(a0 + sentido * barrido * i / n),
+              cy + r * math.sin(a0 + sentido * barrido * i / n)]
+             for i in range(n + 1)]
+@@ -86,7 +111,7 @@
+     barrido = t1 - t0
+     if barrido <= 0:
+         barrido += 2 * math.pi
+-    n = max(MIN_SEG, int(SEGMENTOS * barrido / (2 * math.pi)) + 1)
++    n = max(MIN_SEG, int(_segmentos_por_vuelta(max(a, b)) * barrido / (2 * math.pi)) + 1)
+     pts = []
+     for i in range(n + 1):
+         t = t0 + barrido * i / n
+--- a/core/version.py
++++ b/core/version.py
+@@ -21,14 +21,36 @@
+ 
+ from __future__ import annotations
+ 
+-VERSION = "0.20.3"
+-FECHA = "2026-09-12"
++VERSION = "0.20.4"
++FECHA = "2026-09-13"
+ 
+ # Qué trae cada entrega, en el idioma del taller y no en el del código.
+ # La más nueva arriba. Lo que se lista aquí es lo que el comando VERSION
+ # enseña en la consola.
+ BITACORA: list[dict] = [
+     {
++        "version": "0.20.4",
++        "fecha": "2026-09-13",
++        "cambios": [
++            "RECORTAR sobre polilíneas. Se quita sólo el trozo entre los dos "
++            "cruces que rodean el clic y lo que queda sigue siendo polilínea: "
++            "en un extremo se acorta, en medio quedan dos, una cerrada se abre "
++            "por ahí. Los tramos curvos se cortan como arcos exactos.",
++            "Arreglo del índice de selección: tras recargar el dibujo entero "
++            "sin picar nada en medio, la primera edición dejaba el índice del "
++            "plano anterior (entidades borradas seguían «vivas» al clic y las "
++            "nuevas no se dejaban picar).",
++            "Fluidez: los círculos y arcos viajan con tantos segmentos como pida "
++            "su radio (un barreno de ⌀5 con 16 puntos, no 73); en planos con "
++            "muchos barrenos baja lo que se pinta.",
++            "PERF anota las llamadas al motor que tardaron más de 150 ms o que "
++            "obligaron a recargar todo (ruta, tiempo, peso), junto a los cuadros "
++            "lentos: al reportar «se puso lento» ya se ve qué fue.",
++            "Prueba t019 (RECORTAR en polilínea, 19 comprobaciones) y plano "
++            "sintético de 21 700 entidades para medir (pruebas/carga/).",
++        ],
++    },
++    {
+         "version": "0.20.3",
+         "fecha": "2026-09-12",
+         "cambios": [
+--- a/package.json
++++ b/package.json
+@@ -1,8 +1,8 @@
+ {
+   "name": "draw101",
+   "productName": "draw101",
+-  "version": "0.20.3",
+-  "_versionApp": "0.20.3 — la que enseña la app viene de core/version.py; ésta sólo existe porque electron-builder exige semver",
++  "version": "0.20.4",
++  "_versionApp": "0.20.4 — la que enseña la app viene de core/version.py; ésta sólo existe porque electron-builder exige semver",
+   "_notaEmpaque": "asar apagado a propósito: main.js busca server.py junto a electron/, y el motor de Python no puede vivir dentro de un asar. Y electron-builder saca cualquier node_modules de los globs de `files`, así que los dos motores de DWG (dwgjs/node_modules) se copian por extraResources o la app se queda sin leer DWG.",
+   "description": "CAD 2D de Taller 101 — leer, trazar, acotar e imprimir planos",
+   "main": "electron/main.js",
+@@ -19,7 +19,7 @@
+   "build": {
+     "appId": "mx.taller101.dibujador",
+     "productName": "draw101",
+-    "artifactName": "draw101-0.20.3-setup.${ext}",
++    "artifactName": "draw101-0.20.4-setup.${ext}",
+     "directories": {
+       "output": "dist",
+       "buildResources": "build"
+--- a/ui/base.js
++++ b/ui/base.js
+@@ -88,12 +88,34 @@
+   return { empieza, termina, mientras, get activo() { return visible; } };
+ })();
+ 
++/* Llamadas lentas al motor, anotadas solas (13-sep-2026, objetivo 1,
++ * fluidez, camino C). Medido en el plano de prueba de 21 700 entidades: pintar
++ * un cuadro cuesta 40–60 ms, pero pedir `/api/trazos` entero cuesta 1–2 s y
++ * una operación que no manda parche obliga a pedirlo. Cuando Mike dice «se
++ * puso lentísimo», la pregunta es qué llamada fue: esto la deja anotada con
++ * su ruta, cuánto tardó, cuánto pesó y si hubo recarga completa. PERF lo
++ * imprime junto a los cuadros lentos. */
++const DiagApi = { llamadas: [], umbral: 150 };
++function _anotarLlamada(ruta, ms, bytes, recarga) {
++  DiagApi.llamadas.push({ t: Date.now(), ruta: ruta.split("?")[0], ms, kb: Math.round(bytes / 1024), recarga });
++  if (DiagApi.llamadas.length > 40) DiagApi.llamadas.shift();
++}
++
+ const api = async (ruta, opciones) => {
+   Ocupado.empieza(ruta);
++  const tInicio = performance.now();
+   try {
+     const r = await fetch(ruta, opciones);
+     let cuerpo = null, fallo = null;
+-    try { cuerpo = await r.json(); } catch (e) { fallo = e; cuerpo = {}; }
++    let bytes = 0;
++    try {
++      const texto = await r.text();
++      bytes = texto.length;
++      cuerpo = JSON.parse(texto);
++    } catch (e) { fallo = e; cuerpo = {}; }
++    const ms = performance.now() - tInicio;
++    const recarga = ruta.startsWith("/api/trazos") || (cuerpo && "parche" in cuerpo && cuerpo.parche === null);
++    if (ms >= DiagApi.umbral || recarga) _anotarLlamada(ruta, ms, bytes, recarga);
+     if (!r.ok) throw new Error(cuerpo.detail || `Error ${r.status}`);
+     // Una respuesta buena que no se pudo leer (demasiado grande para el
+     // navegador, o rota) es un error, no un objeto vacío: con `{}` el
+--- a/ui/comandos.js
++++ b/ui/comandos.js
+@@ -411,6 +411,15 @@
+     // Los cuadros lentos que se anotaron solos desde que se abrió el plano
+     // (ver Diag en vista.js): es la pista cuando «se puso lentísimo» pasó
+     // hace un rato y aquí no se reproduce.
++    // Y las llamadas al motor que tardaron o que obligaron a recargar todo
++    // (ver DiagApi en base.js): es la otra mitad del «se puso lentísimo».
++    if (typeof DiagApi !== "undefined" && DiagApi.llamadas.length) {
++      const recargas = DiagApi.llamadas.filter((l) => l.recarga).length;
++      r.push(`llamadas al motor lentas (> ${DiagApi.umbral} ms) o con recarga completa: ${DiagApi.llamadas.length} (recargas completas: ${recargas})`);
++      for (const l of DiagApi.llamadas.slice(-12)) {
++        r.push(`   · ${new Date(l.t).toLocaleTimeString()} ${l.ruta} ${l.ms.toFixed(0)} ms · ${l.kb} KB${l.recarga ? " · RECARGA COMPLETA" : ""}`);
++      }
++    }
+     if (typeof Diag !== "undefined" && Diag.cuadros.length) {
+       r.push(`cuadros lentos anotados (> ${Diag.umbral} ms): ${Diag.cuadros.length}`);
+       for (const c of Diag.cuadros.slice(-12)) {
+--- a/ui/editar.js
++++ b/ui/editar.js
+@@ -558,12 +558,14 @@
+     const id = await Seleccion.pedirUna({
+       mensaje: extender ? "Elige la línea a extender" : "Elige el trozo a quitar",
+       icono: extender ? "extender" : "tijera",
+-      filtro: (e) => ["linea", "arco"].includes(e.tipo),
+-      queja: "Por ahora se recortan y extienden líneas y arcos.",
++      filtro: (e) => ["linea", "arco"].includes(e.tipo) || (!extender && e.tipo === "polilinea"),
++      queja: extender ? "Por ahora se extienden líneas y arcos." : "Por ahora se recortan líneas, arcos y polilíneas.",
+     });
+     const ent = await api(`/api/entidad/${id}`);
+     const p = [estado.cursor.x, estado.cursor.y];
+ 
++    if (ent.tipo === "polilinea") { await recortarPolilinea(ent, p); Seleccion.limpiar(); return; }
++
+     // cruces con todo lo demás
+     const mias = estado.geometria.filter((pr) => pr.id === id);
+     const otras = estado.geometria.filter((pr) => pr.id !== id);
+@@ -636,6 +638,173 @@
+   });
+ }
+ 
++/* ---------------------------------------------------------------------- */
++/* Recortar una polilínea (Mike, 10-sep-2026; 0.20.4)                      */
++/*                                                                        */
++/* «Cuando uso trim sobre una polilínea, corta la polilínea en donde se     */
++/* trimea, generando nuevos endpoints». Antes no se podía en absoluto (se   */
++/* rechazaba con aviso). Ahora: se quita sólo el tramo entre los dos cruces */
++/* que rodean el clic, y lo que queda SIGUE SIENDO POLILÍNEA: si el trozo   */
++/* estaba en un extremo, la polilínea se acorta; si estaba en medio, quedan */
++/* dos polilíneas (la original acortada y una nueva); si era cerrada, se    */
++/* abre por ahí. Los tramos curvos (bulge) se cortan como arcos exactos,    */
++/* con el bulge parcial correspondiente.                                    */
++/*                                                                        */
++/* Una posición sobre la polilínea es (k, t): tramo k y fracción t de ese  */
++/* tramo (0 = vértice inicial, 1 = vértice final).                          */
++/* ---------------------------------------------------------------------- */
++function _tramosPolilinea(ent) {
++  const pts = ent.puntos || [];
++  const n = pts.length;
++  const tramos = [];
++  const m = n - 1 + (ent.cerrada && n > 2 ? 1 : 0);
++  for (let k = 0; k < m; k++) {
++    const p1 = pts[k], p2 = pts[(k + 1) % n];
++    const b = p1.length > 2 ? +p1[2] || 0 : 0;
++    tramos.push(_tramoDe([p1[0], p1[1]], [p2[0], p2[1]], b));
++  }
++  return tramos;
++}
++
++function _tramoDe(p1, p2, b) {
++  const tr = { p1, p2, b, recto: Math.abs(b) < 1e-12 };
++  if (tr.recto) return tr;
++  // misma construcción que core/geometria._arco_de_bulge
++  const cuerda = Math.hypot(p2[0] - p1[0], p2[1] - p1[1]);
++  if (cuerda < 1e-12) { tr.recto = true; tr.b = 0; return tr; }
++  const ang = 4 * Math.atan(b);
++  const r = cuerda / (2 * Math.sin(Math.abs(ang) / 2));
++  const mx = (p1[0] + p2[0]) / 2, my = (p1[1] + p2[1]) / 2;
++  const h = Math.sqrt(Math.max(r * r - (cuerda / 2) ** 2, 0));
++  const dx = (p2[0] - p1[0]) / cuerda, dy = (p2[1] - p1[1]) / cuerda;
++  const signo = ang > 0 ? 1 : -1;
++  tr.c = [mx - signo * h * dy, my + signo * h * dx];
++  tr.r = r;
++  tr.ang = ang;                                   // barrido con signo, radianes
++  tr.a1 = Math.atan2(p1[1] - tr.c[1], p1[0] - tr.c[0]);
++  return tr;
++}
++
++function _paramEnTramo(tr, q) {
++  if (tr.recto) return paramEnSeg({ a: tr.p1, b: tr.p2 }, q);
++  let d = Math.atan2(q[1] - tr.c[1], q[0] - tr.c[0]) - tr.a1;
++  d = tr.ang > 0 ? (d + 4 * Math.PI) % (2 * Math.PI) : -((-d + 4 * Math.PI) % (2 * Math.PI));
++  return d / tr.ang;
++}
++
++function _puntoEnTramo(tr, t) {
++  if (tr.recto) return [tr.p1[0] + t * (tr.p2[0] - tr.p1[0]), tr.p1[1] + t * (tr.p2[1] - tr.p1[1])];
++  const a = tr.a1 + t * tr.ang;
++  return [tr.c[0] + tr.r * Math.cos(a), tr.c[1] + tr.r * Math.sin(a)];
++}
++
++function _distTramo(tr, q) {
++  if (tr.recto) {
++    const t = Math.max(0, Math.min(1, paramEnSeg({ a: tr.p1, b: tr.p2 }, q)));
++    const e = _puntoEnTramo(tr, t);
++    return Math.hypot(q[0] - e[0], q[1] - e[1]);
++  }
++  const t = _paramEnTramo(tr, q);
++  if (t >= 0 && t <= 1) return Math.abs(Math.hypot(q[0] - tr.c[0], q[1] - tr.c[1]) - tr.r);
++  return Math.min(Math.hypot(q[0] - tr.p1[0], q[1] - tr.p1[1]), Math.hypot(q[0] - tr.p2[0], q[1] - tr.p2[1]));
++}
++
++// bulge del pedazo de un tramo curvo entre las fracciones t0 y t1
++function _bulgeParcial(tr, t0, t1) {
++  if (tr.recto) return 0;
++  return Math.tan((t1 - t0) * tr.ang / 4);
++}
++
++function _vertice(p, b) {
++  return Math.abs(b) < 1e-12 ? [p[0], p[1]] : [p[0], p[1], b];
++}
++
++/* El pedazo de polilínea que va de la posición A a la posición B siguiendo
++ * los tramos hacia adelante (y dando la vuelta si es cerrada). */
++function _pedazo(tramos, A, B, cerrada) {
++  const m = tramos.length;
++  const salida = [];
++  const largo = cerrada && A.k === B.k && A.t > B.t;   // en cerrada: la vuelta completa
++  if (A.k === B.k && !largo) {
++    const tr = tramos[A.k];
++    salida.push(_vertice(_puntoEnTramo(tr, A.t), _bulgeParcial(tr, A.t, B.t)));
++    salida.push(_vertice(_puntoEnTramo(tr, B.t), 0));
++    return salida;
++  }
++  const trA = tramos[A.k];
++  salida.push(_vertice(_puntoEnTramo(trA, A.t), _bulgeParcial(trA, A.t, 1)));
++  let k = A.k;
++  do {
++    k = cerrada ? (k + 1) % m : k + 1;
++    const tr = tramos[k];
++    if (k === B.k) {
++      salida.push(_vertice(tr.p1, _bulgeParcial(tr, 0, B.t)));
++      salida.push(_vertice(_puntoEnTramo(tr, B.t), 0));
++    } else {
++      salida.push(_vertice(tr.p1, tr.b));
++    }
++  } while (k !== B.k);
++  return salida;
++}
++
++async function recortarPolilinea(ent, p) {
++  const tramos = _tramosPolilinea(ent);
++  if (!tramos.length) return Comandos.eco("Esa polilínea no tiene tramos.", "malo");
++  const m = tramos.length;
++  const cerrada = !!ent.cerrada && (ent.puntos || []).length > 2;
++
++  // Dónde se picó: el tramo más cercano y la fracción dentro de él.
++  let kp = 0, mejor = Infinity;
++  tramos.forEach((tr, k) => { const d = _distTramo(tr, p); if (d < mejor) { mejor = d; kp = k; } });
++  const pick = { k: kp, t: Math.max(0, Math.min(1, _paramEnTramo(tramos[kp], p))) };
++
++  // Cruces con todo lo demás, como posiciones (k, t) sobre la polilínea.
++  const mias = estado.geometria.filter((pr) => pr.id === ent.id);
++  const otras = estado.geometria.filter((pr) => pr.id !== ent.id);
++  const posiciones = [];
++  for (const a of mias) {
++    for (const b of otras) {
++      for (const q of Osnap.interseccion(a, b)) {
++        let k = 0, d0 = Infinity;
++        tramos.forEach((tr, i) => { const d = _distTramo(tr, q); if (d < d0) { d0 = d; k = i; } });
++        const t = _paramEnTramo(tramos[k], q);
++        if (t > -1e-9 && t < 1 + 1e-9) posiciones.push({ k, t: Math.max(0, Math.min(1, t)) });
++      }
++    }
++  }
++  if (!posiciones.length) return Comandos.eco("Esa polilínea no cruza con ninguna otra entidad: no hay dónde recortar.", "malo");
++  const orden = (a, b) => a.k - b.k || a.t - b.t;
++  posiciones.sort(orden);
++  const antes = posiciones.filter((q) => orden(q, pick) < 0);
++  const despues = posiciones.filter((q) => orden(q, pick) > 0);
++  let prev = antes.length ? antes[antes.length - 1] : null;
++  let next = despues.length ? despues[0] : null;
++  if (cerrada) {
++    if (!prev) prev = posiciones[posiciones.length - 1];   // da la vuelta
++    if (!next) next = posiciones[0];
++    if (orden(prev, next) === 0) return Comandos.eco("Una polilínea cerrada necesita dos cruces para quitarle un trozo.", "malo");
++    const puntos = _pedazo(tramos, next, prev, true);
++    await aplicarOperacion({ accion: "Recortar polilínea", cambios: { [ent.id]: { puntos, cerrada: false } } });
++    return;
++  }
++  if (!prev && !next) return Comandos.eco("El trozo que señalaste no está entre cruces.", "malo");
++  const ini = { k: 0, t: 0 }, fin = { k: m - 1, t: 1 };
++  if (prev && next) {
++    // el trozo está en medio: quedan dos polilíneas
++    const a = _pedazo(tramos, ini, prev, false);
++    const b = _pedazo(tramos, next, fin, false);
++    await aplicarOperacion({
++      accion: "Recortar polilínea",
++      cambios: { [ent.id]: { puntos: a, cerrada: false } },
++      agregar: [{ ...ent, id: undefined, puntos: b, cerrada: false }],
++    });
++  } else if (next) {
++    await aplicarOperacion({ accion: "Recortar polilínea", cambios: { [ent.id]: { puntos: _pedazo(tramos, next, fin, false), cerrada: false } } });
++  } else {
++    await aplicarOperacion({ accion: "Recortar polilínea", cambios: { [ent.id]: { puntos: _pedazo(tramos, ini, prev, false), cerrada: false } } });
++  }
++}
++
+ function alargada(pr) {
+   if (pr.tipo !== "seg") return pr;
+   const dx = pr.b[0] - pr.a[0], dy = pr.b[1] - pr.a[1];
+@@ -646,7 +815,7 @@
+ }
+ 
+ Comandos.registrar({ nombre: "RECORTAR", alias: ["RC", "TR"],
+-  ayuda: "Quita el trozo de línea o arco que señales", correr: () => recortarOExtender(false) });
++  ayuda: "Quita el trozo de línea, arco o polilínea que señales", correr: () => recortarOExtender(false) });
+ Comandos.registrar({ nombre: "EXTENDER", alias: ["EXT", "EX"],
+   ayuda: "Alarga una línea hasta lo primero que encuentre", correr: () => recortarOExtender(true) });
+ 
+--- a/ui/indice.js
++++ b/ui/indice.js
+@@ -278,9 +278,16 @@
+   function parchar(p, trazosNuevos, geomNueva) {
+     const quitar = new Set(p.quitar || []);
+     const nuevaGeom = p.geometria || [];
++    // Si el plano cambió entero desde la última vez que alguien preguntó (una
++    // recarga completa sin ningún clic ni pintado en medio), la rejilla que
++    // tenemos es de OTRO plano: parchar encima dejaba entidades borradas
++    // «vivas» y las nuevas invisibles al clic. Se cazó el 13-sep-2026 con
++    // t019: tras limpiar el dibujo y volver a cargar, el primer parche
++    // seguía viendo las entidades viejas. alDia() rearma si hace falta.
++    const cambioEntero = _trazos !== estado.trazos || _geom !== estado.geometria;
+     // Sin rejilla armada de verdad (plano vacío: sin origen ni paso), o con un
+     // parche grande, se rearma: parchar sería incorrecto o más lento.
+-    const grande = !_rejilla || !_geom || _rejilla.x0 === undefined ||
++    const grande = cambioEntero || !_rejilla || !_geom || _rejilla.x0 === undefined ||
+       (quitar.size + nuevaGeom.length) > Math.max(2000, _geom.length / 5);
+     if (grande) { _trazos = null; _geom = null; estado.trazos = trazosNuevos; estado.geometria = geomNueva; alDia(); return false; }
+ 
