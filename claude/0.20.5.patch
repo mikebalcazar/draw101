@@ -1,0 +1,145 @@
+--- a/core/version.py
++++ b/core/version.py
+@@ -21,14 +21,27 @@
+ 
+ from __future__ import annotations
+ 
+-VERSION = "0.20.4"
+-FECHA = "2026-09-13"
++VERSION = "0.20.5"
++FECHA = "2026-09-14"
+ 
+ # Qué trae cada entrega, en el idioma del taller y no en el del código.
+ # La más nueva arriba. Lo que se lista aquí es lo que el comando VERSION
+ # enseña en la consola.
+ BITACORA: list[dict] = [
+     {
++        "version": "0.20.5",
++        "fecha": "2026-09-14",
++        "cambios": [
++            "Cambiar de unidades (UNIDADES) ya es un paso del historial: Ctrl+Z "
++            "lo deshace y devuelve tamaños y unidad, y los siguientes Ctrl+Z "
++            "siguen en orden. Antes el cambio no se anotaba, y deshacer después "
++            "de escalar restauraba la acción anterior con los números de antes "
++            "(en milímetros dentro de un plano en centímetros): lo dibujado "
++            "«desaparecía» diez veces más lejos.",
++            "Prueba t020 (unidades y deshacer, 20 comprobaciones).",
++        ],
++    },
++    {
+         "version": "0.20.4",
+         "fecha": "2026-09-13",
+         "cambios": [
+--- a/core/unidades.py
++++ b/core/unidades.py
+@@ -197,26 +197,34 @@
+     vieja = doc.unidades if doc.unidades in MM_POR_NOMBRE else "mm"
+     if nueva == vieja:
+         return {"unidades": nueva, "factor": 1.0, "escalado": False}
+-    k = MM_POR_NOMBRE[vieja] / MM_POR_NOMBRE[nueva]      # unidades nuevas por unidad vieja
++    k = aplicar(doc, vieja, nueva, escalar)
++    # Una sola anotación en el historial (Mike, 14-sep-2026): antes el cambio
++    # se hacía en silencio y no quedaba en la pila. Consecuencia: Ctrl+Z justo
++    # después no deshacía el cambio de unidades sino la acción anterior, y la
++    # restauraba con los números de ANTES de escalar (en mm dentro de un plano
++    # que ya estaba en cm): las entidades «desaparecían» diez veces más lejos.
++    # Ahora deshacer devuelve las unidades y el tamaño, y luego sigue en orden.
++    doc.historial.anotar(("unidades", vieja, nueva, bool(escalar)))
++    return {"unidades": nueva, "factor": k if escalar else 1.0, "escalado": bool(escalar)}
++
++
++def aplicar(doc, vieja: str, nueva: str, escalar: bool) -> float:
++    """Hace el cambio de `vieja` a `nueva` sobre el documento, sin anotar nada.
++    Es lo que usan `cambiar` y el historial (deshacer = aplicar al revés).
++    Devuelve el factor k (unidades nuevas por unidad vieja)."""
++    k = MM_POR_NOMBRE[vieja] / MM_POR_NOMBRE[nueva]
+     if escalar:
+-        silencio = doc.historial.silencio
+-        doc.historial.silencio = True
+-        try:
+-            for e in doc.entidades.values():
+-                escalar_entidad(e, k)
+-            for lay in (doc.layouts or []):
+-                for v in (lay.get("ventanas") or []):
+-                    c = v.get("centro") or [0, 0]
+-                    v["centro"] = [c[0] * k, c[1] * k]
+-            for est in doc.estilos_cota.values():
+-                est["factor_escala"] = float(est.get("factor_escala", 1.0) or 1.0) * k
+-                est["decimales"] = DECIMALES_POR_NOMBRE[nueva]
+-        finally:
+-            doc.historial.silencio = silencio
+-        doc.olvidar()
+-    else:
++        for e in doc.entidades.values():
++            escalar_entidad(e, k)
++        for lay in (doc.layouts or []):
++            for v in (lay.get("ventanas") or []):
++                c = v.get("centro") or [0, 0]
++                v["centro"] = [c[0] * k, c[1] * k]
+         for est in doc.estilos_cota.values():
+-            est["decimales"] = DECIMALES_POR_NOMBRE[nueva]
++            est["factor_escala"] = float(est.get("factor_escala", 1.0) or 1.0) * k
++    for est in doc.estilos_cota.values():
++        est["decimales"] = DECIMALES_POR_NOMBRE[nueva]
+     doc.unidades = nueva
+     doc.sucio = True
+-    return {"unidades": nueva, "factor": k if escalar else 1.0, "escalado": bool(escalar)}
++    doc.olvidar()
++    return k
+--- a/core/documento.py
++++ b/core/documento.py
+@@ -536,6 +536,14 @@
+         elif clase == "ent~":
+             _, id_, antes, despues = op
+             self.entidades[id_] = ent_mod.de_dict(antes if invertir else despues)
++        elif clase == "unidades":
++            # ("unidades", vieja, nueva, escalar): deshacer es aplicar al revés.
++            from . import unidades as mod_unidades
++            _, vieja, nueva, escalar = op
++            if invertir:
++                mod_unidades.aplicar(self, nueva, vieja, escalar)
++            else:
++                mod_unidades.aplicar(self, vieja, nueva, escalar)
+         elif clase == "capa+":
+             _, nombre, datos = op
+             if invertir:
+@@ -584,7 +592,7 @@
+         self.sucio = True
+         self.ultimos_tocados = self._ids_de(tr)
+         self.ultimo_toco_capas = any(
+-            str(op[0]).startswith("capa") for op in tr.ops if op)
++            str(op[0]).startswith("capa") or op[0] == "unidades" for op in tr.ops if op)
+         return tr.nombre
+ 
+     def rehacer(self) -> str | None:
+@@ -597,7 +605,7 @@
+         self.sucio = True
+         self.ultimos_tocados = self._ids_de(tr)
+         self.ultimo_toco_capas = any(
+-            str(op[0]).startswith("capa") for op in tr.ops if op)
++            str(op[0]).startswith("capa") or op[0] == "unidades" for op in tr.ops if op)
+         return tr.nombre
+ 
+     # =====================================================================
+--- a/package.json
++++ b/package.json
+@@ -1,8 +1,8 @@
+ {
+   "name": "draw101",
+   "productName": "draw101",
+-  "version": "0.20.4",
+-  "_versionApp": "0.20.4 — la que enseña la app viene de core/version.py; ésta sólo existe porque electron-builder exige semver",
++  "version": "0.20.5",
++  "_versionApp": "0.20.5 — la que enseña la app viene de core/version.py; ésta sólo existe porque electron-builder exige semver",
+   "_notaEmpaque": "asar apagado a propósito: main.js busca server.py junto a electron/, y el motor de Python no puede vivir dentro de un asar. Y electron-builder saca cualquier node_modules de los globs de `files`, así que los dos motores de DWG (dwgjs/node_modules) se copian por extraResources o la app se queda sin leer DWG.",
+   "description": "CAD 2D de Taller 101 — leer, trazar, acotar e imprimir planos",
+   "main": "electron/main.js",
+@@ -19,7 +19,7 @@
+   "build": {
+     "appId": "mx.taller101.dibujador",
+     "productName": "draw101",
+-    "artifactName": "draw101-0.20.4-setup.${ext}",
++    "artifactName": "draw101-0.20.5-setup.${ext}",
+     "directories": {
+       "output": "dist",
+       "buildResources": "build"
