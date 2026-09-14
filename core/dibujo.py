@@ -15,10 +15,35 @@ from . import capas as mod_capas
 from . import cotas as mod_cotas
 from .documento import Documento
 
-# Cuántos segmentos por vuelta completa. 72 = uno cada 5°; a la vista de un
-# plano de taller no se distingue de una curva, y no ahoga al lienzo.
+# Cuántos segmentos por vuelta completa, como máximo. 72 = uno cada 5°; a la
+# vista de un plano de taller no se distingue de una curva, y no ahoga al lienzo.
 SEGMENTOS = 72
 MIN_SEG = 6
+# Medido el 13-sep-2026 (objetivo 1, fluidez, camino C): en un plano de
+# 21 700 entidades, 390 000 de los 425 000 vértices que viajan al navegador
+# eran círculos y arcos a 72 segmentos fijos, sin importar el radio. Un barreno
+# de ⌀5 no necesita 73 puntos: la cuerda de un polígono de 16 lados a ese
+# radio se separa del círculo 0.05 mm, que no se ve ni se corta. La regla:
+# tantos segmentos como pida no separarse más de FLECHA_MAX mm de la curva,
+# entre MIN_SEG y SEGMENTOS por vuelta. Los círculos grandes siguen a 72.
+FLECHA_MAX = 0.05
+# Se probó redondear las coordenadas a milésimas antes de mandarlas (13-sep):
+# el JSON bajaba 40 % (19 → 12 MB en el plano de prueba) pero el redondeo en
+# Python costaba 0.6 s por apertura y el navegador no ganaba nada medible.
+# No se hizo. La geometría del osnap tampoco se redondea: los grips comparan
+# con la entidad exacta (tolerancia 1e-6) y se rompían (t007).
+
+
+def _segmentos_por_vuelta(r: float) -> int:
+    if r <= 0:
+        return MIN_SEG
+    c = 1 - FLECHA_MAX / r
+    if c <= -1:
+        return MIN_SEG
+    if c >= 1:
+        return SEGMENTOS
+    n = math.ceil(math.pi / math.acos(c))
+    return max(MIN_SEG, min(SEGMENTOS, n))
 
 
 def _arco_puntos(cx, cy, r, a0, a1, sentido=1):
@@ -26,7 +51,7 @@ def _arco_puntos(cx, cy, r, a0, a1, sentido=1):
     barrido = (a1 - a0) * sentido
     while barrido < 0:
         barrido += 2 * math.pi
-    n = max(MIN_SEG, int(SEGMENTOS * barrido / (2 * math.pi)) + 1)
+    n = max(MIN_SEG, int(_segmentos_por_vuelta(r) * barrido / (2 * math.pi)) + 1)
     return [[cx + r * math.cos(a0 + sentido * barrido * i / n),
              cy + r * math.sin(a0 + sentido * barrido * i / n)]
             for i in range(n + 1)]
@@ -86,7 +111,7 @@ def _elipse(e):
     barrido = t1 - t0
     if barrido <= 0:
         barrido += 2 * math.pi
-    n = max(MIN_SEG, int(SEGMENTOS * barrido / (2 * math.pi)) + 1)
+    n = max(MIN_SEG, int(_segmentos_por_vuelta(max(a, b)) * barrido / (2 * math.pi)) + 1)
     pts = []
     for i in range(n + 1):
         t = t0 + barrido * i / n

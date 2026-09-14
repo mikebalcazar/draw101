@@ -278,9 +278,16 @@ const Indice = (() => {
   function parchar(p, trazosNuevos, geomNueva) {
     const quitar = new Set(p.quitar || []);
     const nuevaGeom = p.geometria || [];
+    // Si el plano cambió entero desde la última vez que alguien preguntó (una
+    // recarga completa sin ningún clic ni pintado en medio), la rejilla que
+    // tenemos es de OTRO plano: parchar encima dejaba entidades borradas
+    // «vivas» y las nuevas invisibles al clic. Se cazó el 13-sep-2026 con
+    // t019: tras limpiar el dibujo y volver a cargar, el primer parche
+    // seguía viendo las entidades viejas. alDia() rearma si hace falta.
+    const cambioEntero = _trazos !== estado.trazos || _geom !== estado.geometria;
     // Sin rejilla armada de verdad (plano vacío: sin origen ni paso), o con un
     // parche grande, se rearma: parchar sería incorrecto o más lento.
-    const grande = !_rejilla || !_geom || _rejilla.x0 === undefined ||
+    const grande = cambioEntero || !_rejilla || !_geom || _rejilla.x0 === undefined ||
       (quitar.size + nuevaGeom.length) > Math.max(2000, _geom.length / 5);
     if (grande) { _trazos = null; _geom = null; estado.trazos = trazosNuevos; estado.geometria = geomNueva; alDia(); return false; }
 

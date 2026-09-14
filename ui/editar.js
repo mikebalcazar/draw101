@@ -558,11 +558,13 @@ async function recortarOExtender(extender) {
     const id = await Seleccion.pedirUna({
       mensaje: extender ? "Elige la línea a extender" : "Elige el trozo a quitar",
       icono: extender ? "extender" : "tijera",
-      filtro: (e) => ["linea", "arco"].includes(e.tipo),
-      queja: "Por ahora se recortan y extienden líneas y arcos.",
+      filtro: (e) => ["linea", "arco"].includes(e.tipo) || (!extender && e.tipo === "polilinea"),
+      queja: extender ? "Por ahora se extienden líneas y arcos." : "Por ahora se recortan líneas, arcos y polilíneas.",
     });
     const ent = await api(`/api/entidad/${id}`);
     const p = [estado.cursor.x, estado.cursor.y];
+
+    if (ent.tipo === "polilinea") { await recortarPolilinea(ent, p); Seleccion.limpiar(); return; }
 
     // cruces con todo lo demás
     const mias = estado.geometria.filter((pr) => pr.id === id);
@@ -636,6 +638,173 @@ async function recortarOExtender(extender) {
   });
 }
 
+/* ---------------------------------------------------------------------- */
+/* Recortar una polilínea (Mike, 10-sep-2026; 0.20.4)                      */
+/*                                                                        */
+/* «Cuando uso trim sobre una polilínea, corta la polilínea en donde se     */
+/* trimea, generando nuevos endpoints». Antes no se podía en absoluto (se   */
+/* rechazaba con aviso). Ahora: se quita sólo el tramo entre los dos cruces */
+/* que rodean el clic, y lo que queda SIGUE SIENDO POLILÍNEA: si el trozo   */
+/* estaba en un extremo, la polilínea se acorta; si estaba en medio, quedan */
+/* dos polilíneas (la original acortada y una nueva); si era cerrada, se    */
+/* abre por ahí. Los tramos curvos (bulge) se cortan como arcos exactos,    */
+/* con el bulge parcial correspondiente.                                    */
+/*                                                                        */
+/* Una posición sobre la polilínea es (k, t): tramo k y fracción t de ese  */
+/* tramo (0 = vértice inicial, 1 = vértice final).                          */
+/* ---------------------------------------------------------------------- */
+function _tramosPolilinea(ent) {
+  const pts = ent.puntos || [];
+  const n = pts.length;
+  const tramos = [];
+  const m = n - 1 + (ent.cerrada && n > 2 ? 1 : 0);
+  for (let k = 0; k < m; k++) {
+    const p1 = pts[k], p2 = pts[(k + 1) % n];
+    const b = p1.length > 2 ? +p1[2] || 0 : 0;
+    tramos.push(_tramoDe([p1[0], p1[1]], [p2[0], p2[1]], b));
+  }
+  return tramos;
+}
+
+function _tramoDe(p1, p2, b) {
+  const tr = { p1, p2, b, recto: Math.abs(b) < 1e-12 };
+  if (tr.recto) return tr;
+  // misma construcción que core/geometria._arco_de_bulge
+  const cuerda = Math.hypot(p2[0] - p1[0], p2[1] - p1[1]);
+  if (cuerda < 1e-12) { tr.recto = true; tr.b = 0; return tr; }
+  const ang = 4 * Math.atan(b);
+  const r = cuerda / (2 * Math.sin(Math.abs(ang) / 2));
+  const mx = (p1[0] + p2[0]) / 2, my = (p1[1] + p2[1]) / 2;
+  const h = Math.sqrt(Math.max(r * r - (cuerda / 2) ** 2, 0));
+  const dx = (p2[0] - p1[0]) / cuerda, dy = (p2[1] - p1[1]) / cuerda;
+  const signo = ang > 0 ? 1 : -1;
+  tr.c = [mx - signo * h * dy, my + signo * h * dx];
+  tr.r = r;
+  tr.ang = ang;                                   // barrido con signo, radianes
+  tr.a1 = Math.atan2(p1[1] - tr.c[1], p1[0] - tr.c[0]);
+  return tr;
+}
+
+function _paramEnTramo(tr, q) {
+  if (tr.recto) return paramEnSeg({ a: tr.p1, b: tr.p2 }, q);
+  let d = Math.atan2(q[1] - tr.c[1], q[0] - tr.c[0]) - tr.a1;
+  d = tr.ang > 0 ? (d + 4 * Math.PI) % (2 * Math.PI) : -((-d + 4 * Math.PI) % (2 * Math.PI));
+  return d / tr.ang;
+}
+
+function _puntoEnTramo(tr, t) {
+  if (tr.recto) return [tr.p1[0] + t * (tr.p2[0] - tr.p1[0]), tr.p1[1] + t * (tr.p2[1] - tr.p1[1])];
+  const a = tr.a1 + t * tr.ang;
+  return [tr.c[0] + tr.r * Math.cos(a), tr.c[1] + tr.r * Math.sin(a)];
+}
+
+function _distTramo(tr, q) {
+  if (tr.recto) {
+    const t = Math.max(0, Math.min(1, paramEnSeg({ a: tr.p1, b: tr.p2 }, q)));
+    const e = _puntoEnTramo(tr, t);
+    return Math.hypot(q[0] - e[0], q[1] - e[1]);
+  }
+  const t = _paramEnTramo(tr, q);
+  if (t >= 0 && t <= 1) return Math.abs(Math.hypot(q[0] - tr.c[0], q[1] - tr.c[1]) - tr.r);
+  return Math.min(Math.hypot(q[0] - tr.p1[0], q[1] - tr.p1[1]), Math.hypot(q[0] - tr.p2[0], q[1] - tr.p2[1]));
+}
+
+// bulge del pedazo de un tramo curvo entre las fracciones t0 y t1
+function _bulgeParcial(tr, t0, t1) {
+  if (tr.recto) return 0;
+  return Math.tan((t1 - t0) * tr.ang / 4);
+}
+
+function _vertice(p, b) {
+  return Math.abs(b) < 1e-12 ? [p[0], p[1]] : [p[0], p[1], b];
+}
+
+/* El pedazo de polilínea que va de la posición A a la posición B siguiendo
+ * los tramos hacia adelante (y dando la vuelta si es cerrada). */
+function _pedazo(tramos, A, B, cerrada) {
+  const m = tramos.length;
+  const salida = [];
+  const largo = cerrada && A.k === B.k && A.t > B.t;   // en cerrada: la vuelta completa
+  if (A.k === B.k && !largo) {
+    const tr = tramos[A.k];
+    salida.push(_vertice(_puntoEnTramo(tr, A.t), _bulgeParcial(tr, A.t, B.t)));
+    salida.push(_vertice(_puntoEnTramo(tr, B.t), 0));
+    return salida;
+  }
+  const trA = tramos[A.k];
+  salida.push(_vertice(_puntoEnTramo(trA, A.t), _bulgeParcial(trA, A.t, 1)));
+  let k = A.k;
+  do {
+    k = cerrada ? (k + 1) % m : k + 1;
+    const tr = tramos[k];
+    if (k === B.k) {
+      salida.push(_vertice(tr.p1, _bulgeParcial(tr, 0, B.t)));
+      salida.push(_vertice(_puntoEnTramo(tr, B.t), 0));
+    } else {
+      salida.push(_vertice(tr.p1, tr.b));
+    }
+  } while (k !== B.k);
+  return salida;
+}
+
+async function recortarPolilinea(ent, p) {
+  const tramos = _tramosPolilinea(ent);
+  if (!tramos.length) return Comandos.eco("Esa polilínea no tiene tramos.", "malo");
+  const m = tramos.length;
+  const cerrada = !!ent.cerrada && (ent.puntos || []).length > 2;
+
+  // Dónde se picó: el tramo más cercano y la fracción dentro de él.
+  let kp = 0, mejor = Infinity;
+  tramos.forEach((tr, k) => { const d = _distTramo(tr, p); if (d < mejor) { mejor = d; kp = k; } });
+  const pick = { k: kp, t: Math.max(0, Math.min(1, _paramEnTramo(tramos[kp], p))) };
+
+  // Cruces con todo lo demás, como posiciones (k, t) sobre la polilínea.
+  const mias = estado.geometria.filter((pr) => pr.id === ent.id);
+  const otras = estado.geometria.filter((pr) => pr.id !== ent.id);
+  const posiciones = [];
+  for (const a of mias) {
+    for (const b of otras) {
+      for (const q of Osnap.interseccion(a, b)) {
+        let k = 0, d0 = Infinity;
+        tramos.forEach((tr, i) => { const d = _distTramo(tr, q); if (d < d0) { d0 = d; k = i; } });
+        const t = _paramEnTramo(tramos[k], q);
+        if (t > -1e-9 && t < 1 + 1e-9) posiciones.push({ k, t: Math.max(0, Math.min(1, t)) });
+      }
+    }
+  }
+  if (!posiciones.length) return Comandos.eco("Esa polilínea no cruza con ninguna otra entidad: no hay dónde recortar.", "malo");
+  const orden = (a, b) => a.k - b.k || a.t - b.t;
+  posiciones.sort(orden);
+  const antes = posiciones.filter((q) => orden(q, pick) < 0);
+  const despues = posiciones.filter((q) => orden(q, pick) > 0);
+  let prev = antes.length ? antes[antes.length - 1] : null;
+  let next = despues.length ? despues[0] : null;
+  if (cerrada) {
+    if (!prev) prev = posiciones[posiciones.length - 1];   // da la vuelta
+    if (!next) next = posiciones[0];
+    if (orden(prev, next) === 0) return Comandos.eco("Una polilínea cerrada necesita dos cruces para quitarle un trozo.", "malo");
+    const puntos = _pedazo(tramos, next, prev, true);
+    await aplicarOperacion({ accion: "Recortar polilínea", cambios: { [ent.id]: { puntos, cerrada: false } } });
+    return;
+  }
+  if (!prev && !next) return Comandos.eco("El trozo que señalaste no está entre cruces.", "malo");
+  const ini = { k: 0, t: 0 }, fin = { k: m - 1, t: 1 };
+  if (prev && next) {
+    // el trozo está en medio: quedan dos polilíneas
+    const a = _pedazo(tramos, ini, prev, false);
+    const b = _pedazo(tramos, next, fin, false);
+    await aplicarOperacion({
+      accion: "Recortar polilínea",
+      cambios: { [ent.id]: { puntos: a, cerrada: false } },
+      agregar: [{ ...ent, id: undefined, puntos: b, cerrada: false }],
+    });
+  } else if (next) {
+    await aplicarOperacion({ accion: "Recortar polilínea", cambios: { [ent.id]: { puntos: _pedazo(tramos, next, fin, false), cerrada: false } } });
+  } else {
+    await aplicarOperacion({ accion: "Recortar polilínea", cambios: { [ent.id]: { puntos: _pedazo(tramos, ini, prev, false), cerrada: false } } });
+  }
+}
+
 function alargada(pr) {
   if (pr.tipo !== "seg") return pr;
   const dx = pr.b[0] - pr.a[0], dy = pr.b[1] - pr.a[1];
@@ -646,7 +815,7 @@ function alargada(pr) {
 }
 
 Comandos.registrar({ nombre: "RECORTAR", alias: ["RC", "TR"],
-  ayuda: "Quita el trozo de línea o arco que señales", correr: () => recortarOExtender(false) });
+  ayuda: "Quita el trozo de línea, arco o polilínea que señales", correr: () => recortarOExtender(false) });
 Comandos.registrar({ nombre: "EXTENDER", alias: ["EXT", "EX"],
   ayuda: "Alarga una línea hasta lo primero que encuentre", correr: () => recortarOExtender(true) });
 
