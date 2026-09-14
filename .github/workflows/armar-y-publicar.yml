@@ -71,9 +71,13 @@ jobs:
         run: |
           set -euo pipefail
           if [ -f claude/APLICAR.txt ]; then
+            # El Git del runner de Windows saca los archivos con CRLF (autocrlf):
+            # sin quitar el \r, el renglón dice «0.20.4.patch\r» y no existe.
             while read -r p; do
+              p="${p%$'\r'}"
               [ -z "$p" ] && continue
               echo "aplicando claude/$p"
+              sed -i 's/\r$//' "claude/$p"
               git apply --check "claude/$p"
               git apply "claude/$p"
             done < claude/APLICAR.txt
