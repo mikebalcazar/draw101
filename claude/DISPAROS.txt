@@ -1,0 +1,3 @@
+Disparos del flujo Armar y publicar para 0.20.4 (uno por renglón).
+2026-09-13 · primer intento, sin TOKEN_DESCARGAS: sólo armado y artefacto.
+2026-09-14 · segundo intento, con TOKEN_DESCARGAS ya en el repo: carga a descargas, release, manifiesto.
