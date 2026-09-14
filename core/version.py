@@ -21,13 +21,35 @@ Numeración: `mayor.menor.parche`.
 
 from __future__ import annotations
 
-VERSION = "0.20.3"
-FECHA = "2026-09-12"
+VERSION = "0.20.4"
+FECHA = "2026-09-13"
 
 # Qué trae cada entrega, en el idioma del taller y no en el del código.
 # La más nueva arriba. Lo que se lista aquí es lo que el comando VERSION
 # enseña en la consola.
 BITACORA: list[dict] = [
+    {
+        "version": "0.20.4",
+        "fecha": "2026-09-13",
+        "cambios": [
+            "RECORTAR sobre polilíneas. Se quita sólo el trozo entre los dos "
+            "cruces que rodean el clic y lo que queda sigue siendo polilínea: "
+            "en un extremo se acorta, en medio quedan dos, una cerrada se abre "
+            "por ahí. Los tramos curvos se cortan como arcos exactos.",
+            "Arreglo del índice de selección: tras recargar el dibujo entero "
+            "sin picar nada en medio, la primera edición dejaba el índice del "
+            "plano anterior (entidades borradas seguían «vivas» al clic y las "
+            "nuevas no se dejaban picar).",
+            "Fluidez: los círculos y arcos viajan con tantos segmentos como pida "
+            "su radio (un barreno de ⌀5 con 16 puntos, no 73); en planos con "
+            "muchos barrenos baja lo que se pinta.",
+            "PERF anota las llamadas al motor que tardaron más de 150 ms o que "
+            "obligaron a recargar todo (ruta, tiempo, peso), junto a los cuadros "
+            "lentos: al reportar «se puso lento» ya se ve qué fue.",
+            "Prueba t019 (RECORTAR en polilínea, 19 comprobaciones) y plano "
+            "sintético de 21 700 entidades para medir (pruebas/carga/).",
+        ],
+    },
     {
         "version": "0.20.3",
         "fecha": "2026-09-12",
