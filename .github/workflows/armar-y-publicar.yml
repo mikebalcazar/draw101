@@ -55,6 +55,9 @@ concurrency:
   cancel-in-progress: false
 
 env:
+  # El Windows del runner escribe cp1252: sin esto, una «→» en la salida de
+  # verificar.py tumba las pruebas (corrida 34794283220).
+  PYTHONUTF8: '1'
   INSTALADOR_ANTERIOR: https://github.com/mikebalcazar/descargas/releases/download/draw101-0.20.1/draw101-0.20.1-setup.exe
 
 jobs:
