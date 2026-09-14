@@ -88,12 +88,34 @@ const Ocupado = (() => {
   return { empieza, termina, mientras, get activo() { return visible; } };
 })();
 
+/* Llamadas lentas al motor, anotadas solas (13-sep-2026, objetivo 1,
+ * fluidez, camino C). Medido en el plano de prueba de 21 700 entidades: pintar
+ * un cuadro cuesta 40–60 ms, pero pedir `/api/trazos` entero cuesta 1–2 s y
+ * una operación que no manda parche obliga a pedirlo. Cuando Mike dice «se
+ * puso lentísimo», la pregunta es qué llamada fue: esto la deja anotada con
+ * su ruta, cuánto tardó, cuánto pesó y si hubo recarga completa. PERF lo
+ * imprime junto a los cuadros lentos. */
+const DiagApi = { llamadas: [], umbral: 150 };
+function _anotarLlamada(ruta, ms, bytes, recarga) {
+  DiagApi.llamadas.push({ t: Date.now(), ruta: ruta.split("?")[0], ms, kb: Math.round(bytes / 1024), recarga });
+  if (DiagApi.llamadas.length > 40) DiagApi.llamadas.shift();
+}
+
 const api = async (ruta, opciones) => {
   Ocupado.empieza(ruta);
+  const tInicio = performance.now();
   try {
     const r = await fetch(ruta, opciones);
     let cuerpo = null, fallo = null;
-    try { cuerpo = await r.json(); } catch (e) { fallo = e; cuerpo = {}; }
+    let bytes = 0;
+    try {
+      const texto = await r.text();
+      bytes = texto.length;
+      cuerpo = JSON.parse(texto);
+    } catch (e) { fallo = e; cuerpo = {}; }
+    const ms = performance.now() - tInicio;
+    const recarga = ruta.startsWith("/api/trazos") || (cuerpo && "parche" in cuerpo && cuerpo.parche === null);
+    if (ms >= DiagApi.umbral || recarga) _anotarLlamada(ruta, ms, bytes, recarga);
     if (!r.ok) throw new Error(cuerpo.detail || `Error ${r.status}`);
     // Una respuesta buena que no se pudo leer (demasiado grande para el
     // navegador, o rota) es un error, no un objeto vacío: con `{}` el

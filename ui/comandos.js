@@ -411,6 +411,15 @@ Comandos.registrar({
     // Los cuadros lentos que se anotaron solos desde que se abrió el plano
     // (ver Diag en vista.js): es la pista cuando «se puso lentísimo» pasó
     // hace un rato y aquí no se reproduce.
+    // Y las llamadas al motor que tardaron o que obligaron a recargar todo
+    // (ver DiagApi en base.js): es la otra mitad del «se puso lentísimo».
+    if (typeof DiagApi !== "undefined" && DiagApi.llamadas.length) {
+      const recargas = DiagApi.llamadas.filter((l) => l.recarga).length;
+      r.push(`llamadas al motor lentas (> ${DiagApi.umbral} ms) o con recarga completa: ${DiagApi.llamadas.length} (recargas completas: ${recargas})`);
+      for (const l of DiagApi.llamadas.slice(-12)) {
+        r.push(`   · ${new Date(l.t).toLocaleTimeString()} ${l.ruta} ${l.ms.toFixed(0)} ms · ${l.kb} KB${l.recarga ? " · RECARGA COMPLETA" : ""}`);
+      }
+    }
     if (typeof Diag !== "undefined" && Diag.cuadros.length) {
       r.push(`cuadros lentos anotados (> ${Diag.umbral} ms): ${Diag.cuadros.length}`);
       for (const c of Diag.cuadros.slice(-12)) {
