@@ -21,13 +21,27 @@ Numeración: `mayor.menor.parche`.
 
 from __future__ import annotations
 
-VERSION = "0.20.4"
-FECHA = "2026-09-13"
+VERSION = "0.20.5"
+FECHA = "2026-09-15"
 
 # Qué trae cada entrega, en el idioma del taller y no en el del código.
 # La más nueva arriba. Lo que se lista aquí es lo que el comando VERSION
 # enseña en la consola.
 BITACORA: list[dict] = [
+    {
+        "version": "0.20.5",
+        "fecha": "2026-09-15",
+        "cambios": [
+            "Seguridad del botón «Instalar ODA»: el instalador del convertidor "
+            "sólo se baja de opendesign.com por https. El puntero de Taller 101 "
+            "puede decir qué versión, pero ya no de dónde: una liga ajena se "
+            "ignora. Antes se corría la liga que dijera el puntero, tal cual.",
+            "Si el puntero declara la huella sha256 del instalador, se comprueba "
+            "antes de correr msiexec; si no cuadra, se borra y no se instala.",
+            "Prueba t020 (ODA: dominio y huella, 28 comprobaciones). Sin cambios "
+            "en el dibujo.",
+        ],
+    },
     {
         "version": "0.20.4",
         "fecha": "2026-09-13",
