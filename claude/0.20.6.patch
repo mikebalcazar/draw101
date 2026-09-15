@@ -1,0 +1,364 @@
+--- a/core/version.py
++++ b/core/version.py
+@@ -21,7 +21,7 @@
+ 
+ from __future__ import annotations
+ 
+-VERSION = "0.20.5"
++VERSION = "0.20.6"
+ FECHA = "2026-09-15"
+ 
+ # Qué trae cada entrega, en el idioma del taller y no en el del código.
+@@ -29,6 +29,25 @@
+ # enseña en la consola.
+ BITACORA: list[dict] = [
+     {
++        "version": "0.20.6",
++        "fecha": "2026-09-15",
++        "cambios": [
++            "Cambiar de unidades (UNIDADES) ya es un paso del historial: Ctrl+Z "
++            "lo deshace y devuelve tamaños y unidad, y los siguientes Ctrl+Z "
++            "siguen en orden. Antes el cambio no se anotaba, y deshacer después "
++            "de escalar restauraba la acción anterior con los números de antes "
++            "(en milímetros dentro de un plano en centímetros): lo dibujado "
++            "«desaparecía» diez veces más lejos.",
++            "El aviso de versión nueva tiene respaldo: si el motor no llega al "
++            "sitio de Taller 101, la interfaz consulta con el motor de red del "
++            "navegador (los mismos certificados y proxy que Chrome) y también "
++            "baja el instalador por ahí; se comprueba la huella igual. Y cuando "
++            "no se pudo consultar, el cuadro dice la razón exacta.",
++            "Pruebas t021 (unidades y deshacer, 20 comprobaciones) y t022 "
++            "(actualizador: razón del fallo y respaldo, 17 comprobaciones).",
++        ],
++    },
++    {
+         "version": "0.20.5",
+         "fecha": "2026-09-15",
+         "cambios": [
+--- a/package.json
++++ b/package.json
+@@ -1,8 +1,8 @@
+ {
+   "name": "draw101",
+   "productName": "draw101",
+-  "version": "0.20.5",
+-  "_versionApp": "0.20.4 — la que enseña la app viene de core/version.py; ésta sólo existe porque electron-builder exige semver",
++  "version": "0.20.6",
++  "_versionApp": "0.20.6 — la que enseña la app viene de core/version.py; ésta sólo existe porque electron-builder exige semver",
+   "_notaEmpaque": "asar apagado a propósito: main.js busca server.py junto a electron/, y el motor de Python no puede vivir dentro de un asar. Y electron-builder saca cualquier node_modules de los globs de `files`, así que los dos motores de DWG (dwgjs/node_modules) se copian por extraResources o la app se queda sin leer DWG.",
+   "description": "CAD 2D de Taller 101 — leer, trazar, acotar e imprimir planos",
+   "main": "electron/main.js",
+@@ -19,7 +19,7 @@
+   "build": {
+     "appId": "mx.taller101.dibujador",
+     "productName": "draw101",
+-    "artifactName": "draw101-0.20.5-setup.${ext}",
++    "artifactName": "draw101-0.20.6-setup.${ext}",
+     "directories": {
+       "output": "dist",
+       "buildResources": "build"
+--- a/core/actualizar.py
++++ b/core/actualizar.py
+@@ -56,7 +56,7 @@
+ _estado = {"fase": "nada", "pct": 0, "mensaje": "", "version": "", "ruta": ""}
+ _hilo: threading.Thread | None = None
+ _candado = threading.Lock()
+-_ultima_revision: dict = {"cuando": 0.0, "datos": None}
++_ultima_revision: dict = {"cuando": 0.0, "datos": None, "error": ""}
+ 
+ 
+ def _leer_url(url: str, espera: int = ESPERA_RED) -> bytes:
+@@ -98,14 +98,52 @@
+     """Va al puntero y guarda lo que diga. None si no contestó."""
+     try:
+         datos = json.loads(_leer_url(PUNTERO, espera).decode("utf-8"))
+-    except Exception:
++    except Exception as exc:
++        # Mike (15-sep-2026): «nunca me avisa que hay nueva versión» y el cuadro
++        # decía sólo «no se pudo consultar (¿sin internet?)». Se guarda la razón
++        # de verdad para enseñarla, en vez de adivinar.
++        _ultima_revision["error"] = f"{type(exc).__name__}: {exc}"
+         return None
+     r = _interpretar(datos)
+     if r is not None:
+-        _ultima_revision.update({"cuando": time.time(), "datos": r})
++        _ultima_revision.update({"cuando": time.time(), "datos": r, "error": ""})
++    else:
++        _ultima_revision["error"] = "el puntero contestó pero no trae una versión que entienda"
+     return r
+ 
+ 
++def recibir_manifiesto(datos: dict) -> dict | None:
++    """El puntero traído por OTRO camino (la interfaz lo baja con el motor de
++    red de Chromium cuando el de Python no llega). Se interpreta y se guarda
++    igual que si lo hubiera traído `_consultar`."""
++    r = _interpretar(datos or {})
++    if r is not None:
++        _ultima_revision.update({"cuando": time.time(), "datos": r, "error": ""})
++    return r
++
++
++def recibir_archivo(nombre: str, datos: bytes) -> dict:
++    """El instalador bajado por la interfaz (mismo respaldo por Chromium). Se
++    guarda en la carpeta de descargas, se comprueba contra la huella del
++    puntero y queda «listo» para instalar, como si lo hubiera bajado el hilo."""
++    ult = _ultima_revision["datos"]
++    if not ult:
++        raise ValueError("No sé qué versión es: primero hay que consultar el puntero.")
++    nombre = pathlib.Path(nombre or ult["archivo"] or f"draw101-{ult['version']}-setup.exe").name
++    destino = _carpeta_descargas() / nombre
++    parcial = destino.with_suffix(destino.suffix + ".parte")
++    parcial.write_bytes(datos)
++    if ult["bytes"] and len(datos) != ult["bytes"]:
++        parcial.unlink(missing_ok=True)
++        raise ValueError(f"Llegaron {len(datos)} bytes y el sitio dice {ult['bytes']}: descarga incompleta.")
++    if ult["sha256"] and _sha256(parcial) != ult["sha256"]:
++        parcial.unlink(missing_ok=True)
++        raise ValueError("Lo bajado no cuadra con la huella que publica Taller 101. No se instala.")
++    parcial.replace(destino)
++    _poner("listo", 100, f"draw101 {ult['version']} bajado y comprobado. Listo para instalar.", ult["version"], str(destino))
++    return dict(_estado)
++
++
+ _vigilante: threading.Thread | None = None
+ 
+ 
+@@ -192,6 +230,8 @@
+         "auto": bool(prefs.get("actualizaciones_auto", True)),
+         "estado": dict(_estado),
+         "consulto": ult is not None,
++        "error": "" if ult is not None else (_ultima_revision.get("error") or ""),
++        "puntero": PUNTERO,
+     }
+ 
+ 
+--- a/core/documento.py
++++ b/core/documento.py
+@@ -536,6 +536,14 @@
+         elif clase == "ent~":
+             _, id_, antes, despues = op
+             self.entidades[id_] = ent_mod.de_dict(antes if invertir else despues)
++        elif clase == "unidades":
++            # ("unidades", vieja, nueva, escalar): deshacer es aplicar al revés.
++            from . import unidades as mod_unidades
++            _, vieja, nueva, escalar = op
++            if invertir:
++                mod_unidades.aplicar(self, nueva, vieja, escalar)
++            else:
++                mod_unidades.aplicar(self, vieja, nueva, escalar)
+         elif clase == "capa+":
+             _, nombre, datos = op
+             if invertir:
+@@ -584,7 +592,7 @@
+         self.sucio = True
+         self.ultimos_tocados = self._ids_de(tr)
+         self.ultimo_toco_capas = any(
+-            str(op[0]).startswith("capa") for op in tr.ops if op)
++            str(op[0]).startswith("capa") or op[0] == "unidades" for op in tr.ops if op)
+         return tr.nombre
+ 
+     def rehacer(self) -> str | None:
+@@ -597,7 +605,7 @@
+         self.sucio = True
+         self.ultimos_tocados = self._ids_de(tr)
+         self.ultimo_toco_capas = any(
+-            str(op[0]).startswith("capa") for op in tr.ops if op)
++            str(op[0]).startswith("capa") or op[0] == "unidades" for op in tr.ops if op)
+         return tr.nombre
+ 
+     # =====================================================================
+--- a/core/unidades.py
++++ b/core/unidades.py
+@@ -197,26 +197,34 @@
+     vieja = doc.unidades if doc.unidades in MM_POR_NOMBRE else "mm"
+     if nueva == vieja:
+         return {"unidades": nueva, "factor": 1.0, "escalado": False}
+-    k = MM_POR_NOMBRE[vieja] / MM_POR_NOMBRE[nueva]      # unidades nuevas por unidad vieja
++    k = aplicar(doc, vieja, nueva, escalar)
++    # Una sola anotación en el historial (Mike, 14-sep-2026): antes el cambio
++    # se hacía en silencio y no quedaba en la pila. Consecuencia: Ctrl+Z justo
++    # después no deshacía el cambio de unidades sino la acción anterior, y la
++    # restauraba con los números de ANTES de escalar (en mm dentro de un plano
++    # que ya estaba en cm): las entidades «desaparecían» diez veces más lejos.
++    # Ahora deshacer devuelve las unidades y el tamaño, y luego sigue en orden.
++    doc.historial.anotar(("unidades", vieja, nueva, bool(escalar)))
++    return {"unidades": nueva, "factor": k if escalar else 1.0, "escalado": bool(escalar)}
++
++
++def aplicar(doc, vieja: str, nueva: str, escalar: bool) -> float:
++    """Hace el cambio de `vieja` a `nueva` sobre el documento, sin anotar nada.
++    Es lo que usan `cambiar` y el historial (deshacer = aplicar al revés).
++    Devuelve el factor k (unidades nuevas por unidad vieja)."""
++    k = MM_POR_NOMBRE[vieja] / MM_POR_NOMBRE[nueva]
+     if escalar:
+-        silencio = doc.historial.silencio
+-        doc.historial.silencio = True
+-        try:
+-            for e in doc.entidades.values():
+-                escalar_entidad(e, k)
+-            for lay in (doc.layouts or []):
+-                for v in (lay.get("ventanas") or []):
+-                    c = v.get("centro") or [0, 0]
+-                    v["centro"] = [c[0] * k, c[1] * k]
+-            for est in doc.estilos_cota.values():
+-                est["factor_escala"] = float(est.get("factor_escala", 1.0) or 1.0) * k
+-                est["decimales"] = DECIMALES_POR_NOMBRE[nueva]
+-        finally:
+-            doc.historial.silencio = silencio
+-        doc.olvidar()
+-    else:
++        for e in doc.entidades.values():
++            escalar_entidad(e, k)
++        for lay in (doc.layouts or []):
++            for v in (lay.get("ventanas") or []):
++                c = v.get("centro") or [0, 0]
++                v["centro"] = [c[0] * k, c[1] * k]
+         for est in doc.estilos_cota.values():
+-            est["decimales"] = DECIMALES_POR_NOMBRE[nueva]
++            est["factor_escala"] = float(est.get("factor_escala", 1.0) or 1.0) * k
++    for est in doc.estilos_cota.values():
++        est["decimales"] = DECIMALES_POR_NOMBRE[nueva]
+     doc.unidades = nueva
+     doc.sucio = True
+-    return {"unidades": nueva, "factor": k if escalar else 1.0, "escalado": bool(escalar)}
++    doc.olvidar()
++    return k
+--- a/server.py
++++ b/server.py
+@@ -20,7 +20,7 @@
+ import threading
+ import time
+ 
+-from fastapi import FastAPI, HTTPException
++from fastapi import FastAPI, HTTPException, Request
+ from fastapi.responses import FileResponse, JSONResponse, Response
+ from fastapi.staticfiles import StaticFiles
+ from pydantic import BaseModel
+@@ -287,6 +287,27 @@
+     return mod_actualizar.bajar()
+ 
+ 
++@app.post("/api/actualizacion/manifiesto")
++async def actualizacion_manifiesto(request: Request):
++    """El puntero, traído por la interfaz con el motor de red de Chromium
++    (respaldo cuando el de Python no llega al sitio; Mike, 15-sep-2026)."""
++    datos = await request.json()
++    if mod_actualizar.recibir_manifiesto(datos) is None:
++        raise HTTPException(400, "Ese puntero no trae una versión que entienda.")
++    return mod_actualizar.resumen(con_red=True, forzar=False)
++
++
++@app.post("/api/actualizacion/recibir")
++async def actualizacion_recibir(request: Request):
++    """El instalador bajado por la interfaz (mismo respaldo). Cuerpo: los bytes
++    tal cual; cabecera X-Nombre: el nombre del archivo."""
++    datos = await request.body()
++    try:
++        return mod_actualizar.recibir_archivo(request.headers.get("x-nombre", ""), datos)
++    except ValueError as exc:
++        raise HTTPException(400, str(exc))
++
++
+ @app.get("/api/actualizacion/estado")
+ def actualizacion_estado():
+     return mod_actualizar.estado()
+--- a/ui/actualizar.js
++++ b/ui/actualizar.js
+@@ -26,7 +26,7 @@
+     return n.length ? n.map((x) => "· " + x).join("\n") : "";
+   }
+ 
+-  function vigilar(alTerminar) {
++  function vigilar(alTerminar, tambienAlFallar = false) {
+     if (vigilando) return;
+     vigilando = setInterval(async () => {
+       let e;
+@@ -42,6 +42,7 @@
+       } else if (e.fase === "error") {
+         avisar(e.mensaje, true, 12000);
+         Comandos.eco(e.mensaje, "mal");
++        if (tambienAlFallar && alTerminar) alTerminar(e);
+       }
+     }, 600);
+   }
+@@ -84,14 +85,66 @@
+     if (e.abrir) { window.open(e.abrir, "_blank"); return; }
+     if (e.fase === "listo") { instalarBajada(e); return; }
+     avisar(F("Bajando draw101 {0}…", ult.version), false, 0);
+-    vigilar(instalarBajada);
++    vigilar(async (fin) => {
++      if (fin.fase !== "error" || !ult.url) return;
++      // El motor no pudo bajar: se intenta con el motor de red de Chromium.
++      Comandos.eco(Tr("El motor no pudo bajar el instalador; se intenta con el navegador…"));
++      try { instalarBajada(await bajarPorChromium(ult)); }
++      catch (err) { avisar(F("Tampoco se pudo bajar con el navegador: {0}", err.message), true, 12000); }
++    }, true);
+   }
+ 
+   /** Enseña el cuadro. `silencio`: sólo si hay versión nueva y no está ignorada. */
++  /* Respaldo por Chromium (Mike, 15-sep-2026: «nunca me avisa que hay nueva
++   * versión»). El motor de Python consulta el puntero con urllib; en la máquina
++   * de Mike eso fallaba y nunca supimos por qué, mientras el navegador sí
++   * llegaba a GitHub. Si el motor no pudo, la interfaz baja el puntero con
++   * fetch (el mismo motor de red de Chromium, con los certificados y el proxy
++   * de Windows) y se lo entrega al motor; lo mismo con el instalador. */
++  async function traerPunteroPorChromium(r) {
++    if (!r || r.consulto || !r.puntero) return r;
++    try {
++      const resp = await fetch(r.puntero, { cache: "no-store" });
++      if (!resp.ok) throw new Error(`HTTP ${resp.status}`);
++      const datos = await resp.json();
++      const r2 = await post("/api/actualizacion/manifiesto", datos);
++      r2.respaldo = "chromium";
++      return r2;
++    } catch (err) {
++      r.errorChromium = String(err && err.message || err);
++      return r;
++    }
++  }
++
++  async function bajarPorChromium(ult) {
++    avisar(F("Bajando draw101 {0}…", ult.version), false, 0);
++    const resp = await fetch(ult.url, { cache: "no-store" });
++    if (!resp.ok || !resp.body) throw new Error(`HTTP ${resp.status}`);
++    const lector = resp.body.getReader();
++    const trozos = [];
++    let ya = 0, ultimoAviso = 0;
++    for (;;) {
++      const { done, value } = await lector.read();
++      if (done) break;
++      trozos.push(value); ya += value.length;
++      if (Date.now() - ultimoAviso > 300) {
++        ultimoAviso = Date.now();
++        avisar(F("Bajando draw101 {0}… {1} de {2} MB", ult.version, Math.round(ya / 1e6), Math.round((ult.bytes || 0) / 1e6)), false, 0);
++      }
++    }
++    const cuerpo = new Blob(trozos);
++    avisar(Tr("Comprobando que lo bajado esté íntegro…"), false, 0);
++    const res = await fetch("/api/actualizacion/recibir", { method: "POST", headers: { "X-Nombre": ult.archivo || "" }, body: cuerpo });
++    const e = await res.json().catch(() => ({}));
++    if (!res.ok) throw new Error(e.detail || `HTTP ${res.status}`);
++    return e;
++  }
++
+   async function revisar({ silencio = false, forzar = false } = {}) {
+     let r;
+     try { r = await api(`/api/actualizacion?red=1&forzar=${forzar ? 1 : 0}`); }
+     catch (err) { if (!silencio) avisar(err.message, true); return null; }
++    if (!r.consulto) r = await traerPunteroPorChromium(r);
+     const ult = r.ultimo;
+     if (silencio) {
+       if (!r.hay_nueva || r.ignorada || ofrecidaEnSesion === ult.version) return r;
+@@ -110,7 +163,11 @@
+       instalarBajada(r.estado); return r;
+     }
+     const lineas = [F("Tienes draw101 {0}.", r.actual)];
+-    if (!r.consulto) lineas.push(Tr("No se pudo consultar el sitio de Taller 101 (¿sin internet?)."));
++    if (!r.consulto) {
++      lineas.push(Tr("No se pudo consultar el sitio de Taller 101 (¿sin internet?)."));
++      if (r.error) lineas.push(Tr("El motor dijo: ") + r.error);
++      if (r.errorChromium) lineas.push(Tr("Y el navegador dijo: ") + r.errorChromium);
++    }
+     else if (!r.hay_nueva) lineas.push(Tr("Es la última versión."));
+     else {
+       lineas.push(F("Hay una versión nueva: {0} ({1}).", ult.version, ult.fecha || ""));
