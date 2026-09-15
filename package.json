@@ -1,7 +1,7 @@
 {
   "name": "draw101",
   "productName": "draw101",
-  "version": "0.20.4",
+  "version": "0.20.5",
   "_versionApp": "0.20.4 — la que enseña la app viene de core/version.py; ésta sólo existe porque electron-builder exige semver",
   "_notaEmpaque": "asar apagado a propósito: main.js busca server.py junto a electron/, y el motor de Python no puede vivir dentro de un asar. Y electron-builder saca cualquier node_modules de los globs de `files`, así que los dos motores de DWG (dwgjs/node_modules) se copian por extraResources o la app se queda sin leer DWG.",
   "description": "CAD 2D de Taller 101 — leer, trazar, acotar e imprimir planos",
@@ -19,7 +19,7 @@
   "build": {
     "appId": "mx.taller101.dibujador",
     "productName": "draw101",
-    "artifactName": "draw101-0.20.4-setup.${ext}",
+    "artifactName": "draw101-0.20.5-setup.${ext}",
     "directories": {
       "output": "dist",
       "buildResources": "build"
