@@ -1,0 +1,55 @@
+--- a/core/version.py
++++ b/core/version.py
+@@ -21,7 +21,7 @@
+ 
+ from __future__ import annotations
+ 
+-VERSION = "0.20.14"
++VERSION = "0.20.15"
+ FECHA = "2026-09-16"
+ 
+ # Qué trae cada entrega, en el idioma del taller y no en el del código.
+@@ -29,6 +29,21 @@
+ # enseña en la consola.
+ BITACORA: list[dict] = [
+     {
++        "version": "0.20.15",
++        "fecha": "2026-09-16",
++        "cambios": [
++            "Elegir color ya no es teclear códigos. La muestra de color de una "
++            "capa y la de una entidad abren la misma paleta: los nueve colores "
++            "de siempre (los del índice de AutoCAD, con su número), los de "
++            "Taller 101, una fila de grises, los que ya usa el dibujo, el "
++            "selector de color de Windows para cualquier otro, y la caja del "
++            "código para quien lo traiga copiado. En una entidad sigue estando "
++            "«Por capa».",
++            "Y las propiedades de la capa ya no se cierran al elegir el color.",
++            "Prueba t030 (paleta de color, 18 comprobaciones).",
++        ],
++    },
++    {
+         "version": "0.20.14",
+         "fecha": "2026-09-16",
+         "cambios": [
+--- a/package.json
++++ b/package.json
+@@ -1,8 +1,8 @@
+ {
+   "name": "draw101",
+   "productName": "draw101",
+-  "version": "0.20.14",
+-  "_versionApp": "0.20.14 — la que enseña la app viene de core/version.py; ésta sólo existe porque electron-builder exige semver",
++  "version": "0.20.15",
++  "_versionApp": "0.20.15 — la que enseña la app viene de core/version.py; ésta sólo existe porque electron-builder exige semver",
+   "_notaEmpaque": "asar apagado a propósito: main.js busca server.py junto a electron/, y el motor de Python no puede vivir dentro de un asar. Y electron-builder saca cualquier node_modules de los globs de `files`, así que los dos motores de DWG (dwgjs/node_modules) se copian por extraResources o la app se queda sin leer DWG.",
+   "description": "CAD 2D de Taller 101 — leer, trazar, acotar e imprimir planos",
+   "main": "electron/main.js",
+@@ -19,7 +19,7 @@
+   "build": {
+     "appId": "mx.taller101.dibujador",
+     "productName": "draw101",
+-    "artifactName": "draw101-0.20.14-setup.${ext}",
++    "artifactName": "draw101-0.20.15-setup.${ext}",
+     "directories": {
+       "output": "dist",
+       "buildResources": "build"

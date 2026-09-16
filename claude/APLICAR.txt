@@ -6,3 +6,10 @@
 0.20.11.patch
 0.20.12.patch
 0.20.13.patch
+B6-guardar-como.patch
+B7-pestanas-siempre.patch
+B8-capas-apagadas.patch
+B9-planos-grandes.patch
+0.20.14.patch
+B10-paleta-color.patch
+0.20.15.patch
