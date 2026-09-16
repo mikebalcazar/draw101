@@ -1,0 +1,49 @@
+--- a/package.json
++++ b/package.json
+@@ -10,7 +10,7 @@
+   "license": "UNLICENSED",
+   "scripts": {
+     "start": "electron .",
+-    "dist": "electron-builder --win nsis"
++    "dist": "python build/imagenes_instalador.py && electron-builder --win nsis"
+   },
+   "devDependencies": {
+     "electron": "^33.0.0",
+@@ -59,14 +59,36 @@
+           "ext": "t101d",
+           "name": "Dibujo Taller 101",
+           "icon": "build/icon.ico"
++        },
++        {
++          "ext": "dxf",
++          "name": "Dibujo DXF",
++          "description": "Dibujo de intercambio DXF",
++          "icon": "build/icon.ico",
++          "role": "Editor"
++        },
++        {
++          "ext": "dwg",
++          "name": "Dibujo DWG",
++          "description": "Dibujo de AutoCAD DWG",
++          "icon": "build/icon.ico",
++          "role": "Editor"
+         }
+       ]
+     },
++    "_notaAsociaciones": "draw101 aparece en «Abrir con» de los DXF y DWG y en Aplicaciones predeterminadas, pero NO se roba la asociación: quién los abre por omisión lo sigue decidiendo el usuario (regla de Mike, 0.11.2). electron-builder registra el ProgID; Windows decide. El .t101d sí es nuestro.",
+     "nsis": {
+       "oneClick": false,
+       "allowToChangeInstallationDirectory": true,
+       "perMachine": true,
+-      "shortcutName": "draw101"
++      "shortcutName": "draw101",
++      "installerIcon": "build/icon.ico",
++      "uninstallerIcon": "build/icon.ico",
++      "installerHeaderIcon": "build/icon.ico",
++      "installerSidebar": "build/instalador-lateral.bmp",
++      "uninstallerSidebar": "build/instalador-lateral.bmp",
++      "installerHeader": "build/instalador-encabezado.bmp",
++      "license": "build/licencia.txt"
+     }
+   }
+ }

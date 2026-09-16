@@ -13,3 +13,6 @@ B9-planos-grandes.patch
 0.20.14.patch
 B10-paleta-color.patch
 0.20.15.patch
+B11-pendientes.patch
+B11-empaque.patch
+0.20.16.patch

@@ -1,0 +1,16 @@
+draw101 — CAD 2D de Taller 101
+Copyright © 2026 Taller 101
+
+Uso interno de Taller 101 y de quien Taller 101 autorice.
+
+Este programa se entrega tal cual, sin garantía de ningún tipo. Quien lo usa
+es responsable de revisar los planos, las medidas y los despieces antes de
+cortar material o mandar a producción: un programa se equivoca en silencio y
+una pieza mal cortada cuesta dinero.
+
+Lo que va dentro y no es de Taller 101 —Python, Electron, ezdxf, libredwg,
+reportlab y los demás— conserva su propia licencia. La lista completa, con la
+versión y el texto de cada una, está en el programa: Ayuda ▾ → Licencias de
+terceros (o el comando LICENCIAS).
+
+Al continuar aceptas estos términos.
