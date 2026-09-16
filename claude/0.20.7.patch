@@ -1,0 +1,115 @@
+--- a/core/version.py
++++ b/core/version.py
+@@ -21,7 +21,7 @@
+ 
+ from __future__ import annotations
+ 
+-VERSION = "0.20.6"
++VERSION = "0.20.7"
+ FECHA = "2026-09-15"
+ 
+ # Qué trae cada entrega, en el idioma del taller y no en el del código.
+@@ -29,6 +29,17 @@
+ # enseña en la consola.
+ BITACORA: list[dict] = [
+     {
++        "version": "0.20.7",
++        "fecha": "2026-09-15",
++        "cambios": [
++            "Pantalla de inicio: las rutas largas de los planos recientes ya no "
++            "se salen de la ventana. Se enseña el arranque y el final de la ruta "
++            "con «…» en medio (la ruta completa aparece al pasar el ratón), y la "
++            "columna de recientes ya no se estira con el texto.",
++            "Prueba t023 (inicio: rutas largas, 9 comprobaciones).",
++        ],
++    },
++    {
+         "version": "0.20.6",
+         "fecha": "2026-09-15",
+         "cambios": [
+--- a/package.json
++++ b/package.json
+@@ -1,8 +1,8 @@
+ {
+   "name": "draw101",
+   "productName": "draw101",
+-  "version": "0.20.6",
+-  "_versionApp": "0.20.6 — la que enseña la app viene de core/version.py; ésta sólo existe porque electron-builder exige semver",
++  "version": "0.20.7",
++  "_versionApp": "0.20.7 — la que enseña la app viene de core/version.py; ésta sólo existe porque electron-builder exige semver",
+   "_notaEmpaque": "asar apagado a propósito: main.js busca server.py junto a electron/, y el motor de Python no puede vivir dentro de un asar. Y electron-builder saca cualquier node_modules de los globs de `files`, así que los dos motores de DWG (dwgjs/node_modules) se copian por extraResources o la app se queda sin leer DWG.",
+   "description": "CAD 2D de Taller 101 — leer, trazar, acotar e imprimir planos",
+   "main": "electron/main.js",
+@@ -19,7 +19,7 @@
+   "build": {
+     "appId": "mx.taller101.dibujador",
+     "productName": "draw101",
+-    "artifactName": "draw101-0.20.6-setup.${ext}",
++    "artifactName": "draw101-0.20.7-setup.${ext}",
+     "directories": {
+       "output": "dist",
+       "buildResources": "build"
+--- a/ui/styles.css
++++ b/ui/styles.css
+@@ -592,7 +592,11 @@
+ #inicio .marca .logoimg{display:block;height:44px;width:auto;margin-bottom:8px}
+ #inicio .marca .nm{display:none}
+ #inicio .marca .sub{font-size:12px;color:var(--txt2);margin-top:5px}
+-#inicio .cols{display:grid;grid-template-columns:1fr 1fr;gap:26px;align-items:start}
++/* minmax(0,1fr) y no 1fr: una columna «1fr» no se encoge por debajo de su
++ * contenido, y una ruta larga sin quiebres (nowrap) estiraba la columna de
++ * recientes fuera de la ventana (Mike, 15-sep-2026). */
++#inicio .cols{display:grid;grid-template-columns:minmax(0,1fr) minmax(0,1fr);gap:26px;align-items:start}
++#inicio .recientes{min-width:0}
+ #inicio .acciones{display:grid;gap:10px}
+ #inicio .tarj{display:flex;align-items:center;gap:13px;text-align:left;padding:15px 16px;
+   background:var(--panel2);border:1px solid var(--linea);border-radius:9px;width:100%}
+@@ -615,12 +619,12 @@
+ #inicio .lista::-webkit-scrollbar{width:8px}
+ #inicio .lista::-webkit-scrollbar-thumb{background:var(--sw);border-radius:5px}
+ #inicio .lista .vacio{font-size:11.5px;color:var(--txt3);padding:14px 2px}
+-#inicio .rec{display:block;width:100%;text-align:left;background:transparent;border:none;
++#inicio .rec{display:block;width:100%;max-width:100%;min-width:0;text-align:left;background:transparent;border:none;
+   border-bottom:1px solid var(--linea2);border-radius:0;padding:9px 8px}
+ #inicio .rec:hover{background:var(--panel2)}
+ #inicio .rec .n1{font-size:12.5px;font-weight:600;display:flex;align-items:center;gap:7px}
+ #inicio .rec .n2{font-size:10.5px;color:var(--txt3);margin-top:2px;
+-  white-space:nowrap;overflow:hidden;text-overflow:ellipsis;direction:rtl;text-align:left}
++  white-space:nowrap;overflow:hidden;text-overflow:ellipsis;text-align:left}
+ #inicio .rec .cuando{margin-left:auto;font-size:10px;color:var(--txt3);font-weight:400}
+ #inicio .pie{display:flex;gap:12px;align-items:center;margin-top:22px;padding-top:12px;
+   border-top:1px solid var(--linea);font-size:10.5px;color:var(--txt3)}
+--- a/ui/marco.js
++++ b/ui/marco.js
+@@ -162,6 +162,21 @@
+     return d.toLocaleDateString();
+   }
+ 
++  /* Ruta abreviada para la lista de recientes (Mike, 15-sep-2026: «no
++   * necesitamos toda la ruta»). Se conservan el arranque (unidad o primera
++   * carpeta) y el final (última carpeta y archivo), con «…» en medio; la ruta
++   * completa va en el tooltip. */
++  function abreviarRuta(ruta, max = 64) {
++    if (!ruta || ruta.length <= max) return ruta;
++    const sep = ruta.includes("\\") ? "\\" : "/";
++    const partes = ruta.split(sep).filter((p) => p.length);
++    if (partes.length <= 3) return ruta.slice(0, 8) + "…" + ruta.slice(-(max - 9));
++    const inicio = partes.slice(0, 2).join(sep);
++    let fin = partes.slice(-2).join(sep);
++    if (fin.length > max - 12) fin = "…" + fin.slice(-(max - 12));
++    return inicio + sep + "…" + sep + fin;
++  }
++
+   function pintarRecientes() {
+     const caja = $("#iRecientes");
+     if (!caja) return;
+@@ -187,7 +202,8 @@
+       n1.append(nom, c);
+       const n2 = document.createElement("div");
+       n2.className = "n2";
+-      n2.textContent = r.ruta || "";
++      n2.textContent = abreviarRuta(r.ruta || "");
++      b.title = r.ruta || "";                       // la ruta completa, al pasar el ratón
+       b.append(n1, n2);
+       b.onclick = async () => {
+         cerrarInicio();
