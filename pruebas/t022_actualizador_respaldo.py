@@ -76,6 +76,20 @@ def _motor_sin_red(r: comun.Reporte) -> None:
             r.cierto(False, "un archivo que no cuadra debe rechazarse")
         except ValueError as exc:
             r.cierto("bytes" in str(exc) or "huella" in str(exc), f"un archivo que no cuadra se rechaza: {str(exc)[:50]}")
+
+        # Lo que baja Electron a una ruta temporal (0.20.9): se comprueba y se mueve.
+        tmp = tempfile.NamedTemporaryFile(delete=False, suffix=".exe")
+        tmp.write(b"hola!"); tmp.close()
+        e = a.recibir_ruta("draw101-9.9.9-setup.exe", tmp.name)
+        r.igual(e["fase"], "listo", "un archivo bajado por Electron a una ruta temporal queda listo")
+        r.cierto(not os.path.exists(tmp.name) and os.path.exists(e["ruta"]), "y se movió de la temporal a la carpeta de descargas")
+        tmp = tempfile.NamedTemporaryFile(delete=False, suffix=".exe")
+        tmp.write(b"otra cosa!"); tmp.close()
+        try:
+            a.recibir_ruta("draw101-9.9.9-setup.exe", tmp.name)
+            r.cierto(False, "una ruta que no cuadra debe rechazarse")
+        except ValueError as exc:
+            r.cierto(True, f"una ruta que no cuadra se rechaza: {str(exc)[:50]}")
     finally:
         a.PUNTERO = viejo
         a._ultima_revision.update({"cuando": 0.0, "datos": None, "error": ""})
@@ -103,6 +117,11 @@ def _rutas(r: comun.Reporte) -> None:
         r.igual(e.get("fase"), "listo", "y lo deja listo para instalar")
         st, e = _post(base, "/api/actualizacion/recibir", cuerpo[:-10], {"Content-Type": "application/octet-stream", "X-Nombre": "draw101-9.9.8-setup.exe"})
         r.igual(st, 400, "y rechaza uno incompleto")
+        tmp = tempfile.NamedTemporaryFile(delete=False, suffix=".exe")
+        tmp.write(cuerpo); tmp.close()
+        st, e = _post(base, "/api/actualizacion/recibido", json.dumps({"nombre": "draw101-9.9.8-setup.exe", "ruta": tmp.name}).encode())
+        r.igual(st, 200, "POST /api/actualizacion/recibido acepta la ruta que bajó Electron")
+        r.igual(e.get("fase"), "listo", "y lo deja listo")
         r.igual(pagina.errores, [], "sin errores de JavaScript")
         try:
             from core import actualizar as a

@@ -1,0 +1,189 @@
+--- a/core/version.py
++++ b/core/version.py
+@@ -21,7 +21,7 @@
+ 
+ from __future__ import annotations
+ 
+-VERSION = "0.20.8"
++VERSION = "0.20.9"
+ FECHA = "2026-09-15"
+ 
+ # Qué trae cada entrega, en el idioma del taller y no en el del código.
+@@ -29,6 +29,19 @@
+ # enseña en la consola.
+ BITACORA: list[dict] = [
+     {
++        "version": "0.20.9",
++        "fecha": "2026-09-15",
++        "cambios": [
++            "Actualizar desde la app ya funciona en máquinas donde el motor no "
++            "llega a GitHub (Mike: «SSL: CERTIFICATE_VERIFY_FAILED»: el Python "
++            "empotrado no ve las raíces de Windows). El instalador lo baja "
++            "Electron con la red de Chromium (certificados y proxy de Windows, "
++            "sin la traba de CORS que tumbaba al navegador con «Failed to fetch») "
++            "y el motor lo comprueba con su huella antes de instalar.",
++            "Prueba t022 ampliada (22 comprobaciones).",
++        ],
++    },
++    {
+         "version": "0.20.8",
+         "fecha": "2026-09-15",
+         "cambios": [
+--- a/package.json
++++ b/package.json
+@@ -1,8 +1,8 @@
+ {
+   "name": "draw101",
+   "productName": "draw101",
+-  "version": "0.20.8",
+-  "_versionApp": "0.20.8 — la que enseña la app viene de core/version.py; ésta sólo existe porque electron-builder exige semver",
++  "version": "0.20.9",
++  "_versionApp": "0.20.9 — la que enseña la app viene de core/version.py; ésta sólo existe porque electron-builder exige semver",
+   "_notaEmpaque": "asar apagado a propósito: main.js busca server.py junto a electron/, y el motor de Python no puede vivir dentro de un asar. Y electron-builder saca cualquier node_modules de los globs de `files`, así que los dos motores de DWG (dwgjs/node_modules) se copian por extraResources o la app se queda sin leer DWG.",
+   "description": "CAD 2D de Taller 101 — leer, trazar, acotar e imprimir planos",
+   "main": "electron/main.js",
+@@ -19,7 +19,7 @@
+   "build": {
+     "appId": "mx.taller101.dibujador",
+     "productName": "draw101",
+-    "artifactName": "draw101-0.20.8-setup.${ext}",
++    "artifactName": "draw101-0.20.9-setup.${ext}",
+     "directories": {
+       "output": "dist",
+       "buildResources": "build"
+--- a/core/actualizar.py
++++ b/core/actualizar.py
+@@ -144,6 +144,34 @@
+     return dict(_estado)
+ 
+ 
++def recibir_ruta(nombre: str, ruta: str) -> dict:
++    """El instalador bajado por Electron a una ruta temporal (misma comprobación
++    que `recibir_archivo`, sin pasar los bytes por HTTP)."""
++    ult = _ultima_revision["datos"]
++    if not ult:
++        raise ValueError("No sé qué versión es: primero hay que consultar el puntero.")
++    origen = pathlib.Path(ruta)
++    if not origen.is_file():
++        raise ValueError(f"No encuentro lo bajado: {ruta}")
++    nombre = pathlib.Path(nombre or ult["archivo"] or f"draw101-{ult['version']}-setup.exe").name
++    destino = _carpeta_descargas() / nombre
++    tam = origen.stat().st_size
++    if ult["bytes"] and tam != ult["bytes"]:
++        origen.unlink(missing_ok=True)
++        raise ValueError(f"Llegaron {tam} bytes y el sitio dice {ult['bytes']}: descarga incompleta.")
++    if ult["sha256"] and _sha256(origen) != ult["sha256"]:
++        origen.unlink(missing_ok=True)
++        raise ValueError("Lo bajado no cuadra con la huella que publica Taller 101. No se instala.")
++    destino.unlink(missing_ok=True)
++    try:
++        origen.replace(destino)
++    except OSError:
++        import shutil
++        shutil.move(str(origen), str(destino))
++    _poner("listo", 100, f"draw101 {ult['version']} bajado y comprobado. Listo para instalar.", ult["version"], str(destino))
++    return dict(_estado)
++
++
+ _vigilante: threading.Thread | None = None
+ 
+ 
+--- a/server.py
++++ b/server.py
+@@ -308,6 +308,20 @@
+         raise HTTPException(400, str(exc))
+ 
+ 
++class _Recibido(BaseModel):
++    nombre: str = ""
++    ruta: str = ""
++
++
++@app.post("/api/actualizacion/recibido")
++def actualizacion_recibido(entrada: _Recibido):
++    """El instalador que Electron bajó a una ruta temporal (0.20.9)."""
++    try:
++        return mod_actualizar.recibir_ruta(entrada.nombre, entrada.ruta)
++    except ValueError as exc:
++        raise HTTPException(400, str(exc))
++
++
+ @app.get("/api/actualizacion/estado")
+ def actualizacion_estado():
+     return mod_actualizar.estado()
+--- a/ui/actualizar.js
++++ b/ui/actualizar.js
+@@ -118,6 +118,16 @@
+ 
+   async function bajarPorChromium(ult) {
+     avisar(F("Bajando draw101 {0}…", ult.version), false, 0);
++    // Con Electron, baja el proceso principal (sin CORS, certificados de
++    // Windows): el fetch de la página fallaba con «Failed to fetch» porque el
++    // sitio de archivos de GitHub no permite CORS (Mike, 15-sep-2026).
++    if (enElectron() && window.t101.bajar) {
++      const ruta = await window.t101.bajar(ult.url, ult.archivo || "", (a) => {
++        avisar(F("Bajando draw101 {0}… {1} de {2} MB", ult.version, Math.round(a.ya / 1e6), Math.round((a.total || ult.bytes || 0) / 1e6)), false, 0);
++      });
++      avisar(Tr("Comprobando que lo bajado esté íntegro…"), false, 0);
++      return await post("/api/actualizacion/recibido", { nombre: ult.archivo || "", ruta });
++    }
+     const resp = await fetch(ult.url, { cache: "no-store" });
+     if (!resp.ok || !resp.body) throw new Error(`HTTP ${resp.status}`);
+     const lector = resp.body.getReader();
+--- a/electron/main.js
++++ b/electron/main.js
+@@ -291,6 +291,39 @@
+ // (el del doble clic en un .t101d) aunque Electron los guarde en mapas
+ // separados: dos cosas con el mismo nombre y direcciones contrarias es una
+ // trampa esperando a que alguien la pise.
++/* --- Bajar un archivo con la red de Chromium  ·  0.20.9 ------------------
++ *
++ * Mike (15-sep-2026): el motor de Python no llega a GitHub en su máquina
++ * (SSL: CERTIFICATE_VERIFY_FAILED: el Python empotrado no ve las raíces de
++ * Windows), y la página tampoco pudo bajar el instalador (CORS en el sitio
++ * de los archivos de GitHub). El proceso principal sí: `net` usa la red de
++ * Chromium, con los certificados y el proxy de Windows, sigue redirecciones y
++ * no le aplica CORS. Se baja a la carpeta temporal y el motor lo comprueba
++ * y lo mueve (core/actualizar.recibir_ruta). */
++ipcMain.handle("bajar-archivo", async (e, url, nombre) => {
++  const { net } = require("electron");
++  const os = require("os");
++  const destino = path.join(os.tmpdir(), `draw101-${Date.now()}-${path.basename(nombre || "archivo.bin")}`);
++  await new Promise((resolver, rechazar) => {
++    const pedido = net.request({ url, redirect: "follow" });
++    pedido.on("response", (resp) => {
++      if (resp.statusCode < 200 || resp.statusCode >= 300) { rechazar(new Error(`HTTP ${resp.statusCode}`)); return; }
++      const total = parseInt(resp.headers["content-length"] || "0", 10) || 0;
++      let ya = 0, ultimo = 0;
++      const f = fs.createWriteStream(destino);
++      resp.on("data", (trozo) => {
++        f.write(trozo); ya += trozo.length;
++        if (Date.now() - ultimo > 300) { ultimo = Date.now(); try { e.sender.send("bajar-avance", { ya, total }); } catch (_) { /* ventana cerrada */ } }
++      });
++      resp.on("end", () => f.end(() => resolver()));
++      resp.on("error", rechazar);
++    });
++    pedido.on("error", rechazar);
++    pedido.end();
++  });
++  return destino;
++});
++
+ ipcMain.handle("abrir-con-sistema", async (_e, ruta) => {
+   const error = await shell.openPath(ruta);
+   return error || null;
+--- a/electron/preload.js
++++ b/electron/preload.js
+@@ -10,6 +10,12 @@
+   imprimirPDF: (ruta, opciones) => ipcRenderer.invoke("imprimir-pdf", ruta, opciones),
+   imprimirHTML: (html, opciones) => ipcRenderer.invoke("imprimir-html", html, opciones),
+   impresoras: () => ipcRenderer.invoke("listar-impresoras"),
++  // Bajar un archivo con la red de Chromium (proceso principal: sin CORS y con
++  // los certificados de Windows). Devuelve la ruta donde quedó.
++  bajar: (url, nombre, alAvanzar) => {
++    if (alAvanzar) ipcRenderer.on("bajar-avance", (_e, a) => alAvanzar(a));
++    return ipcRenderer.invoke("bajar-archivo", url, nombre);
++  },
+ 
+   // El proceso principal pregunta; la página contesta con si hay cambios.
+   alPreguntarCierre: (fn) => ipcRenderer.on("preguntar-cierre", fn),
