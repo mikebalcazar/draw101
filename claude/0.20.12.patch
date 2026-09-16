@@ -1,0 +1,257 @@
+--- a/core/version.py
++++ b/core/version.py
+@@ -21,7 +21,7 @@
+ 
+ from __future__ import annotations
+ 
+-VERSION = "0.20.11"
++VERSION = "0.20.12"
+ FECHA = "2026-09-16"
+ 
+ # Qué trae cada entrega, en el idioma del taller y no en el del código.
+@@ -29,6 +29,18 @@
+ # enseña en la consola.
+ BITACORA: list[dict] = [
+     {
++        "version": "0.20.12",
++        "fecha": "2026-09-16",
++        "cambios": [
++            "Barra de progreso al bajar una versión nueva: arriba, con el nombre "
++            "de la versión, los megas bajados de los totales y el porcentaje. "
++            "Se pone verde al terminar y se cierra sola; si falla, roja. Cuando "
++            "el servidor no dice cuánto pesa, la barra corre sola en vez de "
++            "inventar un porcentaje. Antes sólo había un renglón de texto.",
++            "Prueba t026 (barra de descarga, 21 comprobaciones).",
++        ],
++    },
++    {
+         "version": "0.20.11",
+         "fecha": "2026-09-16",
+         "cambios": [
+--- a/package.json
++++ b/package.json
+@@ -1,8 +1,8 @@
+ {
+   "name": "draw101",
+   "productName": "draw101",
+-  "version": "0.20.11",
+-  "_versionApp": "0.20.11 — la que enseña la app viene de core/version.py; ésta sólo existe porque electron-builder exige semver",
++  "version": "0.20.12",
++  "_versionApp": "0.20.12 — la que enseña la app viene de core/version.py; ésta sólo existe porque electron-builder exige semver",
+   "_notaEmpaque": "asar apagado a propósito: main.js busca server.py junto a electron/, y el motor de Python no puede vivir dentro de un asar. Y electron-builder saca cualquier node_modules de los globs de `files`, así que los dos motores de DWG (dwgjs/node_modules) se copian por extraResources o la app se queda sin leer DWG.",
+   "description": "CAD 2D de Taller 101 — leer, trazar, acotar e imprimir planos",
+   "main": "electron/main.js",
+@@ -19,7 +19,7 @@
+   "build": {
+     "appId": "mx.taller101.dibujador",
+     "productName": "draw101",
+-    "artifactName": "draw101-0.20.11-setup.${ext}",
++    "artifactName": "draw101-0.20.12-setup.${ext}",
+     "directories": {
+       "output": "dist",
+       "buildResources": "build"
+--- a/ui/actualizar.js
++++ b/ui/actualizar.js
+@@ -26,21 +26,82 @@
+     return n.length ? n.map((x) => "· " + x).join("\n") : "";
+   }
+ 
++  /* La barra de progreso de la descarga  ·  0.20.12. Mike (16-sep-2026):
++   * «hay que hacer una barrita de progreso de cuando se está descargando la
++   * nueva versión». Antes sólo había un renglón de texto que se reescribía.
++   * Va fija arriba, con la misma pinta del letrero de versión nueva: título,
++   * barra, y debajo los megas y el porcentaje. Mientras no se sepa el total
++   * (algunos servidores no lo dicen) la barra corre sola de un lado a otro,
++   * que es la forma honesta de decir «esto avanza pero no sé cuánto falta».
++   * Se cierra sola al terminar. */
++  const Barra = (() => {
++    let caja = null, relleno = null, tit = null, izq = null, der = null;
++
++    function armar() {
++      if (caja) return;
++      caja = document.createElement("div");
++      caja.id = "barra-descarga";
++      tit = document.createElement("div");
++      tit.className = "tit";
++      const riel = document.createElement("div");
++      riel.className = "riel";
++      relleno = document.createElement("div");
++      relleno.className = "relleno";
++      riel.appendChild(relleno);
++      const pie = document.createElement("div");
++      pie.className = "pie";
++      izq = document.createElement("span");
++      der = document.createElement("span");
++      pie.append(izq, der);
++      caja.append(tit, riel, pie);
++      document.body.appendChild(caja);
++    }
++
++    /** `pct` null = no se sabe cuánto falta (barra corriendo). */
++    function mostrar({ titulo, pct = null, ya = 0, total = 0, estado = "" }) {
++      armar();
++      caja.classList.add("si");
++      caja.classList.toggle("indet", pct === null);
++      caja.classList.toggle("fin", estado === "listo");
++      caja.classList.toggle("mal", estado === "error");
++      tit.textContent = titulo;
++      if (pct !== null) relleno.style.width = `${Math.max(0, Math.min(100, pct))}%`;
++      izq.textContent = total ? `${(ya / 1e6).toFixed(1)} de ${(total / 1e6).toFixed(0)} MB`
++                              : (ya ? `${(ya / 1e6).toFixed(1)} MB` : "");
++      der.textContent = pct === null ? "" : `${Math.round(pct)} %`;
++    }
++
++    function cerrar(ms = 0) {
++      if (!caja) return;
++      if (ms) setTimeout(() => caja.classList.remove("si"), ms);
++      else caja.classList.remove("si");
++    }
++
++    return { mostrar, cerrar };
++  })();
++
+   function vigilar(alTerminar, tambienAlFallar = false) {
+     if (vigilando) return;
+     vigilando = setInterval(async () => {
+       let e;
+       try { e = await api("/api/actualizacion/estado"); } catch (_) { return; }
+       if (e.fase === "descargando" || e.fase === "comprobando") {
+-        avisar(e.mensaje, false, 0);
++        Barra.mostrar({
++          titulo: e.fase === "comprobando" ? Tr("Comprobando que lo bajado esté íntegro…")
++                                           : F("Bajando draw101 {0}…", e.version || ""),
++          pct: e.fase === "comprobando" ? 100 : (e.pct || 0),
++          estado: e.fase,
++        });
+         return;
+       }
+       clearInterval(vigilando); vigilando = null;
+       if (e.fase === "listo") {
+-        avisar(e.mensaje, false, 6000);
++        Barra.mostrar({ titulo: F("draw101 {0} bajado y comprobado.", e.version || ""), pct: 100, estado: "listo" });
++        Barra.cerrar(4000);
+         if (alTerminar) alTerminar(e);
+       } else if (e.fase === "error") {
+-        avisar(e.mensaje, true, 12000);
++        Barra.mostrar({ titulo: e.mensaje, pct: 100, estado: "error" });
++        Barra.cerrar(12000);
+         Comandos.eco(e.mensaje, "mal");
+         if (tambienAlFallar && alTerminar) alTerminar(e);
+       }
+@@ -84,13 +145,16 @@
+     catch (err) { avisar(err.message, true, 8000); return; }
+     if (e.abrir) { window.open(e.abrir, "_blank"); return; }
+     if (e.fase === "listo") { instalarBajada(e); return; }
+-    avisar(F("Bajando draw101 {0}…", ult.version), false, 0);
++    Barra.mostrar({ titulo: F("Bajando draw101 {0}…", ult.version), pct: 0, total: ult.bytes || 0 });
+     vigilar(async (fin) => {
+       if (fin.fase !== "error" || !ult.url) return;
+       // El motor no pudo bajar: se intenta con el motor de red de Chromium.
+       Comandos.eco(Tr("El motor no pudo bajar el instalador; se intenta con el navegador…"));
+       try { instalarBajada(await bajarPorChromium(ult)); }
+-      catch (err) { avisar(F("Tampoco se pudo bajar con el navegador: {0}", err.message), true, 12000); }
++      catch (err) {
++        Barra.mostrar({ titulo: F("Tampoco se pudo bajar con el navegador: {0}", err.message), pct: 100, estado: "error" });
++        Barra.cerrar(12000);
++      }
+     }, true);
+   }
+ 
+@@ -117,16 +181,21 @@
+   }
+ 
+   async function bajarPorChromium(ult) {
+-    avisar(F("Bajando draw101 {0}…", ult.version), false, 0);
++    Barra.mostrar({ titulo: F("Bajando draw101 {0}…", ult.version), pct: 0, total: ult.bytes || 0 });
+     // Con Electron, baja el proceso principal (sin CORS, certificados de
+     // Windows): el fetch de la página fallaba con «Failed to fetch» porque el
+     // sitio de archivos de GitHub no permite CORS (Mike, 15-sep-2026).
+     if (enElectron() && window.t101.bajar) {
+       const ruta = await window.t101.bajar(ult.url, ult.archivo || "", (a) => {
+-        avisar(F("Bajando draw101 {0}… {1} de {2} MB", ult.version, Math.round(a.ya / 1e6), Math.round((a.total || ult.bytes || 0) / 1e6)), false, 0);
++        const total = a.total || ult.bytes || 0;
++        Barra.mostrar({ titulo: F("Bajando draw101 {0}…", ult.version),
++                        pct: total ? (a.ya * 100 / total) : null, ya: a.ya, total });
+       });
+-      avisar(Tr("Comprobando que lo bajado esté íntegro…"), false, 0);
+-      return await post("/api/actualizacion/recibido", { nombre: ult.archivo || "", ruta });
++      Barra.mostrar({ titulo: Tr("Comprobando que lo bajado esté íntegro…"), pct: 100, ya: ult.bytes || 0, total: ult.bytes || 0 });
++      const e = await post("/api/actualizacion/recibido", { nombre: ult.archivo || "", ruta });
++      Barra.mostrar({ titulo: F("draw101 {0} bajado y comprobado.", ult.version), pct: 100, estado: "listo" });
++      Barra.cerrar(4000);
++      return e;
+     }
+     const resp = await fetch(ult.url, { cache: "no-store" });
+     if (!resp.ok || !resp.body) throw new Error(`HTTP ${resp.status}`);
+@@ -137,13 +206,15 @@
+       const { done, value } = await lector.read();
+       if (done) break;
+       trozos.push(value); ya += value.length;
+-      if (Date.now() - ultimoAviso > 300) {
++      if (Date.now() - ultimoAviso > 200) {
+         ultimoAviso = Date.now();
+-        avisar(F("Bajando draw101 {0}… {1} de {2} MB", ult.version, Math.round(ya / 1e6), Math.round((ult.bytes || 0) / 1e6)), false, 0);
++        const total = ult.bytes || 0;
++        Barra.mostrar({ titulo: F("Bajando draw101 {0}…", ult.version),
++                        pct: total ? (ya * 100 / total) : null, ya, total });
+       }
+     }
+     const cuerpo = new Blob(trozos);
+-    avisar(Tr("Comprobando que lo bajado esté íntegro…"), false, 0);
++    Barra.mostrar({ titulo: Tr("Comprobando que lo bajado esté íntegro…"), pct: 100, ya, total: ult.bytes || 0 });
+     const res = await fetch("/api/actualizacion/recibir", { method: "POST", headers: { "X-Nombre": ult.archivo || "" }, body: cuerpo });
+     const e = await res.json().catch(() => ({}));
+     if (!res.ok) throw new Error(e.detail || `HTTP ${res.status}`);
+@@ -252,7 +323,7 @@
+     ];
+   }
+ 
+-  return { revisar, vigilar, letrero, programar };
++  return { revisar, vigilar, letrero, programar, Barra };
+ })();
+ 
+ /* --- Avisos de Taller 101 ----------------------------------------------- */
+--- a/ui/styles.css
++++ b/ui/styles.css
+@@ -779,6 +779,41 @@
+ select.campo-hoja{position:absolute;z-index:6;box-sizing:border-box;padding:2px 6px;border:1.5px solid var(--acc2);
+   border-radius:3px;background:#fff;color:#1A1F27;font:inherit;outline:none;box-shadow:0 2px 10px rgba(0,0,0,.18)}
+ 
++/* Barra de progreso de la descarga (Actualizar.Barra)  ·  0.20.12.
++ * Arriba, centrada, con la misma pinta del letrero de versión nueva. La barra
++ * tiene un brillo que la recorre mientras baja; al terminar se pone verde, y
++ * si falla, roja. Con «indet» (no se sabe el total) el relleno corre solo. */
++#barra-descarga{position:fixed;left:50%;top:14px;transform:translateX(-50%) translateY(-8px);
++  z-index:57;width:min(420px,86%);padding:12px 16px 11px;opacity:0;pointer-events:none;
++  background:var(--panel);border:1px solid var(--linea);border-left:3px solid var(--acc2);
++  border-radius:var(--r);box-shadow:0 8px 26px var(--sombra);
++  transition:opacity .18s ease,transform .18s ease}
++#barra-descarga.si{opacity:1;transform:translateX(-50%) translateY(0)}
++#barra-descarga .tit{font-size:12.5px;color:var(--txt);margin-bottom:8px}
++#barra-descarga .riel{height:6px;border-radius:999px;background:var(--panel3);
++  border:1px solid var(--linea2);overflow:hidden}
++#barra-descarga .relleno{height:100%;width:0;border-radius:999px;
++  background:linear-gradient(90deg,var(--acc),var(--acc2));
++  transition:width .25s ease;position:relative}
++#barra-descarga .relleno::after{content:"";position:absolute;inset:0;
++  background:linear-gradient(90deg,transparent,rgba(255,255,255,.45),transparent);
++  transform:translateX(-100%);animation:barra-brillo 1.4s ease-in-out infinite}
++#barra-descarga.indet .relleno{width:34%;animation:barra-corre 1.2s ease-in-out infinite}
++#barra-descarga.indet .relleno::after{animation:none}
++#barra-descarga .pie{display:flex;justify-content:space-between;margin-top:7px;
++  font-size:11px;color:var(--txt3);font-variant-numeric:tabular-nums}
++#barra-descarga.fin{border-left-color:var(--ok)}
++#barra-descarga.fin .relleno{background:var(--ok)}
++#barra-descarga.fin .relleno::after{animation:none}
++#barra-descarga.mal{border-left-color:var(--peligro)}
++#barra-descarga.mal .relleno{background:var(--peligro)}
++#barra-descarga.mal .relleno::after{animation:none}
++@keyframes barra-brillo{0%{transform:translateX(-100%)}60%,100%{transform:translateX(220%)}}
++@keyframes barra-corre{0%{margin-left:-34%}100%{margin-left:100%}}
++@media (prefers-reduced-motion: reduce){
++  #barra-descarga .relleno::after,#barra-descarga.indet .relleno{animation:none}
++}
++
+ /* Sugeridor de comandos (ui/sugeridor.js): la lista sale ARRIBA de la consola */
+ #sugerencias{position:fixed;z-index:58;background:var(--panel);color:var(--txt);
+   border:1px solid var(--linea3);border-radius:var(--r);overflow:hidden;
