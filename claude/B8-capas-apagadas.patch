@@ -1,0 +1,54 @@
+--- a/core/dxf_lector.py
++++ b/core/dxf_lector.py
+@@ -137,7 +137,7 @@
+         return "#FFFFFF"
+ 
+ 
+-def _leer_capas(doc_dxf, doc: Documento) -> None:
++def _leer_capas(doc_dxf, doc: Documento, informe: "Informe | None" = None) -> None:
+     doc.capas = {}
+     for capa_dxf in doc_dxf.layers:
+         nombre = capa_dxf.dxf.name
+@@ -160,6 +160,33 @@
+         doc.capas[nombre] = capa
+     if "0" not in doc.capas:
+         doc.capas["0"] = Capa("0")
++    _capas_todas_apagadas(doc, informe)
++
++
++def _capas_todas_apagadas(doc: Documento, informe: "Informe | None") -> None:
++    """Un plano con TODAS las capas apagadas no existe: nadie dibuja algo para
++    no verlo. Pero libredwg —el motor de DWG que va dentro— escribe el color de
++    cada capa en negativo, y en DXF el color negativo significa «apagada»: el
++    plano de Mike (24 MB, 15 972 entidades) abría en blanco, con 54 entidades
++    visibles de 15 972 (16-sep-2026). Cuando la proporción es absurda se
++    encienden todas y se anota en el informe, que es lo único honesto: el
++    dibujo se ve, y quien quiera apagar capas las apaga.
++
++    No se toca un plano donde apagar capas sea una decisión de verdad: hace
++    falta que estén apagadas **casi todas** (≥ 90 %) y que haya varias.
++    """
++    if len(doc.capas) < 5:
++        return
++    apagadas = [c for c in doc.capas.values() if not c.visible]
++    if len(apagadas) < 0.9 * len(doc.capas):
++        return
++    for c in apagadas:
++        c.visible = True
++    if informe is not None:
++        informe.avisos.append(
++            f"El archivo traía {len(apagadas)} de {len(doc.capas)} capas apagadas "
++            "—cosa que suele ser un error del convertidor de DWG, no del plano—: "
++            "se encendieron todas para que el dibujo se vea.")
+ 
+ 
+ # --- Propiedades comunes ---------------------------------------------------
+@@ -756,7 +783,7 @@
+         # splines y objetos de otros programas salen intactos. Se guarda una
+         # copia en disco, no el texto en memoria: ver `Documento.origen_dxf`.
+         doc.origen_dxf_ruta = _guardar_origen(ruta)
+-        _leer_capas(doc_dxf, doc)
++        _leer_capas(doc_dxf, doc, informe)
+ 
+         for est in doc_dxf.styles:
+             doc.estilos_texto[est.dxf.name] = {
