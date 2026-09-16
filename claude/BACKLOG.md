@@ -8,10 +8,6 @@ parche y sus pruebas, **sin subir `core/version.py` ni `package.json`** y sin
 disparar publicación. Cuando Mike diga, se juntan en una versión, se corre la
 suite completa y se publica.
 
-Esta rama parte de `claude/0.20.13` (la última disparada). Los parches de
-`claude/*.patch` de versiones anteriores siguen ahí y `APLICAR.txt` los lista
-en orden; los del backlog se añaden al final con nombre `Bn-<tema>.patch`.
-
 ## Pedidos y estado
 
 | # | Pedido | Estado |
@@ -19,23 +15,21 @@ en orden; los del backlog se añaden al final con nombre `Bn-<tema>.patch`.
 | B1 | Pantalla del instalador con diseño | pendiente |
 | B2 | Asociar DXF y DWG a draw101 | pendiente |
 | B3 | Flechita visible para desplegar la consola | pendiente |
-| B4 | Paleta de colores y selector RGB (capa y entidad) | pendiente |
+| B4 | Paleta de colores y selector RGB (capa y entidad) | **hecho** (`B10-paleta-color.patch`, `ui/color.js`, `pruebas/t030`) |
 | B5 | Previa («fantasma») en TODAS las herramientas | pendiente, por tandas |
-| B6 | «Guardar como…» con DXF y DWG | **hecho** (`B6-guardar-como.patch`, `pruebas/t027`) |
-| B7 | Pestañas siempre visibles, aunque haya un solo dibujo | **hecho** (`B7-pestanas-siempre.patch`, `pruebas/t028`) |
-| B8 | DWG que abre en blanco: capas apagadas por el convertidor | **hecho** (`B8-capas-apagadas.patch`, `pruebas/t029`) |
+| B6 | «Guardar como…» con DXF y DWG | publicado en 0.20.14 |
+| B7 | Pestañas siempre visibles | publicado en 0.20.14 |
+| B8 | DWG que abre en blanco (capas apagadas) | publicado en 0.20.14 |
+| B9 | Planos grandes: 50 → 30 MB al lienzo | publicado en 0.20.14 |
 
-## Pendiente de medir (sale del mismo caso de B8)
+## Lo que sigue en rendimiento (medido, no hecho)
 
-El DWG de Mike (24 MB) tarda demasiado aunque ya se vea: el convertidor escupe
-un DXF de **248 MB** y el PERF de Mike marcó `/api/abrir` 55 s y `/api/trazos`
-53 s. Medido aquí, sin GPU: convertir 31 s, leer el DXF 18 s, armar los 218 830
-trazos 3.3 s, y el JSON de trazos pesa **54 MB**. Hay que atacarlo aparte
-(posibles vías: pedir el modelo por partes, teselar menos de lejos, no mandar
-los trazos de bloques repetidos). No se toca en este backlog sin decirlo.
-
-El detalle de cada pedido está en Drive:
-`suite101/t101d/draw101-backlog-abierto-2026-09-16`.
+En el plano de Mike, **6 294 entidades generan 209 153 trazos** sueltos (una
+sola llega a 24 043): son rayados y bloques explotados en segmentos. Unirlos por
+entidad, o mandar cada bloque una vez y luego sólo sus inserciones, es el
+siguiente salto de verdad; toca el pintor y el índice, así que va aparte.
+Medido también: armar una hoja cuesta 0.6 s con la caché caliente y 4.5 s la
+primera (ahí se construyen los trazos del modelo entero).
 
 ## Orden de aplicación
 

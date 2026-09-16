@@ -1,0 +1,127 @@
+--- a/ui/app.js
++++ b/ui/app.js
+@@ -91,7 +91,13 @@
+     document.removeEventListener("mousedown", fuera, true);
+     document.removeEventListener("keydown", tecla, true);
+   }
+-  function fuera(e) { const caja = $("#props"); if (caja && !caja.contains(e.target)) cerrar(); }
++  // La paleta de color vive fuera de esta caja (va en el body, para poder
++  // salirse del panel), así que picar un color no cuenta como «picar fuera»:
++  // sin esta excepción, elegir un color cerraba las propiedades de golpe.
++  function fuera(e) {
++    const caja = $("#props");
++    if (caja && !caja.contains(e.target) && !e.target.closest(".paleta")) cerrar();
++  }
+   function tecla(e) { if (e.key === "Escape") { e.preventDefault(); e.stopPropagation(); cerrar(); } }
+   return { abrir, cerrar, get abierto() { return abierto; } };
+ })();
+@@ -111,7 +117,7 @@
+   if (tit) tit.textContent = `${Tr("Capa")} ${c.nombre}`;
+   $("#p-nombre").value = c.nombre;
+   $("#p-nombre").disabled = c.nombre === "0";
+-  $("#p-color").value = c.color.length === 7 ? c.color : "#ffffff";
++  $("#p-color").style.background = c.color.length === 7 ? c.color : "#FFFFFF";
+ 
+   const g = $("#p-grosor");
+   g.innerHTML = "";
+@@ -525,7 +531,16 @@
+ };
+ 
+ $("#p-nombre").onchange = (e) => cambiarCapa(capaSel().nombre, { nombre: e.target.value });
+-$("#p-color").oninput = (e) => cambiarCapa(capaSel().nombre, { color: e.target.value.toUpperCase() });
++/* El color de la capa: la muestra abre la paleta (ui/color.js), con el
++ * selector RGB dentro. Mike, 16-sep-2026. */
++$("#p-color").onclick = (e) => {
++  e.preventDefault();
++  const c = capaSel();
++  if (!c) return;
++  Color.abrir(e.currentTarget, c.color, {
++    alElegir: (v) => { if (v) { $("#p-color").style.background = v; cambiarCapa(c.nombre, { color: v }); } },
++  });
++};
+ $("#p-grosor").onchange = (e) => cambiarCapa(capaSel().nombre, { grosor: parseInt(e.target.value, 10) });
+ $("#p-tl").onchange = (e) => cambiarCapa(capaSel().nombre, { tipo_linea: e.target.value });
+ $("#p-imprime").onchange = (e) => cambiarCapa(capaSel().nombre, { imprime: e.target.checked });
+@@ -1050,19 +1065,18 @@
+   return s;
+ }
+ 
++/* El color de una entidad: un botón que enseña el color y abre la paleta (ver
++ * ui/color.js). Antes era una lista con los códigos de los colores que ya
++ * usaban las capas —«#808080»—, que es lo que Mike pidió cambiar el
++ * 16-sep-2026. El control sigue teniendo `.value`, que es lo que lee
++ * `agregarFila`. */
+ function selectorColor(valor) {
+-  const s = document.createElement("select");
+-  const opciones = [["", "Por capa"], ...estado.resumen.capas.map((c) => [c.color, c.color])];
+-  const vistos = new Set();
+-  for (const [v, t] of opciones) {
+-    if (vistos.has(v)) continue;
+-    vistos.add(v);
+-    const o = document.createElement("option");
+-    o.value = v; o.textContent = t;
+-    s.appendChild(o);
+-  }
+-  s.value = valor || "";
+-  return s;
++  const b = Color.boton(valor, { porCapa: true, alElegir: () => b.dispatchEvent(new Event("change")) });
++  Object.defineProperty(b, "value", {
++    get() { return this.valor || ""; },
++    set(v) { this.pintar(Color.hex(v)); },
++  });
++  return b;
+ }
+ 
+ function selectorTipoLinea(valor) {
+--- a/ui/index.html
++++ b/ui/index.html
+@@ -277,7 +277,7 @@
+       </div>
+       <div class="fila">
+         <label for="p-color">Color</label>
+-        <input id="p-color" type="color">
++        <button id="p-color" class="boton-color" type="button" title="Color de la capa"></button>
+       </div>
+       <div class="fila">
+         <label for="p-grosor">Grosor</label>
+@@ -355,6 +355,7 @@
+ <script src="barra.js"></script>
+ <script src="ajustes.js"></script>
+ <script src="actualizar.js"></script>
++<script src="color.js"></script>
+ <script src="app.js"></script>
+ <script src="sugeridor.js"></script>
+ <script src="marco.js"></script>
+--- a/ui/styles.css
++++ b/ui/styles.css
+@@ -814,6 +814,30 @@
+   #barra-descarga .relleno::after,#barra-descarga.indet .relleno{animation:none}
+ }
+ 
++/* Elegir color: el botón de muestra y la paleta (ui/color.js) */
++.boton-color{width:100%;min-width:52px;height:22px;padding:0;border:1px solid var(--linea3);
++  border-radius:4px;cursor:pointer;background:transparent;font-size:10.5px;color:var(--txt3)}
++.boton-color.porcapa{background:repeating-linear-gradient(45deg,var(--panel2),var(--panel2) 4px,var(--panel3) 4px,var(--panel3) 8px)}
++#p-color{height:24px}
++.paleta{position:fixed;z-index:62;background:var(--panel);border:1px solid var(--linea3);
++  border-radius:var(--r);box-shadow:0 10px 26px var(--sombra);padding:8px;width:216px}
++.paleta .tit{font-size:9.5px;letter-spacing:.06em;text-transform:uppercase;
++  color:var(--txt3);margin:6px 2px 4px}
++.paleta .tit:first-child{margin-top:0}
++.paleta .rej{display:grid;grid-template-columns:repeat(8,1fr);gap:4px}
++.paleta .muestra{width:100%;aspect-ratio:1;padding:0;border:1px solid var(--linea3);
++  border-radius:3px;cursor:pointer}
++.paleta .muestra:hover{outline:2px solid var(--acc2);outline-offset:1px}
++.paleta .muestra.on{outline:2px solid var(--acc);outline-offset:1px}
++.paleta .porcapa{width:100%;margin-bottom:6px;padding:4px;font-size:11px;
++  border:1px solid var(--linea3);border-radius:4px;background:var(--panel2);cursor:pointer}
++.paleta .porcapa.on{border-color:var(--acc2);color:var(--acc2)}
++.paleta .pie{display:flex;gap:6px;margin-top:8px;padding-top:8px;border-top:1px solid var(--linea2)}
++.paleta .pie input[type=color]{width:34px;height:26px;padding:0;border:1px solid var(--linea3);
++  border-radius:4px;background:transparent;cursor:pointer}
++.paleta .codigo{flex:1;min-width:0;height:26px;padding:0 6px;font-size:11px;
++  border:1px solid var(--linea3);border-radius:4px;background:var(--panel2);color:var(--txt)}
++
+ /* Sugeridor de comandos (ui/sugeridor.js): la lista sale ARRIBA de la consola.
+  * Compacta a propósito (Mike, 16-sep-2026: «está muy grande; mucho espacio
+  * libre a la derecha»): el ancho lo pone el contenido, con tope de 330 px;
