@@ -1,0 +1,99 @@
+--- a/core/version.py
++++ b/core/version.py
+@@ -21,14 +21,30 @@
+ 
+ from __future__ import annotations
+ 
+-VERSION = "0.20.10"
+-FECHA = "2026-09-15"
++VERSION = "0.20.11"
++FECHA = "2026-09-16"
+ 
+ # Qué trae cada entrega, en el idioma del taller y no en el del código.
+ # La más nueva arriba. Lo que se lista aquí es lo que el comando VERSION
+ # enseña en la consola.
+ BITACORA: list[dict] = [
+     {
++        "version": "0.20.11",
++        "fecha": "2026-09-16",
++        "cambios": [
++            "Sugeridor de comandos: al teclear en la consola sale la lista de "
++            "los que empiezan así, con sus atajos y para qué sirven. Encabeza lo "
++            "que Enter correría ahora mismo (con «C», CIRCULO, que es su atajo). "
++            "Las flechas eligen cuando hay algo tecleado y siguen siendo el "
++            "historial con la caja vacía; al elegir, el nombre se escribe en la "
++            "caja y Enter lo corre. Busca por nombre y por atajo, en español y "
++            "en inglés: «CIRCLE» encuentra CIRCULO. Nada se completa solo.",
++            "De paso: teclear algo y apretar la flecha ya no borra lo escrito.",
++            "Prueba t025 (sugeridor, 23 comprobaciones). Mismas reglas que en "
++            "shape101, que lo hizo primero.",
++        ],
++    },
++    {
+         "version": "0.20.10",
+         "fecha": "2026-09-15",
+         "cambios": [
+--- a/package.json
++++ b/package.json
+@@ -1,8 +1,8 @@
+ {
+   "name": "draw101",
+   "productName": "draw101",
+-  "version": "0.20.10",
+-  "_versionApp": "0.20.10 — la que enseña la app viene de core/version.py; ésta sólo existe porque electron-builder exige semver",
++  "version": "0.20.11",
++  "_versionApp": "0.20.11 — la que enseña la app viene de core/version.py; ésta sólo existe porque electron-builder exige semver",
+   "_notaEmpaque": "asar apagado a propósito: main.js busca server.py junto a electron/, y el motor de Python no puede vivir dentro de un asar. Y electron-builder saca cualquier node_modules de los globs de `files`, así que los dos motores de DWG (dwgjs/node_modules) se copian por extraResources o la app se queda sin leer DWG.",
+   "description": "CAD 2D de Taller 101 — leer, trazar, acotar e imprimir planos",
+   "main": "electron/main.js",
+@@ -19,7 +19,7 @@
+   "build": {
+     "appId": "mx.taller101.dibujador",
+     "productName": "draw101",
+-    "artifactName": "draw101-0.20.10-setup.${ext}",
++    "artifactName": "draw101-0.20.11-setup.${ext}",
+     "directories": {
+       "output": "dist",
+       "buildResources": "build"
+--- a/ui/comandos.js
++++ b/ui/comandos.js
+@@ -136,6 +136,10 @@
+       }
+       if (e.key === "ArrowUp" || e.key === "ArrowDown") {
+         e.preventDefault();
++        // Con algo tecleado y sugerencias en pantalla, las flechas eligen entre
++        // ellas; con la caja vacía siguen siendo el historial, como siempre.
++        if (typeof Sugeridor !== "undefined" &&
++            Sugeridor.mover(e.key === "ArrowUp" ? -1 : 1)) return;
+         if (!historial.length) return;
+         iHist = e.key === "ArrowUp"
+           ? Math.min(historial.length - 1, iHist + 1)
+--- a/ui/index.html
++++ b/ui/index.html
+@@ -356,6 +356,7 @@
+ <script src="ajustes.js"></script>
+ <script src="actualizar.js"></script>
+ <script src="app.js"></script>
++<script src="sugeridor.js"></script>
+ <script src="marco.js"></script>
+ </body>
+ </html>
+--- a/ui/styles.css
++++ b/ui/styles.css
+@@ -779,6 +779,16 @@
+ select.campo-hoja{position:absolute;z-index:6;box-sizing:border-box;padding:2px 6px;border:1.5px solid var(--acc2);
+   border-radius:3px;background:#fff;color:#1A1F27;font:inherit;outline:none;box-shadow:0 2px 10px rgba(0,0,0,.18)}
+ 
++/* Sugeridor de comandos (ui/sugeridor.js): la lista sale ARRIBA de la consola */
++#sugerencias{position:fixed;z-index:58;background:var(--panel);color:var(--txt);
++  border:1px solid var(--linea3);border-radius:var(--r);overflow:hidden;
++  box-shadow:0 8px 24px var(--sombra);font-size:12.5px}
++#sugerencias .sug{display:flex;gap:10px;align-items:baseline;padding:5px 10px;cursor:pointer}
++#sugerencias .sug b{min-width:7.5em;font-weight:600}
++#sugerencias .sug span{color:var(--txt3);font-size:11.5px;overflow:hidden;
++  white-space:nowrap;text-overflow:ellipsis}
++#sugerencias .sug.on,#sugerencias .sug:hover{background:var(--panel2)}
++
+ /* Letrero de versión nueva (Actualizar.letrero): arriba del lienzo, con botones */
+ /* Fijo y por encima de la pantalla de inicio (z 50) pero debajo de los cuadros
+  * de diálogo (z 60). Antes vivía dentro del lienzo con z 7: al arrancar, con
