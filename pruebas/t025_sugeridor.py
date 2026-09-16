@@ -9,7 +9,9 @@ con C». Las reglas vienen del chat de shape101, que lo hizo primero:
      sugerencias, eligen entre ellas.
   3. Al elegir, el nombre se escribe en la caja: Enter corre lo escrito.
   4. Se busca por nombre y por atajo, en español y en inglés.
-  5. Ocho como mucho, arriba de la caja.
+  5. Ocho como mucho, arriba de la caja, y **compacta**: Mike (16-sep, con
+     captura) la vio demasiado grande, así que se mide el ancho, el alto de
+     fila y que la ayuda venga recortada.
 
 Se prueba en el navegador con los comandos de verdad del programa.
 """
@@ -68,13 +70,18 @@ def _pantalla(r: comun.Reporte, pagina) -> None:
         const caja = c.getBoundingClientRect(), r = l.getBoundingClientRect();
         return {visible: getComputedStyle(l).display !== 'none', filas: l.children.length,
                 arriba: r.bottom <= caja.top + 1, dentro: r.top >= 0,
+                ancho: r.width, altoFila: l.children[0].getBoundingClientRect().height,
+                ayuda: l.children[0].querySelector('span').textContent,
                 primera: l.children[0] && l.children[0].querySelector('b').textContent};
     }""")
     r.cierto(m["visible"], "la lista se ve al teclear")
     r.cierto(m["filas"] >= 3, f"con varias filas ({m['filas']})")
     r.cierto(m["arriba"] and m["dentro"], "arriba de la consola y dentro de la ventana")
+    r.cierto(m["ancho"] <= 420, f"y compacta: no más de 420 px de ancho ({m['ancho']:.0f})")
+    r.cierto(m["altoFila"] <= 22, f"con renglones bajitos ({m['altoFila']:.0f} px)")
     # En inglés la fila enseña el nombre en inglés (el programa arranca en en).
     r.cierto(m["primera"] in ("CIRCULO", "CIRCLE"), f"y la primera fila es el círculo ({m['primera']})")
+    r.cierto(len(m["ayuda"]) <= 47, f"la ayuda va recortada a una idea ({len(m['ayuda'])} letras: «{m['ayuda']}»)")
 
 
 def _flechas(r: comun.Reporte, pagina) -> None:
