@@ -60,4 +60,3 @@ def correr(r: comun.Reporte) -> None:
         r.cierto(len(m["texto"]) <= 70, f"y mide poco ({len(m['texto'])} caracteres)")
         r.igual(m["tooltip"], RUTA, "la ruta completa queda en el tooltip")
         r.igual(pagina.errores, [], "sin errores de JavaScript")
-"""
