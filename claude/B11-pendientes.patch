@@ -1,0 +1,288 @@
+--- a/ui/styles.css
++++ b/ui/styles.css
+@@ -279,13 +279,19 @@
+   color:var(--txt2);line-height:18px;
+ }
+ #consola.abierta #cmd-historial{height:184px}
++/* El botón de desplegar la consola. Existía desde 0.18.0 pero medía 18 px en
++ * gris al 55 %: Mike no lo vio en tres versiones y pidió «una flechita o algo
++ * para desplegarla» (16-sep-2026). Ahora se ve: fondo propio, flecha y la
++ * palabra «más», y al abrirse dice «menos». */
+ #cmd-mas{
+-  position:absolute;right:6px;top:4px;width:18px;height:18px;padding:0;
+-  border:none;background:transparent;color:var(--txt3);font-size:11px;line-height:18px;
+-  border-radius:4px;cursor:pointer;opacity:.55;
++  position:absolute;right:6px;top:3px;height:20px;padding:0 8px;
++  border:1px solid var(--linea3);background:var(--panel2);color:var(--txt2);
++  font-size:10.5px;line-height:18px;border-radius:10px;cursor:pointer;
++  display:flex;align-items:center;gap:4px;
+ }
+-#cmd-mas:hover{opacity:1;background:var(--hover);color:var(--txt2)}
+-#consola.abierta #cmd-mas{transform:rotate(180deg)}
++#cmd-mas:hover{background:var(--hover);color:var(--txt);border-color:var(--acc2)}
++#cmd-mas .flecha{font-size:11px;line-height:1;transition:transform .15s ease}
++#consola.abierta #cmd-mas .flecha{transform:rotate(180deg)}
+ #cmd-historial .eco{white-space:pre-wrap}
+ #cmd-historial .eco.malo{color:var(--peligro)}
+ #cmd-historial .eco.bien{color:var(--ok)}
+--- a/ui/index.html
++++ b/ui/index.html
+@@ -303,7 +303,7 @@
+ <!-- Línea de comando · feature 17 -->
+ <div id="consola">
+   <div id="cmd-historial"></div>
+-  <button id="cmd-mas" title="Ver más líneas de la consola (F2)" aria-label="Más líneas">▴</button>
++  <button id="cmd-mas" title="Ver más líneas de la consola (F2)" aria-label="Más líneas"><span class="flecha">▴</span><span class="que">más</span></button>
+   <div class="linea">
+     <span id="cmd-etiqueta">Comando:</span>
+     <input id="cmd" type="text" autocomplete="off" spellcheck="false"
+--- a/ui/comandos.js
++++ b/ui/comandos.js
+@@ -54,7 +54,11 @@
+     if (abierta === undefined) abierta = !con.classList.contains("abierta");
+     con.classList.toggle("abierta", abierta);
+     const b = $("#cmd-mas");
+-    if (b) b.title = abierta ? "Ver menos líneas (F2)" : "Ver más líneas de la consola (F2)";
++    if (b) {
++      b.title = abierta ? Tr("Ver menos líneas (F2)") : Tr("Ver más líneas de la consola (F2)");
++      const que = b.querySelector(".que");
++      if (que) que.textContent = abierta ? Tr("menos") : Tr("más");
++    }
+     try { localStorage.setItem("consola_abierta", abierta ? "1" : "0"); } catch (_) {}
+     const caja = $("#cmd-historial");
+     caja.scrollTop = caja.scrollHeight;
+--- a/ui/idioma-en.js
++++ b/ui/idioma-en.js
+@@ -36,6 +36,9 @@
+   "Un mueble .t101x ya despiezado": "A .t101x cabinet, already cut-listed",
+   "Recientes": "Recent", "limpiar": "clear",
+   "Los dibujos nuevos nacen en centímetros. El modelo se dibuja a 1:1.": "New drawings start in centimetres. The model is drawn at 1:1.",
++  "más": "more", "menos": "less",
++  "Ver más líneas de la consola (F2)": "Show more console lines (F2)",
++  "Ver menos líneas (F2)": "Show fewer lines (F2)",
+   "Dibujo nuevo.": "New drawing.",
+   "Todavía no has abierto ningún plano.": "You haven't opened any drawing yet.",
+   "versión {0}": "version {0}",
+--- a/ui/editar.js
++++ b/ui/editar.js
+@@ -111,6 +111,51 @@
+ }
+ 
+ /** El hule de siempre —la liga del punto base al cursor— más el fantasma. */
++/* De qué lado del trazo cayó el punto `p`. Lo usan el DESFASE y su previa: si
++ * cada uno lo calculara por su cuenta, la copia saltaría de lado al hacer clic
++ * (Mike, 16-sep-2026). */
++function ladoDe(ent, p) {
++  if (ent.tipo === "linea") {
++    const dx = ent.p2[0] - ent.p1[0], dy = ent.p2[1] - ent.p1[1];
++    return Math.sign((p[0] - ent.p1[0]) * -dy + (p[1] - ent.p1[1]) * dx) || 1;
++  }
++  if (ent.tipo === "circulo" || ent.tipo === "arco") {
++    return Math.hypot(p[0] - ent.centro[0], p[1] - ent.centro[1]) > ent.radio ? 1 : -1;
++  }
++  if (ent.tipo === "polilinea") {
++    const prims = estado.geometria.filter((pr) => pr.id === ent.id && pr.tipo === "seg");
++    let mejor = null;
++    for (const pr of prims) {
++      const q = Osnap.sobre(pr, p);
++      const dd = Math.hypot(q[0] - p[0], q[1] - p[1]);
++      if (!mejor || dd < mejor.d) mejor = { pr, d: dd };
++    }
++    if (mejor) {
++      const dx = mejor.pr.b[0] - mejor.pr.a[0], dy = mejor.pr.b[1] - mejor.pr.a[1];
++      return Math.sign((p[0] - mejor.pr.a[0]) * -dy + (p[1] - mejor.pr.a[1]) * dx) || 1;
++    }
++  }
++  return 1;
++}
++
++/* Una entidad que todavía no existe, pintada como fantasma. Es lo que deja ver
++ * cómo va a quedar un DESFASE o un ARREGLO antes de soltar el clic. */
++function fantasmaDeEntidad(ent) {
++  const puntos = (p) => [p[0], p[1]];
++  if (ent.tipo === "linea") return [{ clase: "linea", puntos: [puntos(ent.p1), puntos(ent.p2)] }];
++  if (ent.tipo === "polilinea") {
++    const pts = (ent.puntos || []).map(puntos);
++    if (ent.cerrada && pts.length > 2) pts.push(pts[0]);
++    return [{ clase: "linea", puntos: pts }];
++  }
++  if (ent.tipo === "circulo") return [{ clase: "circulo", c: puntos(ent.centro), r: ent.radio }];
++  if (ent.tipo === "arco") {
++    return [{ clase: "arco", c: puntos(ent.centro), r: ent.radio,
++              a0: ent.ang_ini, a1: ent.ang_fin }];
++  }
++  return [];
++}
++
+ function conFantasma(ids, base, hacerT) {
+   return (q) => ({
+     partes: [{ tipo: "linea", a: base, b: q }],
+@@ -509,30 +554,19 @@
+         queja: "El desfase funciona con líneas, polilíneas, círculos y arcos.",
+       });
+       const ent = await api(`/api/entidad/${id}`);
+-      const p = await Entrada.pedirPunto({ mensaje: "¿De qué lado?" });
+-
+-      // De qué lado quedó el clic respecto de la entidad
+-      let lado = 1;
+-      if (ent.tipo === "linea") {
+-        const dx = ent.p2[0] - ent.p1[0], dy = ent.p2[1] - ent.p1[1];
+-        lado = Math.sign((p[0] - ent.p1[0]) * -dy + (p[1] - ent.p1[1]) * dx) || 1;
+-      } else if (ent.tipo === "circulo" || ent.tipo === "arco") {
+-        lado = Math.hypot(p[0] - ent.centro[0], p[1] - ent.centro[1]) > ent.radio ? 1 : -1;
+-      } else if (ent.tipo === "polilinea") {
+-        const prims = estado.geometria.filter((pr) => pr.id === id && pr.tipo === "seg");
+-        let mejor = null;
+-        for (const pr of prims) {
+-          const q = Osnap.sobre(pr, p);
+-          const dd = Math.hypot(q[0] - p[0], q[1] - p[1]);
+-          if (!mejor || dd < mejor.d) mejor = { pr, d: dd };
+-        }
+-        if (mejor) {
+-          const dx = mejor.pr.b[0] - mejor.pr.a[0], dy = mejor.pr.b[1] - mejor.pr.a[1];
+-          lado = Math.sign((p[0] - mejor.pr.a[0]) * -dy + (p[1] - mejor.pr.a[1]) * dx) || 1;
+-        }
+-      }
++      /* Previa del desfase (Mike, 16-sep-2026: «en TODAS las herramientas
++       * necesito que se vaya dibujando el preview»). Mientras se elige el lado
++       * se ve la copia donde va a quedar, calculada con la misma función que
++       * la hace de verdad: si la previa miente, es peor que no tenerla. */
++      const p = await Entrada.pedirPunto({
++        mensaje: "¿De qué lado?",
++        hule: (q) => {
++          const nuevo = desfasar(ent, d, ladoDe(ent, q));
++          return nuevo ? { fantasma: fantasmaDeEntidad(nuevo) } : null;
++        },
++      });
+ 
+-      const nuevo = desfasar(ent, d, lado);
++      const nuevo = desfasar(ent, d, ladoDe(ent, p));
+       if (!nuevo) return Comandos.eco("El desfase dejaría la figura sin tamaño.", "malo");
+       await aplicarOperacion({ accion: "Desfase", agregar: [nuevo] });
+       Seleccion.limpiar();
+@@ -927,7 +961,21 @@
+       mensaje: "¿Rectangular o Polar? R/P", valor: "R" })) || "R").toUpperCase();
+ 
+     if (modo.startsWith("P")) {
+-      const c = await Entrada.pedirPunto({ mensaje: "Centro del arreglo" });
++      /* Previa del arreglo polar (Mike, 16-sep-2026): al elegir el centro se
++       * ven ya las copias donde van a caer, con el número y el ángulo que
++       * están puestos de antemano; así se elige el centro mirando el
++       * resultado, no imaginándolo. */
++      const c = await Entrada.pedirPunto({
++        mensaje: "Centro del arreglo",
++        hule: (q) => {
++          const n0 = 6, paso0 = 360 / n0;
++          const partes = [];
++          for (let i = 1; i < n0; i++) {
++            partes.push(...fantasmaDe(ids, T.rotar(q, paso0 * i)));
++          }
++          return { partes: [], fantasma: partes };
++        },
++      });
+       const n = Math.round(await Entrada.pedirNumero({ mensaje: "¿Cuántas copias en total?", valor: 6, minimo: 2 }));
+       const total = await Entrada.pedirNumero({ mensaje: "Ángulo a cubrir", valor: 360 });
+       const paso = total / (Math.abs(total - 360) < 1e-9 ? n : n - 1);
+--- a/ui/vista.js
++++ b/ui/vista.js
+@@ -1122,6 +1122,18 @@
+       c.restore();
+       continue;
+     }
++    // Círculos y arcos como curvas de verdad, no como polígonos: el fantasma
++    // de un DESFASE de un círculo se veía poligonal (Mike, 16-sep-2026).
++    if (t.clase === "circulo" || t.clase === "arco") {
++      const [cx, cy] = aPX(t.c[0], t.c[1]);
++      const r = Math.abs(t.r) * estado.vista.escala;
++      if (r < 0.5) continue;
++      c.beginPath();
++      if (t.clase === "circulo") c.arc(cx, cy, r, 0, Math.PI * 2);
++      else c.arc(cx, cy, r, -t.a1 * Math.PI / 180, -t.a0 * Math.PI / 180);
++      c.stroke();
++      continue;
++    }
+     const pts = t.puntos || [];
+     if (pts.length < 2) continue;
+     c.beginPath();
+--- a/ui/seleccion.js
++++ b/ui/seleccion.js
+@@ -588,16 +588,45 @@
+     return q;
+   }
+ 
++  /* Cómo va quedando la entidad mientras se jala un grip  ·  Mike
++   * (16-sep-2026): «cuando mueves un endpoint de una línea o entidad, que se
++   * vea cómo se va dibujando según la vas moviendo». Antes sólo había una raya
++   * del grip al cursor: en una polilínea de diez vértices no se veía qué
++   * forma iba a quedar. Ahora se pinta la entidad entera con ese vértice ya
++   * movido, como fantasma. Es geometría del lienzo, no del motor: no cuesta
++   * una llamada por cuadro. */
++  function entidadConGripMovido(id, punto, destino, medio) {
++    const cerca = (a, b) => Math.hypot(a[0] - b[0], a[1] - b[1]) < 1e-6;
++    const dx = destino[0] - punto[0], dy = destino[1] - punto[1];
++    const salida = [];
++    for (const tr of estado.trazos) {
++      if (tr.id !== id || !tr.puntos || tr.puntos.length < 2) continue;
++      const pts = tr.puntos.map((q) => {
++        if (medio) {
++          // El grip del medio corre el tramo entero: sus dos extremos.
++          if (cerca(q, medio.a) || cerca(q, medio.b)) return [q[0] + dx, q[1] + dy];
++          return [q[0], q[1]];
++        }
++        return cerca(q, punto) ? [destino[0], destino[1]] : [q[0], q[1]];
++      });
++      salida.push({ clase: "linea", puntos: pts });
++      if (salida.length > 60) break;         // un bloque enorme no se repinta entero
++    }
++    return salida;
++  }
++
+   function vistaPreviaGrip(p) {
+     const g = gripArrastrado;
++    const fantasma = entidadConGripMovido(g.id, g.punto, p, g.medio);
+     if (g.medio) {
+-      // El tramo entero, corrido tal cual, para ver dónde va a quedar.
+       const dx = p[0] - g.punto[0], dy = p[1] - g.punto[1];
+-      return { partes: [{ tipo: "linea", a: [g.medio.a[0] + dx, g.medio.a[1] + dy], b: [g.medio.b[0] + dx, g.medio.b[1] + dy] },
++      return { fantasma,
++               partes: [{ tipo: "linea", a: [g.medio.a[0] + dx, g.medio.a[1] + dy], b: [g.medio.b[0] + dx, g.medio.b[1] + dy] },
+                         { tipo: "linea", a: g.punto, b: p },
+                         { tipo: "marca", p }] };
+     }
+-    return { partes: [{ tipo: "linea", a: g.punto, b: p },
++    return { fantasma,
++             partes: [{ tipo: "linea", a: g.punto, b: p },
+                       { tipo: "marca", p }] };
+   }
+ 
+--- a/ui/dibujar.js
++++ b/ui/dibujar.js
+@@ -518,7 +518,11 @@
+   nombre: "PUNTO", alias: ["PU"],
+   ayuda: "Marca un punto (sirve de nodo para las referencias)",
+   correr: async () => repetir(async () => {
+-    const p = await Entrada.pedirPunto({ mensaje: "Ubicación del punto" });
++    // Previa: la cruz del punto donde va a caer (Mike, 16-sep-2026).
++    const p = await Entrada.pedirPunto({
++      mensaje: "Ubicación del punto",
++      hule: (q) => ({ partes: [{ tipo: "marca", p: q }] }),
++    });
+     await crearEntidad({ tipo: "punto", p }, "Punto");
+   }),
+ });
+@@ -767,7 +771,14 @@
+   nombre: "TEXTO", alias: ["T", "DT", "MT", "TM", "TEXTOM"],
+   ayuda: "Texto (uno o varios renglones): Enter guarda, Alt+Enter hace renglón nuevo",
+   correr: async () => {
+-    const p = await Entrada.pedirPunto({ mensaje: "Punto de inserción del texto" });
++    // Previa: la caja del texto a la altura que se va a usar, para ver de qué
++    // tamaño va a quedar antes de escribirlo (Mike, 16-sep-2026).
++    const alturaPrevia = Entrada.ultimoValor("altura_texto") || 7.5;
++    const p = await Entrada.pedirPunto({
++      mensaje: "Punto de inserción del texto",
++      hule: (q) => ({ fantasma: [{ clase: "texto", p: q, texto: Tr("Texto"),
++                                   altura: alturaPrevia, rotacion: 0, alineacion: "IZQ" }] }),
++    });
+     const v = await Dialogo.abrir({
+       titulo: "Texto",
+       pista: "Enter guarda · Alt+Enter hace renglón nuevo.",
