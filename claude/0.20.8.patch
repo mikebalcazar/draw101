@@ -1,0 +1,80 @@
+--- a/core/version.py
++++ b/core/version.py
+@@ -21,7 +21,7 @@
+ 
+ from __future__ import annotations
+ 
+-VERSION = "0.20.7"
++VERSION = "0.20.8"
+ FECHA = "2026-09-15"
+ 
+ # Qué trae cada entrega, en el idioma del taller y no en el del código.
+@@ -29,6 +29,17 @@
+ # enseña en la consola.
+ BITACORA: list[dict] = [
+     {
++        "version": "0.20.8",
++        "fecha": "2026-09-15",
++        "cambios": [
++            "El aviso de versión nueva ya se ve al arrancar. La revisión sí "
++            "corría y sí ponía el letrero, pero dentro del lienzo, tapado por la "
++            "pantalla de inicio, que es donde uno está al abrir el programa. "
++            "Ahora el letrero va fijo arriba, por encima del inicio.",
++            "Prueba t024 (letrero sobre la pantalla de inicio, 9 comprobaciones).",
++        ],
++    },
++    {
+         "version": "0.20.7",
+         "fecha": "2026-09-15",
+         "cambios": [
+--- a/package.json
++++ b/package.json
+@@ -1,8 +1,8 @@
+ {
+   "name": "draw101",
+   "productName": "draw101",
+-  "version": "0.20.7",
+-  "_versionApp": "0.20.7 — la que enseña la app viene de core/version.py; ésta sólo existe porque electron-builder exige semver",
++  "version": "0.20.8",
++  "_versionApp": "0.20.8 — la que enseña la app viene de core/version.py; ésta sólo existe porque electron-builder exige semver",
+   "_notaEmpaque": "asar apagado a propósito: main.js busca server.py junto a electron/, y el motor de Python no puede vivir dentro de un asar. Y electron-builder saca cualquier node_modules de los globs de `files`, así que los dos motores de DWG (dwgjs/node_modules) se copian por extraResources o la app se queda sin leer DWG.",
+   "description": "CAD 2D de Taller 101 — leer, trazar, acotar e imprimir planos",
+   "main": "electron/main.js",
+@@ -19,7 +19,7 @@
+   "build": {
+     "appId": "mx.taller101.dibujador",
+     "productName": "draw101",
+-    "artifactName": "draw101-0.20.7-setup.${ext}",
++    "artifactName": "draw101-0.20.8-setup.${ext}",
+     "directories": {
+       "output": "dist",
+       "buildResources": "build"
+--- a/ui/styles.css
++++ b/ui/styles.css
+@@ -780,7 +780,11 @@
+   border-radius:3px;background:#fff;color:#1A1F27;font:inherit;outline:none;box-shadow:0 2px 10px rgba(0,0,0,.18)}
+ 
+ /* Letrero de versión nueva (Actualizar.letrero): arriba del lienzo, con botones */
+-#letrero-version{position:absolute;left:50%;top:14px;transform:translateX(-50%);z-index:7;
++/* Fijo y por encima de la pantalla de inicio (z 50) pero debajo de los cuadros
++ * de diálogo (z 60). Antes vivía dentro del lienzo con z 7: al arrancar, con
++ * la pantalla de inicio abierta, el aviso quedaba tapado y Mike nunca lo veía
++ * (15-sep-2026, tres versiones seguidas). */
++#letrero-version{position:fixed;left:50%;top:14px;transform:translateX(-50%);z-index:56;
+   display:flex;align-items:center;gap:10px;padding:8px 10px 8px 14px;max-width:min(680px,90%);
+   background:var(--panel);border:1px solid var(--linea);border-left:3px solid var(--acc2);
+   border-radius:var(--r);box-shadow:0 6px 20px var(--sombra);font-size:12.5px}
+--- a/ui/actualizar.js
++++ b/ui/actualizar.js
+@@ -213,8 +213,9 @@
+     b2.textContent = Tr("Después");
+     b2.onclick = () => el.remove();
+     el.append(txt, b1, b2);
+-    const caja = document.getElementById("lienzo-caja") || document.body;
+-    caja.appendChild(el);
++    // En el body y no en el lienzo: así se ve también con la pantalla de
++    // inicio abierta, que es donde uno está cuando arranca el programa.
++    document.body.appendChild(el);
+   }
+ 
+   /* La revisión al arrancar: el motor ya consulta el sitio en su hilo desde
