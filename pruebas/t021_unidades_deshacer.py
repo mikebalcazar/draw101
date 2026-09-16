@@ -60,14 +60,17 @@ def correr(r: comun.Reporte) -> None:
     r.igual(doc.unidades, "cm", "otra vez en cm")
     r.punto(doc.entidades[poli].puntos[1][:2], [50, 0], "y la polilínea otra vez en 50", 1e-9)
 
-    # Sin escalar: sólo cambia lo que significan los números; también se deshace.
+    # Lo normal desde 0.20.10 (Mike, 15-sep: «el dibujo nunca cambia de
+    # unidades»): cambiar la unidad NO escala; sólo cambia lo que significan
+    # los números. Y también se deshace.
     doc2 = Documento.nuevo()
     doc2.unidades = "mm"
     with doc2.transaccion("Línea"):
         linea = doc2.agregar(de_dict({"tipo": "linea", "p1": [0, 0], "p2": [600, 0]}))
     with doc2.transaccion("Cambiar unidades"):
-        mod_unidades.cambiar(doc2, "m", False)
-    r.punto(doc2.entidades[linea.id].p2, [600, 0], "sin escalar: los números se quedan")
+        res2 = mod_unidades.cambiar(doc2, "m")            # sin decir «escalar»: por omisión no escala
+    r.cierto(not res2["escalado"] and res2["factor"] == 1.0, "por omisión NO se escala nada")
+    r.punto(doc2.entidades[linea.id].p2, [600, 0], "los números se quedan")
     r.igual(doc2.unidades, "m", "pero el dibujo está en m")
     doc2.deshacer()
     r.igual(doc2.unidades, "mm", "y deshacer lo devuelve a mm")

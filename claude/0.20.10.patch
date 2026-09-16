@@ -1,0 +1,156 @@
+--- a/core/version.py
++++ b/core/version.py
+@@ -21,7 +21,7 @@
+ 
+ from __future__ import annotations
+ 
+-VERSION = "0.20.9"
++VERSION = "0.20.10"
+ FECHA = "2026-09-15"
+ 
+ # Qué trae cada entrega, en el idioma del taller y no en el del código.
+@@ -29,6 +29,20 @@
+ # enseña en la consola.
+ BITACORA: list[dict] = [
+     {
++        "version": "0.20.10",
++        "fecha": "2026-09-15",
++        "cambios": [
++            "UNIDADES ya no escala el dibujo. Cambiar de mm a cm o a m cambia "
++            "sólo lo que significan los números (el dato del archivo, los "
++            "decimales de las cotas y la unidad con que sale el DXF); lo dibujado "
++            "no se toca. Antes la casilla «escalar» venía marcada y un cambio a "
++            "media chamba reescalaba el plano entero. Para escalar de verdad está "
++            "ESCALAR (Mike, 15-sep-2026: «el dibujo nunca cambia de unidades»).",
++            "La pantalla de inicio ya dice la verdad: los dibujos nuevos nacen "
++            "en centímetros (así es desde 0.20.1; el texto decía milímetros).",
++        ],
++    },
++    {
+         "version": "0.20.9",
+         "fecha": "2026-09-15",
+         "cambios": [
+--- a/package.json
++++ b/package.json
+@@ -1,8 +1,8 @@
+ {
+   "name": "draw101",
+   "productName": "draw101",
+-  "version": "0.20.9",
+-  "_versionApp": "0.20.9 — la que enseña la app viene de core/version.py; ésta sólo existe porque electron-builder exige semver",
++  "version": "0.20.10",
++  "_versionApp": "0.20.10 — la que enseña la app viene de core/version.py; ésta sólo existe porque electron-builder exige semver",
+   "_notaEmpaque": "asar apagado a propósito: main.js busca server.py junto a electron/, y el motor de Python no puede vivir dentro de un asar. Y electron-builder saca cualquier node_modules de los globs de `files`, así que los dos motores de DWG (dwgjs/node_modules) se copian por extraResources o la app se queda sin leer DWG.",
+   "description": "CAD 2D de Taller 101 — leer, trazar, acotar e imprimir planos",
+   "main": "electron/main.js",
+@@ -19,7 +19,7 @@
+   "build": {
+     "appId": "mx.taller101.dibujador",
+     "productName": "draw101",
+-    "artifactName": "draw101-0.20.9-setup.${ext}",
++    "artifactName": "draw101-0.20.10-setup.${ext}",
+     "directories": {
+       "output": "dist",
+       "buildResources": "build"
+--- a/core/unidades.py
++++ b/core/unidades.py
+@@ -182,7 +182,7 @@
+             "unidad": NOMBRE.get(insunits, f"código {insunits}")}
+ 
+ 
+-def cambiar(doc, nueva: str, escalar: bool = True) -> dict:
++def cambiar(doc, nueva: str, escalar: bool = False) -> dict:
+     """Cambia la unidad de trabajo del dibujo  ·  Mike, 7-sep-2026.
+ 
+     Con `escalar` (lo normal) el dibujo conserva su tamaño real: la mesa de
+--- a/server.py
++++ b/server.py
+@@ -363,7 +363,7 @@
+ 
+ class _Unidades(BaseModel):
+     unidades: str
+-    escalar: bool = True
++    escalar: bool = False
+ 
+ 
+ @app.post("/api/unidades")
+--- a/ui/ajustes.js
++++ b/ui/ajustes.js
+@@ -249,24 +249,31 @@
+ });
+ 
+ /* Unidades del dibujo  ·  0.19.3. Mike (7-sep-2026): «necesitamos poder editar
+- * en qué unidades (metro, centímetro o milímetro) se va a trabajar el plano». */
++ * en qué unidades (metro, centímetro o milímetro) se va a trabajar el plano».
++ *
++ * Y desde 0.20.10 (Mike, 15-sep-2026): «el dibujo nunca cambia de unidades;
++ * eso sólo si yo lo escalo manualmente». Cambiar la unidad cambia SÓLO lo que
++ * significan los números (el dato del archivo, los decimales de las cotas, la
++ * unidad del DXF); lo dibujado no se toca. Antes la casilla «escalar» venía
++ * marcada y un cambio a media chamba reescalaba el plano entero. Para escalar
++ * de verdad está ESCALAR. */
+ Ajustes.unidades = async function (args = []) {
+   const actual = U();
+   const nombres = { mm: "milímetros", cm: "centímetros", m: "metros" };
+-  let elegida = String(args[0] || "").toLowerCase(), escalar = true;
++  let elegida = String(args[0] || "").toLowerCase();
++  const escalar = false;
+   if (!(elegida in nombres)) {
+     const v = await Dialogo.abrir({
+       titulo: Tr("Unidades del dibujo"),
+-      pista: Tr("Todo lo que se teclea, se ve y se acota va en esta unidad; el DXF sale con ella declarada. Con «escalar», la mesa de 600 mm pasa a medir 0.6 m; sin escalar, los números se quedan y sólo cambia lo que significan."),
++      pista: Tr("Sólo cambia lo que significan los números: lo que se teclea, se ve y se acota va en esta unidad, y el DXF sale con ella declarada. Lo dibujado no se escala; para eso está ESCALAR."),
+       campos: [
+         { clave: "unidades", etiqueta: Tr("Unidad de trabajo"), tipo: "lista", valor: actual,
+           opciones: [["mm", "mm — " + Tr("milímetros")], ["cm", "cm — " + Tr("centímetros")], ["m", "m — " + Tr("metros")]] },
+-        { clave: "escalar", etiqueta: Tr("Escalar lo dibujado para conservar el tamaño real"), tipo: "casilla", valor: true },
+       ],
+       aceptar: Tr("Aplicar"),
+     });
+     if (!v) return;
+-    elegida = v.unidades; escalar = !!v.escalar;
++    elegida = v.unidades;
+   }
+   if (elegida === actual) { Comandos.eco(F("El dibujo ya está en {0}.", elegida)); return; }
+   let r;
+@@ -277,7 +284,7 @@
+   pintarCapas(); pintar();
+   Comandos.eco(r.escalado
+     ? F("Unidades: {0} (lo dibujado se escaló ×{1}; las cotas con {2} decimales).", elegida, r.factor, { mm: 0, cm: 1, m: 3 }[elegida])
+-    : F("Unidades: {0} (sin escalar: los números se quedan).", elegida), "bien");
++    : F("Unidades: {0}. Lo dibujado no cambia: los números se quedan y ahora son {0}.", elegida), "bien");
+ };
+ 
+ /* La guía de herramientas en PDF (assets/ayuda, la arma build/hacer_guia.py).
+--- a/ui/index.html
++++ b/ui/index.html
+@@ -50,7 +50,7 @@
+ 
+     <div class="pie">
+       <span id="iVersion">—</span>
+-      <span id="iAyuda">Todo va en milímetros. El modelo se dibuja a 1:1.</span>
++      <span id="iAyuda">Los dibujos nuevos nacen en centímetros. El modelo se dibuja a 1:1.</span>
+     </div>
+   </div>
+ </div>
+--- a/ui/idioma-en.js
++++ b/ui/idioma-en.js
+@@ -35,7 +35,7 @@
+   "Traer de Taller 101…": "Import from Taller 101…",
+   "Un mueble .t101x ya despiezado": "A .t101x cabinet, already cut-listed",
+   "Recientes": "Recent", "limpiar": "clear",
+-  "Todo va en milímetros. El modelo se dibuja a 1:1.": "Everything is in millimetres. The model is drawn at 1:1.",
++  "Los dibujos nuevos nacen en centímetros. El modelo se dibuja a 1:1.": "New drawings start in centimetres. The model is drawn at 1:1.",
+   "Dibujo nuevo.": "New drawing.",
+   "Todavía no has abierto ningún plano.": "You haven't opened any drawing yet.",
+   "versión {0}": "version {0}",
+@@ -56,7 +56,8 @@
+   "Ventana centrada en {0}, {1} {2}.": "Viewport centered at {0}, {1} {2}.", "Esta hoja no tiene ventana.": "This sheet has no viewport.",
+   "Centra el dibujo en la ventana de la hoja (Enter: todo el dibujo; clic: ese punto al centro)": "Centers the drawing in the sheet viewport (Enter: whole drawing; click: that point to the center)", "Unidad de trabajo": "Working unit", "milímetros": "millimeters", "centímetros": "centimeters", "metros": "meters",
+   "Escalar lo dibujado para conservar el tamaño real": "Scale what is drawn to keep its real size",
+-  "Todo lo que se teclea, se ve y se acota va en esta unidad; el DXF sale con ella declarada. Con «escalar», la mesa de 600 mm pasa a medir 0.6 m; sin escalar, los números se quedan y sólo cambia lo que significan.": "Everything you type, see and dimension is in this unit; the DXF declares it. With “scale”, a 600 mm table becomes 0.6 m; without it, the numbers stay and only their meaning changes.",
++  "Sólo cambia lo que significan los números: lo que se teclea, se ve y se acota va en esta unidad, y el DXF sale con ella declarada. Lo dibujado no se escala; para eso está ESCALAR.": "Only what the numbers mean changes: what you type, see and dimension is in this unit, and the DXF declares it. The drawing is not scaled; use SCALE for that.",
++  "Unidades: {0}. Lo dibujado no cambia: los números se quedan y ahora son {0}.": "Units: {0}. The drawing does not change: the numbers stay and are now {0}.",
+   "Unidades: {0}.": "Units: {0}.", "El dibujo ya está en {0}.": "The drawing is already in {0}.",
+   "Unidades: {0} (lo dibujado se escaló ×{1}; las cotas con {2} decimales).": "Units: {0} (drawing scaled ×{1}; dimensions with {2} decimals).",
+   "Unidades: {0} (sin escalar: los números se quedan).": "Units: {0} (not scaled: numbers stay).",
