@@ -1,0 +1,73 @@
+--- a/ui/app.js
++++ b/ui/app.js
+@@ -423,16 +423,29 @@
+     catch (e) { avisar(e.message, true, 9000); return false; }
+   }
+ 
++  /** Los formatos que se pueden escribir, para «Guardar como…». El propio
++   * (.t101d) guarda todo; DXF y DWG son exportación, así que se avisa de lo
++   * que se queda en el camino y el dibujo sigue llamándose como se llamaba
++   * (Mike, 16-sep-2026: «en Save as… que aparezca la opción de DXF y DWG
++   * también, aparte del botón de export»). El DWG sólo si hay conversor. */
++  function filtrosGuardar() {
++    const f = [{ name: "Dibujo Taller 101", extensions: ["t101d"] },
++               { name: "DXF R2013", extensions: ["dxf"] }];
++    if ((estado.resumen.dwg || {}).puede) f.push({ name: "DWG R2013", extensions: ["dwg"] });
++    return f;
++  }
++
+   /** Guarda. `comoOtro` fuerza a preguntar la ruta aunque ya tenga una. */
+   async function guardar(comoOtro = false) {
+     let ruta = comoOtro ? null : estado.resumen.ruta;
+     if (!ruta || !ruta.toLowerCase().endsWith(".t101d")) {
+       const base = (estado.resumen.nombre || "dibujo").replace(/\.[^.]+$/, "");
+-      ruta = await pedirRuta("guardar",
+-        [{ name: "Dibujo Taller 101", extensions: ["t101d"] }],
++      ruta = await pedirRuta("guardar", filtrosGuardar(),
+         base + (comoOtro ? " copia" : "") + ".t101d");
+     }
+     if (!ruta) return false;
++    const ext = (ruta.toLowerCase().match(/\.[^.\\/]+$/) || [""])[0];
++    if (ext === ".dxf" || ext === ".dwg") return await exportar(ruta);
+     try {
+       aplicar(await post("/api/guardar", { ruta }));
+       avisar(comoOtro ? `Guardado como ${estado.resumen.nombre}.` : "Guardado.");
+@@ -440,7 +453,21 @@
+     } catch (e) { avisar(e.message, true); return false; }
+   }
+ 
+-  return { abrir, pedirYAbrir, guardar, FILTROS_ABRIR };
++  /** Escribe DXF o DWG en `ruta` y cuenta cómo fue. Lo usan «Guardar como…»
++   * (cuando se elige uno de esos formatos) y el botón Exportar. */
++  async function exportar(ruta) {
++    try {
++      const r = await post("/api/exportar_dxf", { ruta });
++      const formato = ruta.toLowerCase().endsWith(".dwg") ? "DWG" : "DXF";
++      avisar(`${formato} exportado: ${r.escritas} entidades` +
++        (r.preservadas ? `, ${r.preservadas} conservadas del original` : "") +
++        (r.perdidas.length ? `. Sin escribir: ${r.perdidas.length}` : "."),
++        r.perdidas.length > 0);
++      return true;
++    } catch (e) { avisar(e.message, true); return false; }
++  }
++
++  return { abrir, pedirYAbrir, guardar, exportar, filtrosGuardar, FILTROS_ABRIR };
+ })();
+ 
+ /* Se conserva el nombre viejo: lo usan el doble clic de Windows y las pruebas. */
+@@ -459,14 +486,7 @@
+   const ruta = await pedirRuta("guardar", filtros,
+     (estado.resumen.nombre || "dibujo") + ".dxf");
+   if (!ruta) return;
+-  try {
+-    const r = await post("/api/exportar_dxf", { ruta });
+-    const formato = ruta.toLowerCase().endsWith(".dwg") ? "DWG" : "DXF";
+-    avisar(`${formato} exportado: ${r.escritas} entidades` +
+-      (r.preservadas ? `, ${r.preservadas} conservadas del original` : "") +
+-      (r.perdidas.length ? `. Sin escribir: ${r.perdidas.length}` : "."),
+-      r.perdidas.length > 0);
+-  } catch (e) { avisar(e.message, true); }
++  await Archivo.exportar(ruta);
+ };
+ 
+ /* --- Deshacer / rehacer ------------------------------------------------ */
