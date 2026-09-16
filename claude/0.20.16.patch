@@ -1,0 +1,40 @@
+--- a/core/version.py
++++ b/core/version.py
+@@ -21,7 +21,7 @@
+ 
+ from __future__ import annotations
+ 
+-VERSION = "0.20.15"
++VERSION = "0.20.16"
+ FECHA = "2026-09-16"
+ 
+ # Qué trae cada entrega, en el idioma del taller y no en el del código.
+@@ -29,6 +29,28 @@
+ # enseña en la consola.
+ BITACORA: list[dict] = [
+     {
++        "version": "0.20.16",
++        "fecha": "2026-09-16",
++        "cambios": [
++            "El instalador ya tiene cara: carátula lateral y encabezado con la "
++            "marca de draw101, icono propio y el texto de licencia. Las imágenes "
++            "se generan del logotipo al armar, para que no se queden viejas.",
++            "draw101 aparece en «Abrir con» de los archivos DXF y DWG, y en "
++            "Aplicaciones predeterminadas de Windows. No se roba la asociación: "
++            "quién los abre por omisión lo sigue decidiendo cada quien.",
++            "La consola de abajo ya se ve cómo se abre: el botón de la esquina "
++            "dice «más» con su flecha (y «menos» al estar abierta). Existía "
++            "desde la 0.18.0 pero medía 18 píxeles en gris. F2 sigue sirviendo.",
++            "Más previas mientras se dibuja: al jalar el vértice de una línea o "
++            "polilínea se ve la entidad entera tomando su forma nueva, no una "
++            "raya; el DESFASE enseña la copia donde va a quedar y cambia de lado "
++            "con el cursor; PUNTO y TEXTO enseñan dónde y de qué tamaño van a "
++            "caer; el arreglo polar enseña las copias al elegir el centro. Y el "
++            "fantasma pinta círculos y arcos como curvas, no como polígonos.",
++            "Prueba t031 (previas, 16 comprobaciones).",
++        ],
++    },
++    {
+         "version": "0.20.15",
+         "fecha": "2026-09-16",
+         "cambios": [
