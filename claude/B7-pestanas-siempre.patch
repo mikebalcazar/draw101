@@ -1,0 +1,16 @@
+--- a/ui/marco.js
++++ b/ui/marco.js
+@@ -66,8 +66,11 @@
+     estado.escritorio = esc;
+     const barra = $("#docs"), tiras = $("#doc-tiras");
+     if (!barra || !tiras) return;
+-    // Una sola pestaña no es una pestaña: se esconde la fila entera.
+-    barra.hidden = esc.documentos.length < 2;
++    // La fila se ve SIEMPRE, aunque haya un solo dibujo abierto (Mike,
++    // 16-sep-2026). Antes se escondía con menos de dos: el botón «+» para
++    // abrir otro aparecía y desaparecía, y con un dibujo no se veía ni cómo se
++    // llama ni si tiene cambios sin guardar.
++    barra.hidden = !esc.documentos.length;
+     tiras.textContent = "";
+     for (const d of esc.documentos) {
+       const t = document.createElement("div");

@@ -22,6 +22,13 @@ en orden; los del backlog se añaden al final con nombre `Bn-<tema>.patch`.
 | B4 | Paleta de colores y selector RGB (capa y entidad) | pendiente |
 | B5 | Previa («fantasma») en TODAS las herramientas | pendiente, por tandas |
 | B6 | «Guardar como…» con DXF y DWG | **hecho** (`B6-guardar-como.patch`, `pruebas/t027`) |
+| B7 | Pestañas siempre visibles, aunque haya un solo dibujo | **hecho** (`B7-pestanas-siempre.patch`, `pruebas/t028`) |
 
 El detalle de cada uno, con las decisiones y las trampas conocidas, está en
 Drive: `suite101/t101d/draw101-backlog-abierto-2026-09-16`.
+
+## Orden de aplicación
+
+Los parches `B*` se aplican **después** de los `0.20.*`, en orden numérico de
+B. Al integrar: añadirlos a `APLICAR.txt`, subir la versión una sola vez y
+correr la suite completa antes de disparar la publicación.
