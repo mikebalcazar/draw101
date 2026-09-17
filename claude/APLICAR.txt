@@ -16,3 +16,4 @@ B10-paleta-color.patch
 B11-pendientes.patch
 B11-empaque.patch
 0.20.16.patch
+B12-nota-fuera-de-build.patch
