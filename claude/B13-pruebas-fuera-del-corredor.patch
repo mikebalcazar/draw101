@@ -1,0 +1,20 @@
+--- a/pruebas/navegador.py
++++ b/pruebas/navegador.py
+@@ -27,6 +27,17 @@
+ 
+ 
+ def hay_navegador() -> bool:
++    """¿Se pueden correr las pruebas que abren el programa de verdad?
++
++    En el corredor de GitHub se dicen que no **a propósito** (Mike, 16-sep-2026:
++    «se consumieron muy rápido los deploys»). Esas pruebas se llevan la mitad
++    del tiempo del armado, y ya pasaron enteras en el chat antes de disparar la
++    publicación: repetirlas ahí es pagar dos veces lo mismo, y en Windows los
++    minutos se cobran al doble. Con `T101_PRUEBAS_COMPLETAS=1` se corren igual,
++    para cuando alguien quiera la comprobación entera en el corredor.
++    """
++    if os.environ.get("GITHUB_ACTIONS") and not os.environ.get("T101_PRUEBAS_COMPLETAS"):
++        return False
+     try:
+         import playwright  # noqa: F401
+     except Exception:
