@@ -1,8 +1,9 @@
 # Arma el instalador de draw101 en un Linux de GitHub (con wine), lo manda a
 # `descargas` por la rama de carga que espera `publicar-instalador.yml`, espera
-# a que esa release exista y entonces deja `draw101.json` y el README de
-# `descargas` diciendo la versión nueva. Al terminar, la 0.20.x instalada en
-# cualquier máquina ve el letrero «Actualizar».
+# a que esa release exista, deja `draw101.json` y el README de `descargas`
+# diciendo la versión nueva, y al final borra las releases viejas de draw101.
+# Al terminar, la 0.20.x instalada en cualquier máquina ve el letrero
+# «Actualizar».
 #
 # POR QUÉ
 #
@@ -39,8 +40,8 @@
 #   sus minutos se cobran, y GitHub cobra los de Windows AL DOBLE: 40 minutos de
 #   run eran ~80 de cuota, por versión. Armar con wine en Linux tarda ~10 y
 #   cuenta ×1: ocho veces más barato. El instalador sale igual —así se armaron
-#   las 0.20.2, 0.20.3 y 0.20.4, que Mike instaló sin problema—, porque quien
-#   arma el NSIS es electron-builder, no Windows.
+#   las 0.20.2, 0.20.3, 0.20.4 y 0.20.16, que Mike instaló sin problema—, porque
+#   quien arma el NSIS es electron-builder, no Windows.
 #
 #   También se fueron dos cosas que costaban y no aportaban: las pruebas (ya se
 #   corren enteras en el chat antes de disparar; aquí se llevaban la mitad del
@@ -74,6 +75,10 @@ env:
   WINEDEBUG: '-all'
   WINEDLLOVERRIDES: 'mscoree,mshtml='
   INSTALADOR_ANTERIOR: https://github.com/mikebalcazar/descargas/releases/download/draw101-0.20.1/draw101-0.20.1-setup.exe
+  # Cuántas versiones de draw101 se guardan en `descargas`. Mike, 16-sep-2026:
+  # «quedémonos sólo con las 3 últimas». `draw101-ultima` no cuenta y nunca se
+  # borra: es la liga fija que usa el actualizador.
+  GUARDAR_VERSIONES: '3'
 
 jobs:
   armar:
@@ -264,3 +269,58 @@ jobs:
           git push -q origin main
           echo "- Release \`draw101-$VER\` publicada · \`draw101-ultima\` movida · \`draw101.json\` y README en main." >> "$GITHUB_STEP_SUMMARY"
           echo "- Las 0.20.x instaladas ya ven el letrero «Actualizar»." >> "$GITHUB_STEP_SUMMARY"
+
+      # Guardar catorce versiones de un instalador de 125 MB no le sirve a
+      # nadie: el actualizador sólo mira `draw101.json` y la etiqueta
+      # `draw101-ultima`. Mike, 16-sep-2026: «quedémonos sólo con las 3
+      # últimas». Se borra la release y su etiqueta; `draw101-ultima` nunca.
+      # Si algo falla aquí, no se tumba la publicación: ya está hecha.
+      - name: Podar releases viejas de draw101
+        if: steps.cargar.outputs.cargado == 'si'
+        continue-on-error: true
+        env:
+          TOKEN: ${{ secrets.TOKEN_DESCARGAS }}
+          GUARDAR: ${{ env.GUARDAR_VERSIONES }}
+        run: |
+          set -euo pipefail
+          python - <<'EOF'
+          import json, os, re, urllib.request
+
+          TOKEN = os.environ["TOKEN"]
+          GUARDAR = int(os.environ.get("GUARDAR", "3"))
+          REPO = "mikebalcazar/descargas"
+
+          def api(ruta, metodo="GET"):
+              pedido = urllib.request.Request(
+                  f"https://api.github.com/repos/{REPO}{ruta}", method=metodo,
+                  headers={"Authorization": f"Bearer {TOKEN}",
+                           "Accept": "application/vnd.github+json",
+                           "User-Agent": "draw101-podar"})
+              with urllib.request.urlopen(pedido, timeout=60) as r:
+                  return json.loads(r.read() or b"null") if r.status != 204 else None
+
+          def numero(tag):
+              return tuple(int(x) for x in re.findall(r"\d+", tag))
+
+          releases = api("/releases?per_page=100") or []
+          mias = [r for r in releases
+                  if r["tag_name"].startswith("draw101-") and r["tag_name"] != "draw101-ultima"]
+          mias.sort(key=lambda r: numero(r["tag_name"]), reverse=True)
+          quedan, sobran = mias[:GUARDAR], mias[GUARDAR:]
+          print("se quedan:", [r["tag_name"] for r in quedan])
+          if not sobran:
+              print("no hay nada que podar")
+              raise SystemExit(0)
+          for r in sobran:
+              tag = r["tag_name"]
+              api(f"/releases/{r['id']}", "DELETE")
+              try:
+                  api(f"/git/refs/tags/{tag}", "DELETE")
+              except Exception as exc:          # la etiqueta pudo no existir ya
+                  print(f"  (la etiqueta {tag} no se pudo borrar: {exc})")
+              mb = sum(a["size"] for a in r["assets"]) / 1e6
+              print(f"borrada {tag} ({mb:.0f} MB)")
+          libres = sum(sum(a["size"] for a in r["assets"]) for r in sobran) / 1e9
+          with open(os.environ["GITHUB_STEP_SUMMARY"], "a", encoding="utf-8") as f:
+              f.write(f"- Podadas {len(sobran)} releases viejas de draw101 ({libres:.2f} GB).\n")
+          EOF
