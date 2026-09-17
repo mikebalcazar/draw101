@@ -1,0 +1,3 @@
+Disparos del flujo Armar y publicar (uno por renglón).
+2026-09-16 · 0.20.16: instalador con diseño, DXF/DWG asociados, flechita de la consola, previas.
+2026-09-17 · 0.20.16: segundo intento (el primero no llegó a publicar: cuota de Actions).
