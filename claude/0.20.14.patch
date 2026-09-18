@@ -1,0 +1,66 @@
+--- a/core/version.py
++++ b/core/version.py
+@@ -21,7 +21,7 @@
+ 
+ from __future__ import annotations
+ 
+-VERSION = "0.20.13"
++VERSION = "0.20.14"
+ FECHA = "2026-09-16"
+ 
+ # Qué trae cada entrega, en el idioma del taller y no en el del código.
+@@ -29,6 +29,32 @@
+ # enseña en la consola.
+ BITACORA: list[dict] = [
+     {
++        "version": "0.20.14",
++        "fecha": "2026-09-16",
++        "cambios": [
++            "ARREGLADO: un DWG podía abrir en blanco. El convertidor que va "
++            "dentro escribe el color de las capas en negativo, y en DXF eso "
++            "significa «capa apagada»: en el plano de Mike llegaban apagadas 134 "
++            "de 136 capas y se veían 54 entidades de 15 972. Cuando llegan "
++            "apagadas casi todas se encienden y se avisa en el informe de "
++            "apertura; un plano donde apagar capas fue una decisión de verdad no "
++            "se toca.",
++            "Planos grandes, más ligeros: las coordenadas viajan con la "
++            "precisión del taller (una centésima de milímetro) en vez de con "
++            "dieciséis dígitos, y lo que es igual a lo de siempre (grosor 0.25, "
++            "sin punteado, escala 1) ya no viaja. En el plano de 24 MB de Mike, "
++            "lo que se manda al lienzo pasa de 50 a 30 MB.",
++            "«Guardar como…» ofrece DXF y DWG además del formato propio. Elegir "
++            "DXF o DWG exporta: escribe el archivo y avisa de lo que no cupo, y "
++            "el dibujo sigue siendo el .t101d de siempre.",
++            "Las pestañas de dibujos se ven siempre, aunque haya uno solo: se ve "
++            "cómo se llama, si tiene cambios sin guardar y el botón para abrir "
++            "otro, y el lienzo ya no brinca al abrir el segundo.",
++            "Pruebas t027 (guardar como), t028 (pestañas) y t029 (capas "
++            "apagadas).",
++        ],
++    },
++    {
+         "version": "0.20.13",
+         "fecha": "2026-09-16",
+         "cambios": [
+--- a/package.json
++++ b/package.json
+@@ -1,8 +1,8 @@
+ {
+   "name": "draw101",
+   "productName": "draw101",
+-  "version": "0.20.13",
+-  "_versionApp": "0.20.13 — la que enseña la app viene de core/version.py; ésta sólo existe porque electron-builder exige semver",
++  "version": "0.20.14",
++  "_versionApp": "0.20.14 — la que enseña la app viene de core/version.py; ésta sólo existe porque electron-builder exige semver",
+   "_notaEmpaque": "asar apagado a propósito: main.js busca server.py junto a electron/, y el motor de Python no puede vivir dentro de un asar. Y electron-builder saca cualquier node_modules de los globs de `files`, así que los dos motores de DWG (dwgjs/node_modules) se copian por extraResources o la app se queda sin leer DWG.",
+   "description": "CAD 2D de Taller 101 — leer, trazar, acotar e imprimir planos",
+   "main": "electron/main.js",
+@@ -19,7 +19,7 @@
+   "build": {
+     "appId": "mx.taller101.dibujador",
+     "productName": "draw101",
+-    "artifactName": "draw101-0.20.13-setup.${ext}",
++    "artifactName": "draw101-0.20.14-setup.${ext}",
+     "directories": {
+       "output": "dist",
+       "buildResources": "build"
