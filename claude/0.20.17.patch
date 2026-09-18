@@ -1,0 +1,61 @@
+--- a/core/version.py
++++ b/core/version.py
+@@ -21,14 +21,34 @@
+ 
+ from __future__ import annotations
+ 
+-VERSION = "0.20.16"
+-FECHA = "2026-09-16"
++VERSION = "0.20.17"
++FECHA = "2026-09-17"
+ 
+ # Qué trae cada entrega, en el idioma del taller y no en el del código.
+ # La más nueva arriba. Lo que se lista aquí es lo que el comando VERSION
+ # enseña en la consola.
+ BITACORA: list[dict] = [
+     {
++        "version": "0.20.17",
++        "fecha": "2026-09-17",
++        "cambios": [
++            "ARREGLADO: un plano podía abrir lleno de rayas que en AutoCAD no "
++            "están. Eran capas CONGELADAS —no apagadas, congeladas, que en el "
++            "archivo son cosas distintas—: draw101 no leía ese dato y las "
++            "pintaba. Ahora se respetan al abrir, se guardan y se conservan, y "
++            "el arreglo que enciende capas cuando el convertidor de DWG las "
++            "marca apagadas de más ya no las resucita.",
++            "ARREGLADO: los círculos se veían poligonales en planos dibujados en "
++            "metros. Se les daban los segmentos que pidiera su radio con una "
++            "tolerancia en milímetros, pero medida en las unidades del dibujo: "
++            "una burbuja de eje de 0.15 salía hexágono. Vuelven a 72 lados por "
++            "vuelta, redondos a cualquier escala. Lo que aquello ahorraba era el "
++            "2 % del peso; lo que de verdad lo bajó a la mitad —redondear las "
++            "coordenadas y no mandar lo que es igual a lo de siempre— se queda.",
++            "Prueba t032 (congeladas y círculos, 11 comprobaciones).",
++        ],
++    },
++    {
+         "version": "0.20.16",
+         "fecha": "2026-09-16",
+         "cambios": [
+--- a/package.json
++++ b/package.json
+@@ -1,8 +1,8 @@
+ {
+   "name": "draw101",
+   "productName": "draw101",
+-  "version": "0.20.16",
+-  "_versionApp": "0.20.16 — la que enseña la app viene de core/version.py; ésta sólo existe porque electron-builder exige semver",
++  "version": "0.20.17",
++  "_versionApp": "0.20.17 — la que enseña la app viene de core/version.py; ésta sólo existe porque electron-builder exige semver",
+   "_notaAsociaciones": "draw101 aparece en «Abrir con» de los DXF y DWG y en Aplicaciones predeterminadas, pero NO se roba la asociación: quién los abre por omisión lo sigue decidiendo el usuario (regla de Mike, 0.11.2). electron-builder registra el ProgID; Windows decide. El .t101d sí es nuestro. Ojo: dentro de «build» electron-builder rechaza cualquier clave que no conozca, aunque empiece con guión bajo (se cazó armando la 0.20.16).",
+   "_notaEmpaque": "asar apagado a propósito: main.js busca server.py junto a electron/, y el motor de Python no puede vivir dentro de un asar. Y electron-builder saca cualquier node_modules de los globs de `files`, así que los dos motores de DWG (dwgjs/node_modules) se copian por extraResources o la app se queda sin leer DWG.",
+   "description": "CAD 2D de Taller 101 — leer, trazar, acotar e imprimir planos",
+@@ -19,7 +19,7 @@
+   "build": {
+     "appId": "mx.taller101.dibujador",
+     "productName": "draw101",
+-    "artifactName": "draw101-0.20.16-setup.${ext}",
++    "artifactName": "draw101-0.20.17-setup.${ext}",
+     "directories": {
+       "output": "dist",
+       "buildResources": "build"

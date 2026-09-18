@@ -18,3 +18,5 @@ B11-empaque.patch
 0.20.16.patch
 B12-nota-fuera-de-build.patch
 B13-pruebas-fuera-del-corredor.patch
+B14-congeladas-y-circulos.patch
+0.20.17.patch

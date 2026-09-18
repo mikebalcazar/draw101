@@ -1,0 +1,107 @@
+--- a/core/capas.py
++++ b/core/capas.py
+@@ -34,6 +34,12 @@
+     grosor: int = 25                # centésimas de mm
+     tipo_linea: str = "CONTINUOUS"
+     visible: bool = True
++    # Congelada  ·  Mike (17-sep-2026): su plano abría lleno de rayas que en
++    # AutoCAD no están. Eran cinco capas de un levantamiento topográfico que
++    # alguien **congeló**; draw101 no leía ese dato y las pintaba. Congelar y
++    # apagar se parecen al mirar el plano, pero son cosas distintas en el DXF
++    # (bandera 70 bit 1 contra color negativo) y hay que respetar las dos.
++    congelada: bool = False
+     bloqueada: bool = False
+     imprime: bool = True
+     descripcion: str = ""
+--- a/core/documento.py
++++ b/core/documento.py
+@@ -303,7 +303,7 @@
+             if getattr(e, "espacio", "") != espacio:
+                 continue
+             c = self.capas.get(e.capa)
+-            if e.visible and c is not None and c.visible:
++            if e.visible and c is not None and c.visible and not c.congelada:
+                 out.append(e)
+         return out
+ 
+--- a/core/dxf_lector.py
++++ b/core/dxf_lector.py
+@@ -153,6 +153,7 @@
+             grosor=mod_capas.grosor_valido(grosor),
+             tipo_linea=(capa_dxf.dxf.get("linetype", "CONTINUOUS") or "CONTINUOUS").upper(),
+             visible=capa_dxf.is_on(),
++            congelada=capa_dxf.is_frozen(),
+             bloqueada=capa_dxf.is_locked(),
+             imprime=bool(capa_dxf.dxf.get("plot", 1)),
+             descripcion=getattr(capa_dxf, "description", "") or "",
+@@ -910,6 +911,10 @@
+         apagadas_set = {n.upper() for n in (apagadas or [])}
+         cambiadas = 0
+         for nombre, capa in doc.capas.items():
++            # Lo congelado se queda congelado: esta corrección es sólo del
++            # encendido, que es lo que LibreDWG escribe mal (Mike, 17-sep-2026).
++            if capa.congelada:
++                continue
+             debe = nombre.upper() not in apagadas_set
+             if capa.visible != debe:
+                 capa.visible = debe
+--- a/core/dibujo.py
++++ b/core/dibujo.py
+@@ -20,14 +20,14 @@
+ # vista de un plano de taller no se distingue de una curva, y no ahoga al lienzo.
+ SEGMENTOS = 72
+ MIN_SEG = 6
+-# Medido el 13-sep-2026 (objetivo 1, fluidez, camino C): en un plano de
+-# 21 700 entidades, 390 000 de los 425 000 vértices que viajan al navegador
+-# eran círculos y arcos a 72 segmentos fijos, sin importar el radio. Un barreno
+-# de ⌀5 no necesita 73 puntos: la cuerda de un polígono de 16 lados a ese
+-# radio se separa del círculo 0.05 mm, que no se ve ni se corta. La regla:
+-# tantos segmentos como pida no separarse más de FLECHA_MAX mm de la curva,
+-# entre MIN_SEG y SEGMENTOS por vuelta. Los círculos grandes siguen a 72.
+-FLECHA_MAX = 0.05
++# Se probó (13-sep-2026) dar a cada círculo los segmentos que pidiera su radio,
++# con una tolerancia de 0.05 mm. Estuvo mal por dos razones y se quitó el
++# 17-sep: la tolerancia se comparaba contra el radio **en las unidades del
++# dibujo**, sin convertir, así que en un plano en metros una burbuja de eje de
++# 0.15 salía con seis segmentos —un hexágono, que es lo que vio Mike—; y lo que
++# ahorraba eran 7 000 vértices de 425 000, el 2 %. Lo que sí bajó el peso a la
++# mitad fue redondear las coordenadas y no mandar lo que es igual a lo de
++# siempre. Así que 72 por vuelta, como desde el principio.
+ # El grosor que el lienzo da por hecho cuando el trazo no lo trae (0.25 mm, el
+ # de la capa 0). Tiene que ser el mismo número en `ui/vista.js`.
+ GROSOR_OMISION = 0.25
+@@ -38,24 +38,12 @@
+ # con la entidad exacta (tolerancia 1e-6) y se rompían (t007).
+ 
+ 
+-def _segmentos_por_vuelta(r: float) -> int:
+-    if r <= 0:
+-        return MIN_SEG
+-    c = 1 - FLECHA_MAX / r
+-    if c <= -1:
+-        return MIN_SEG
+-    if c >= 1:
+-        return SEGMENTOS
+-    n = math.ceil(math.pi / math.acos(c))
+-    return max(MIN_SEG, min(SEGMENTOS, n))
+-
+-
+ def _arco_puntos(cx, cy, r, a0, a1, sentido=1):
+     """a0 y a1 en radianes. sentido 1 = antihorario."""
+     barrido = (a1 - a0) * sentido
+     while barrido < 0:
+         barrido += 2 * math.pi
+-    n = max(MIN_SEG, int(_segmentos_por_vuelta(r) * barrido / (2 * math.pi)) + 1)
++    n = max(MIN_SEG, int(SEGMENTOS * barrido / (2 * math.pi)) + 1)
+     return [[cx + r * math.cos(a0 + sentido * barrido * i / n),
+              cy + r * math.sin(a0 + sentido * barrido * i / n)]
+             for i in range(n + 1)]
+@@ -115,7 +103,7 @@
+     barrido = t1 - t0
+     if barrido <= 0:
+         barrido += 2 * math.pi
+-    n = max(MIN_SEG, int(_segmentos_por_vuelta(max(a, b)) * barrido / (2 * math.pi)) + 1)
++    n = max(MIN_SEG, int(SEGMENTOS * barrido / (2 * math.pi)) + 1)
+     pts = []
+     for i in range(n + 1):
+         t = t0 + barrido * i / n
