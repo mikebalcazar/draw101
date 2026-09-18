@@ -5,3 +5,6 @@ Disparos del flujo Armar y publicar (uno por renglón).
             quedado en sus ramas; sin ellos el armado moría en «Aplicar
             parches»). Comprobado antes de disparar: cada renglón de
             APLICAR.txt tiene su archivo en la rama.
+2026-09-18 · 0.20.18: tercer disparo, a ver si el presupuesto de Actions ya
+            dejó arrancar el trabajo (los dos anteriores murieron a los 10 s
+            sin empezar, que es lo que pasa cuando la bolsa del mes se acabó).
