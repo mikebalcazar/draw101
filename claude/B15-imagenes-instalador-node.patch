@@ -1,0 +1,12 @@
+--- a/package.json
++++ b/package.json
+@@ -11,7 +11,8 @@
+   "license": "UNLICENSED",
+   "scripts": {
+     "start": "electron .",
+-    "dist": "python build/imagenes_instalador.py && electron-builder --win nsis"
++    "postinstall": "node build/imagenes_instalador.js",
++    "dist": "node build/imagenes_instalador.js && electron-builder --win nsis"
+   },
+   "devDependencies": {
+     "electron": "^33.0.0",
