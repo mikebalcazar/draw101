@@ -1,3 +1,6 @@
 Disparos del flujo Armar y publicar (uno por renglón).
 2026-09-16 · 0.20.16: instalador con diseño, DXF/DWG asociados, flechita de la consola, previas.
 2026-09-17 · 0.20.16: segundo intento (el primero no llegó a publicar: cuota de Actions).
+2026-09-17 · 0.20.16: tercer intento, ya con el flujo barato (Linux + wine, sin pruebas repetidas,
+            sin artefacto, con poda de releases) y con el package.json arreglado —la nota dentro
+            de «build» tumbaba a electron-builder y por eso los dos intentos anteriores no armaron.
