@@ -8,3 +8,6 @@ Disparos del flujo Armar y publicar (uno por renglón).
 2026-09-18 · 0.20.18: tercer disparo, a ver si el presupuesto de Actions ya
             dejó arrancar el trabajo (los dos anteriores murieron a los 10 s
             sin empezar, que es lo que pasa cuando la bolsa del mes se acabó).
+2026-09-18 · 0.20.18: cuarto disparo, ya con el repo público (Actions gratis,
+            sin presupuesto de por medio). Si éste falla, la razón se lee en la
+            página del run, que ahora es pública.
