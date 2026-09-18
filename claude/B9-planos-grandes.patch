@@ -1,0 +1,125 @@
+--- a/core/dibujo.py
++++ b/core/dibujo.py
+@@ -13,6 +13,7 @@
+ 
+ from . import capas as mod_capas
+ from . import cotas as mod_cotas
++from . import unidades as mod_unidades
+ from .documento import Documento
+ 
+ # Cuántos segmentos por vuelta completa, como máximo. 72 = uno cada 5°; a la
+@@ -27,6 +28,9 @@
+ # tantos segmentos como pida no separarse más de FLECHA_MAX mm de la curva,
+ # entre MIN_SEG y SEGMENTOS por vuelta. Los círculos grandes siguen a 72.
+ FLECHA_MAX = 0.05
++# El grosor que el lienzo da por hecho cuando el trazo no lo trae (0.25 mm, el
++# de la capa 0). Tiene que ser el mismo número en `ui/vista.js`.
++GROSOR_OMISION = 0.25
+ # Se probó redondear las coordenadas a milésimas antes de mandarlas (13-sep):
+ # el JSON bajaba 40 % (19 → 12 MB en el plano de prueba) pero el redondeo en
+ # Python costaba 0.6 s por apertura y el navegador no ganaba nada medible.
+@@ -519,11 +523,20 @@
+             doc.tipo_linea_efectivo(e), {}).get("patron", []),
+         "escala_tl": e.escala_tl,
+     }
++    # Lo que es igual a lo de siempre no viaja: el lienzo lo da por hecho (ver
++    # `vista.js`, GROSOR_OMISION). En el plano de Mike (16-sep-2026, 24 MB de
++    # DWG) esto y el redondeo bajan el JSON de 50 a 30 MB.
++    if not base["patron"]:
++        del base["patron"]
++    if base["escala_tl"] == 1.0:
++        del base["escala_tl"]
++    if abs(base["grosor"] - GROSOR_OMISION) < 1e-9:
++        del base["grosor"]
+     # El grupo viaja con el trazo para que el lienzo sepa, sin preguntar, que
+     # picar esto es picar el grupo entero.
+     if getattr(e, "grupo", ""):
+         base["grupo"] = e.grupo
+-    salida = _trazos_de(doc, e, base)
++    salida = redondear(_trazos_de(doc, e, base), _decimales(doc))
+     if cabe:
+         doc.cache.setdefault(e.id, {})["trazos"] = salida
+     return salida
+@@ -550,6 +563,31 @@
+     return salida
+ 
+ 
++def _decimales(doc: Documento) -> int:
++    """Cuántos decimales tiene sentido mandar al lienzo, en las unidades del
++    dibujo. El taller corta a **una centésima de milímetro**: más dígitos no se
++    ven, no se cortan y sí pesan. En el plano de Mike (16-sep-2026) las
++    coordenadas iban con 16 dígitos («86.32124944288067») y el JSON pesaba 50
++    MB; a dos decimales en mm, 38 MB. En metros salen 5 decimales, en cm 4 y
++    en mm 2: la precisión es la misma medida en el mundo real."""
++    mm_por_unidad = mod_unidades.MM_POR_NOMBRE.get(doc.unidades, 1.0)
++    return max(0, int(round(math.log10(mm_por_unidad * 100))))
++
++
++def redondear(trazos_: list[dict], dec: int) -> list[dict]:
++    """Deja las coordenadas de esos trazos con `dec` decimales. Se hace **una
++    vez por entidad**, antes de guardarla en la caché, no en cada envío."""
++    for t in trazos_:
++        p = t.get("puntos")
++        if p:
++            t["puntos"] = [[round(q[0], dec), round(q[1], dec)] if len(q) == 2
++                           else [round(q[0], dec), round(q[1], dec), *q[2:]] for q in p]
++        q = t.get("p")
++        if q is not None and len(q) >= 2:
++            t["p"] = [round(q[0], dec), round(q[1], dec), *q[2:]]
++    return trazos_
++
++
+ def trazos(doc: Documento, espacio: str = "") -> list[dict]:
+     """Todo lo visible de un espacio, listo para el lienzo.
+ 
+--- a/ui/base.js
++++ b/ui/base.js
+@@ -187,6 +187,13 @@
+   if (ms) avisoTimer = setTimeout(() => a.classList.remove("si"), ms);
+ }
+ 
++/* El grosor de un trazo, en milímetros. El motor no manda el campo cuando es
++ * el de siempre (0.25 mm): en un plano grande son 15 bytes por trazo, y son
++ * cientos de miles (Mike, 16-sep-2026). Tiene que ser el mismo número que
++ * `core/dibujo.GROSOR_OMISION`. */
++const GROSOR_OMISION = 0.25;
++const grosorDe = (t) => (t.grosor === undefined ? GROSOR_OMISION : t.grosor);
++
+ /* --- Números ----------------------------------------------------------- */
+ // En el taller se trabaja en milímetros enteros; los decimales sólo estorban
+ // cuando no aportan.
+--- a/ui/vista.js
++++ b/ui/vista.js
+@@ -294,10 +294,10 @@
+     for (const t of def.trazos) {
+       if (t.clase === "texto") { def.textos.push(t); continue; }
+       if (!t.puntos || t.puntos.length < 2) continue;
+-      const llave = (t.color || "") + "|" + (t.grosor || 0);
++      const llave = (t.color || "") + "|" + grosorDe(t);
+       let lote = lotes.get(llave);
+       if (!lote) {
+-        lote = { color: t.color || null, grosor: t.grosor || 0, paths: NIVELES.map(() => new Path2D()), n: NIVELES.map(() => 0) };
++        lote = { color: t.color || null, grosor: grosorDe(t), paths: NIVELES.map(() => new Path2D()), n: NIVELES.map(() => 0) };
+         lotes.set(llave, lote);
+       }
+       NIVELES.forEach((f, k) => {
+@@ -776,7 +776,7 @@
+       if ((bb[2] - bb[0]) * esc >= MINIMO_PX || (bb[3] - bb[1]) * esc >= MINIMO_PX) { instancias.push(t); continue; }
+     }
+ 
+-    const grosor = borrador ? 1 : Math.max(1, t.grosor * 3.78 * 0.35);
++    const grosor = borrador ? 1 : Math.max(1, grosorDe(t) * 3.78 * 0.35);
+     const patron = !borrador && (t.patron || []).length ? t.patron : null;
+     const llave = t.color + "|" + grosor + "|" +
+                   (patron ? patron.join(",") + "|" + (t.escala_tl || 1) : "");
+--- a/ui/papel.js
++++ b/ui/papel.js
+@@ -202,7 +202,7 @@
+     }
+     const pts = t.puntos || [];
+     if (pts.length < 2) return;
+-    ctx.lineWidth = Math.max(0.7, (t.grosor || 0.25) * estado.vista.escala);
++    ctx.lineWidth = Math.max(0.7, grosorDe(t) * estado.vista.escala);
+     ctx.setLineDash(t.imprime === false ? [4, 3] : []);
+     ctx.beginPath();
+     for (let i = 0; i < pts.length; i++) {
