@@ -1,0 +1,7 @@
+Disparos del flujo Armar y publicar (uno por renglón).
+2026-09-18 · 0.20.18: primer disparo.
+2026-09-18 · 0.20.18: segundo disparo, con la lista de parches ya completa
+            (faltaban B9-planos-grandes.patch y 0.20.14.patch, que se habían
+            quedado en sus ramas; sin ellos el armado moría en «Aplicar
+            parches»). Comprobado antes de disparar: cada renglón de
+            APLICAR.txt tiene su archivo en la rama.
