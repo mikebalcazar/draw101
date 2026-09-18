@@ -22,3 +22,5 @@ B14-congeladas-y-circulos.patch
 0.20.17.patch
 0.20.18.patch
 B15-imagenes-instalador-node.patch
+B16-baja-y-pregunta.patch
+0.20.19.patch

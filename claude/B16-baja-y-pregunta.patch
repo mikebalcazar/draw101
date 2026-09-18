@@ -1,0 +1,44 @@
+--- a/ui/actualizar.js
++++ b/ui/actualizar.js
+@@ -109,6 +109,8 @@
+   }
+ 
+   async function instalarBajada(e) {
++    const viejo = document.getElementById("letrero-version");
++    if (viejo) viejo.remove();                  // ya no hace falta: se pregunta aquí
+     const v = await Dialogo.abrir({
+       titulo: F("Instalar draw101 {0}", e.version),
+       pista: Tr("El instalador ya está bajado y comprobado. Para instalarlo draw101 se cierra; guarda tus cambios antes. El instalador quita la versión anterior solo.") +
+@@ -230,11 +232,19 @@
+     if (silencio) {
+       if (!r.hay_nueva || r.ignorada || ofrecidaEnSesion === ult.version) return r;
+       ofrecidaEnSesion = ult.version;
+-      Comandos.eco(F("Hay una versión nueva de draw101: {0} (tienes la {1}). Teclea ACTUALIZAR.", ult.version, r.actual), "bien");
+-      // Y un letrero que sí se ve (Mike, 9-sep-2026: «muchas veces ni me
+-      // avisa»): una línea en la consola no es un aviso. Se queda hasta que
+-      // se conteste; no tapa el dibujo ni pide nada mientras tanto.
++      Comandos.eco(F("Hay una versión nueva de draw101: {0} (tienes la {1}).", ult.version, r.actual), "bien");
++      /* Mike (18-sep-2026): «una vez que se descarga la actualización, ahí
++       * mismo debería aparecer una ventana que pregunta si quieres instalar
++       * de una vez, no hasta que te metas y lo hagas manual». Así que:
++       *  · si el instalador ya está bajado y comprobado, se pregunta ya;
++       *  · si no, se baja solo, con su barra, y al terminar se pregunta.
++       * El letrero se queda mientras baja, por si se quiere ver qué trae. */
++      if (r.estado && r.estado.fase === "listo" && r.estado.version === ult.version) {
++        instalarBajada(r.estado);
++        return r;
++      }
+       letrero(r);
++      if (r.se_puede_instalar) bajar(ult);
+       return r;
+     }
+     if (r.estado && (r.estado.fase === "descargando" || r.estado.fase === "comprobando")) {
+@@ -323,7 +333,7 @@
+     ];
+   }
+ 
+-  return { revisar, vigilar, letrero, programar, Barra };
++  return { revisar, vigilar, letrero, programar, bajar, instalarBajada, Barra };
+ })();
+ 
+ /* --- Avisos de Taller 101 ----------------------------------------------- */
