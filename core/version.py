@@ -21,13 +21,30 @@ Numeración: `mayor.menor.parche`.
 
 from __future__ import annotations
 
-VERSION = "0.20.5"
-FECHA = "2026-09-15"
+VERSION = "0.21.0"
+FECHA = "2026-09-19"
 
 # Qué trae cada entrega, en el idioma del taller y no en el del código.
 # La más nueva arriba. Lo que se lista aquí es lo que el comando VERSION
 # enseña en la consola.
 BITACORA: list[dict] = [
+    {
+        "version": "0.21.0",
+        "fecha": "2026-09-19",
+        "cambios": [
+            "draw101 se abre entrando con tu cuenta de la suite 101: tu correo "
+            "y contraseña, o tu cuenta de Google. Ya no hace falta teclear una "
+            "clave, porque la licencia va ligada a tu correo.",
+            "La clave T101-… sigue funcionando, abajo en la misma pantalla, "
+            "para una máquina de taller sin internet estable o para una "
+            "licencia que ya te habían entregado.",
+            "Sin internet la app abre igual mientras tu licencia no haya "
+            "vencido. Cuando vence y no hay forma de preguntarle a la suite, "
+            "no abre y te lo dice con esas palabras: nunca se queda a medias.",
+            "Cada equipo cuenta como un lugar de tu licencia. Los lugares se "
+            "ven y se liberan desde master101.",
+        ],
+    },
     {
         "version": "0.20.5",
         "fecha": "2026-09-15",
