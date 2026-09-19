@@ -1,0 +1,477 @@
+diff --git a/core/licencia.py b/core/licencia.py
+index 9842631..6b122ee 100644
+--- a/core/licencia.py
++++ b/core/licencia.py
+@@ -29,10 +29,11 @@ Lo que este archivo NO hace, a propósito:
+     permiso.
+   · **No cobra.** Los cobros, las claves y las revocaciones viven en
+     suite101-api. Ver el contrato en Drive, `draw101-licencias-etapa1`.
+-  · **Todavía no estorba.** En 0.20.18 nadie llama a `puede_escribir()`: la
+-    maquinaria entra primero, la pantalla de activación y el modo lectura
+-    después, cuando Mike lo diga. Así una versión nueva no deja a nadie sin
+-    guardar por un error de este archivo.
++  · **Todavía no muerde, a propósito.** En 0.20.20 ya está todo —pantalla de
++    activación, panel, latido, candado en el motor— pero el candado está
++    **abierto**: `CORTA = False`. Mike lo decidió así el 19-sep-2026: primero
++    ver que activar funcione con una clave de verdad, y encender el corte en
++    la 0.20.21. Encenderlo es cambiar esa línea; no hay nada más que mover.
+ 
+ Y lo que hay que decir en voz alta: esto es **control comercial, no
+ protección**. El código de draw101 va en claro dentro del instalador, así que
+@@ -47,6 +48,7 @@ import datetime as dt
+ import getpass
+ import hashlib
+ import json
++import os
+ import pathlib
+ import platform
+ import time
+@@ -65,10 +67,38 @@ KID = "qjBcx7te"
+ 
+ #: A dónde se pide la activación y el latido.
+ SERVIDOR = "https://suite101-api.mike-929.workers.dev/licencias"
++
++# Para probar contra el staging de suite101-api o contra el servidor de
++# mentira de `pruebas/t035`, sin tocar este archivo. No es un agujero: el
++# código de draw101 va en claro dentro del instalador y quien quiera saltarse
++# la licencia edita estas dos líneas igual de fácil. Lo que protege es la
++# etapa 2 (que lo valioso viva en el servidor), no esconder una constante.
++SERVIDOR = os.environ.get("DRAW101_LICENCIA_SERVIDOR") or SERVIDOR
++LLAVE_PUBLICA = os.environ.get("DRAW101_LICENCIA_LLAVE") or LLAVE_PUBLICA
++
++#: ¿Sale sola la pantalla de activación al arrancar sin licencia? Sí, salvo
++#: que se apague. Las pruebas de interfaz la apagan: un cuadro modal encima de
++#: la pantalla de inicio tapa todo lo que esas pruebas quieren picar, y una
++#: prueba de dibujo no tiene por qué saber de licencias (se cazó el
++#: 19-sep-2026: nueve pruebas se cayeron de golpe por esto).
++OFRECER_AL_ARRANCAR = os.environ.get("DRAW101_OFRECER_ACTIVACION", "1") != "0"
+ #: Este programa. El permiso dice para cuál se emitió: uno de nest101 no abre
+ #: draw101, aunque la llave sea la misma para los tres.
+ PROGRAMA = "draw101"
+ 
++#: ¿El corte muerde? Con `False`, draw101 hace todo lo demás —se activa, pide
++#: el latido, avisa de lo que vence, enseña el panel— pero **deja guardar y
++#: exportar a quien no tiene licencia**. Es el interruptor de una sola línea
++#: que Mike pidió el 19-sep-2026 para ver las pantallas antes de que corten.
++#: En `True`, sin permiso válido no se guarda ni se exporta.
++#:
++#: Se puede encender por un rato sin armar una versión nueva, con
++#: `DRAW101_CORTA=1` en el ambiente: así se ve cómo va a quedar la 0.20.21 sin
++#: dejar a nadie sin guardar para siempre. Lo que manda el día de la
++#: publicación es esta constante.
++_CORTA_DE_FABRICA = False
++CORTA = os.environ.get("DRAW101_CORTA", "1" if _CORTA_DE_FABRICA else "0") == "1"
++
+ #: A partir de cuántos días por vencer se empieza a avisar.
+ AVISAR_DESDE = 7
+ ESPERA_RED = 12
+@@ -188,7 +218,12 @@ def _resumen(nombre: str, permiso: dict | None, faltan: int) -> dict:
+     p = permiso or {}
+     return {
+         "estado": nombre,
+-        "puede_escribir": nombre in ESTADOS_QUE_ESCRIBEN,
++        # Lo que dice la licencia…
++        "licencia_al_corriente": nombre in ESTADOS_QUE_ESCRIBEN,
++        # …y lo que de verdad deja hacer el programa hoy (ver CORTA).
++        "puede_escribir": (nombre in ESTADOS_QUE_ESCRIBEN) or not CORTA,
++        "corta": CORTA,
++        "ofrecer_al_arrancar": OFRECER_AL_ARRANCAR,
+         "dias": max(0, faltan),
+         "cliente": p.get("cliente", ""),
+         "plan": p.get("plan", ""),
+@@ -204,18 +239,42 @@ def _mensaje(nombre: str, faltan: int) -> str:
+     if nombre == "por_vencer":
+         return (f"La suscripción de draw101 vence en {faltan} día(s). "
+                 "Si ya está pagada, se renueva sola al abrir con internet.")
++    # Con el corte apagado no se promete un castigo que no va a llegar: decir
++    # «modo lectura» y luego dejar guardar enseña a no creerle al programa.
+     if nombre == "vencida":
+-        return ("La suscripción venció: draw101 quedó en modo lectura. Se "
+-                "puede ver, medir e imprimir, pero no guardar ni exportar.")
+-    return ("draw101 no está activado en esta computadora: por ahora sólo "
+-            "lectura. Con una clave de suscripción se activa.")
++        if CORTA:
++            return ("La suscripción venció: draw101 quedó en modo lectura. Se "
++                    "puede ver, medir e imprimir, pero no guardar ni exportar.")
++        return ("La suscripción de draw101 venció. Por ahora se puede seguir "
++                "trabajando; renuévala para no quedarte en modo lectura.")
++    if CORTA:
++        return ("draw101 no está activado en esta computadora: por ahora sólo "
++                "lectura. Con una clave de suscripción se activa.")
++    return ("draw101 no está activado en esta computadora. Con una clave de "
++            "suscripción (T101-XXXX-XXXX-XXXX) se activa.")
+ 
+ 
+ def puede_escribir() -> bool:
+-    """¿Se puede guardar y exportar? Lo pregunta el servidor antes de hacerlo."""
++    """¿Se puede guardar y exportar? Lo pregunta el motor antes de hacerlo.
++
++    Con el corte apagado (`CORTA = False`) contesta que sí siempre: la licencia
++    se sigue leyendo, se sigue avisando y el panel sigue diciendo la verdad,
++    pero nadie se queda sin guardar. Es lo único que separa la 0.20.20 de la
++    versión que cobra.
++    """
++    if not CORTA:
++        return True
+     return estado()["puede_escribir"]
+ 
+ 
++def motivo_para_no_escribir() -> str:
++    """Por qué no se puede guardar, dicho para quien usa el programa. Cadena
++    vacía si sí se puede: así el motor pregunta una sola vez."""
++    if puede_escribir():
++        return ""
++    return estado()["mensaje"]
++
++
+ # --- Hablar con Taller 101 --------------------------------------------------
+ 
+ #: Lo que significa cada error del servidor, dicho para quien usa el programa.
+diff --git a/pruebas/navegador.py b/pruebas/navegador.py
+index cfb6f2d..a759604 100644
+--- a/pruebas/navegador.py
++++ b/pruebas/navegador.py
+@@ -54,15 +54,27 @@ def _puerto_libre() -> int:
+ 
+ 
+ @contextlib.contextmanager
+-def programa(idioma: str = "es-MX"):
+-    """Arranca el motor y abre la interfaz. Devuelve `(pagina, base)`."""
++def programa(idioma: str = "es-MX", entorno: dict | None = None):
++    """Arranca el motor y abre la interfaz. Devuelve `(pagina, base)`.
++
++    `entorno` se le suma al del motor. Sirve para las pruebas que necesitan
++    que el programa hable con otro servidor o guarde en otra carpeta —las de
++    licencias, por ejemplo— sin tocar los módulos desde aquí: el motor corre
++    en **otro proceso**, así que cambiarle una variable a `core.licencia` en
++    esta prueba no lo tocaría.
++    """
+     from playwright.sync_api import sync_playwright
+ 
+     puerto = _puerto_libre()
+     motor = subprocess.Popen(
+         [sys.executable, str(RAIZ / "server.py"), str(puerto)],
+         cwd=str(RAIZ), stdout=subprocess.PIPE, stderr=subprocess.STDOUT,
+-        env={**os.environ, "PYTHONUNBUFFERED": "1"})
++        env={**os.environ, "PYTHONUNBUFFERED": "1",
++             # La pantalla de activación es modal y taparía el lienzo en todas
++             # las pruebas de interfaz. La que sí la quiere probar (t035) la
++             # vuelve a encender por `entorno`.
++             "DRAW101_OFRECER_ACTIVACION": "0",
++             **(entorno or {})})
+     base = f"http://127.0.0.1:{puerto}"
+     try:
+         for _ in range(120):
+diff --git a/pruebas/t033_licencia.py b/pruebas/t033_licencia.py
+index 8aa7cbd..71b7292 100644
+--- a/pruebas/t033_licencia.py
++++ b/pruebas/t033_licencia.py
+@@ -101,6 +101,11 @@ def _motor(r: comun.Reporte) -> None:
+     carpeta = pathlib.Path(tempfile.mkdtemp())
+     publica, firmar = _taller()
+     viejo_llave, viejo_carpeta = licencia.LLAVE_PUBLICA, config.carpeta_usuario
++    viejo_corta = licencia.CORTA
++    # Ésta es la prueba del corte, así que se enciende. Que la versión de hoy
++    # salga con el corte apagado es otra decisión, y la clava t035: aquí se
++    # mide que la licencia mande cuando manda.
++    licencia.CORTA = True
+     licencia.LLAVE_PUBLICA = publica
+     config.carpeta_usuario = lambda: carpeta                      # type: ignore
+     try:
+@@ -123,7 +128,9 @@ def _motor(r: comun.Reporte) -> None:
+         # periodo de prueba; una clave no abre nada hasta que él la marca.)
+         e = licencia.estado()
+         r.igual(e["estado"], "sin_activar", "sin activar, draw101 no escribe")
+-        r.cierto(not e["puede_escribir"], "y queda en modo lectura")
++        r.cierto(not e["licencia_al_corriente"], "y la suscripción no está al corriente")
++        r.cierto(not licencia.puede_escribir(),
++                 "y con el corte encendido queda en modo lectura")
+ 
+         # 2. Activado y al corriente.
+         poner(permiso(30))
+@@ -145,7 +152,8 @@ def _motor(r: comun.Reporte) -> None:
+         poner(permiso(-1))
+         e = licencia.estado()
+         r.igual(e["estado"], "vencida", "pasada la fecha, se corta")
+-        r.cierto(not e["puede_escribir"], "y ya no se puede guardar ni exportar")
++        r.cierto(not licencia.puede_escribir(),
++                 "y ya no se puede guardar ni exportar")
+ 
+         # 5. Un permiso retocado a mano no vale.
+         version, cuerpo, rubrica = permiso(-1).split(".")
+@@ -177,4 +185,5 @@ def _motor(r: comun.Reporte) -> None:
+         r.igual(len(maquina), 64, "y es un resumen, no los datos de la persona")
+     finally:
+         licencia.LLAVE_PUBLICA = viejo_llave
++        licencia.CORTA = viejo_corta
+         config.carpeta_usuario = viejo_carpeta                    # type: ignore
+diff --git a/server.py b/server.py
+index 0bbf649..e14f20c 100644
+--- a/server.py
++++ b/server.py
+@@ -31,6 +31,7 @@ from core import unir as mod_unir
+ from core import agrupar as mod_agrupar
+ from core import oda as mod_oda
+ from core import version as mod_version
++from core import licencia as mod_licencia
+ from core import progreso as mod_progreso
+ from core import entidades as ent_mod
+ from core.capas import Capa, NombreCapaInvalido
+@@ -214,6 +215,25 @@ def _error(exc: Exception, codigo: int = 400):
+     raise HTTPException(status_code=codigo, detail=str(exc))
+ 
+ 
++def _exige_licencia() -> None:
++    """Corta lo que escribe cuando no hay suscripción al corriente.
++
++    Se llama al principio de guardar, exportar y autoguardar —lo que saca
++    trabajo del programa—. Ver, medir e imprimir no pasan por aquí a
++    propósito: cortar en seco a alguien con un plano abierto sería peor que no
++    cobrar, y quien ya pagó por el plano tiene derecho a verlo.
++
++    **Hoy no muerde**: `core/licencia.CORTA` está en `False` y
++    `puede_escribir()` contesta que sí siempre (0.20.20, decisión de Mike del
++    19-sep-2026). El candado está puesto y probado; encenderlo es esa línea.
++
++    402 «Payment Required» es, por una vez, exactamente el código que toca.
++    """
++    motivo = mod_licencia.motivo_para_no_escribir()
++    if motivo:
++        raise HTTPException(status_code=402, detail=motivo)
++
++
+ # --- Respuestas grandes, sin pasar por el codificador de FastAPI ------------
+ # FastAPI recorre lo que se devuelve con `jsonable_encoder` antes de
+ # serializarlo: con los 51 MB de trazos del plano de Mondelez eso son **5.4
+@@ -347,6 +367,47 @@ def actualizacion_instalar():
+     return {"lanzado": True, "ruta": ruta}
+ 
+ 
++# --- Licencia de suscripción  ·  etapa 1 -----------------------------------
++# El motor de verdad está en core/licencia.py; aquí sólo se asoma a la
++# interfaz. Nada de esto guarda la clave: lo que se guarda es el permiso
++# firmado que contesta suite101-api, y sólo si su firma cuadra.
++
++
++@app.get("/api/licencia")
++def licencia_estado():
++    """Cómo está la suscripción, sin tocar la red. Lo pide la interfaz al
++    arrancar y cada vez que algo pudo cambiar."""
++    return mod_licencia.estado()
++
++
++class _Clave(BaseModel):
++    clave: str
++
++
++@app.post("/api/licencia/activar")
++def licencia_activar(entrada: _Clave):
++    """Canjea la clave por un permiso firmado. 402 con el motivo si no cuadra:
++    clave inexistente, sin pago, suspendida o sin lugares libres."""
++    try:
++        return mod_licencia.activar(entrada.clave)
++    except ValueError as exc:
++        _error(exc, 402)
++
++
++@app.post("/api/licencia/latido")
++def licencia_latido():
++    """Le pregunta al servidor si la suscripción sigue al corriente y corre la
++    fecha. No levanta nunca: sin red se queda como estaba, que es el margen
++    para el taller sin internet."""
++    return mod_licencia.latido()
++
++
++@app.post("/api/licencia/desactivar")
++def licencia_desactivar():
++    """Suelta esta computadora para poder activar otra."""
++    return mod_licencia.desactivar()
++
++
+ @app.get("/api/avisos")
+ def avisos(red: int = 1, forzar: int = 0):
+     return mod_avisos.resumen(con_red=bool(red), forzar=bool(forzar))
+@@ -1448,6 +1509,7 @@ def abrir(entrada: Abrir):
+ 
+ @app.post("/api/guardar")
+ def guardar(entrada: RutaEntrada):
++    _exige_licencia()
+     try:
+         with S.candado:
+             S.ruta = proyecto.guardar(S.doc, entrada.ruta)
+@@ -1490,6 +1552,7 @@ def documento_cerrar(entrada: Pestana):
+ @app.post("/api/exportar_dxf")
+ def exportar_dxf(entrada: RutaEntrada):
+     """DXF o DWG, según la extensión  ·  features 4 y 3."""
++    _exige_licencia()
+     try:
+         with S.candado:
+             res = export_dxf.escribir(S.doc, entrada.ruta)
+@@ -1504,6 +1567,11 @@ def exportar_dxf(entrada: RutaEntrada):
+ 
+ @app.post("/api/autoguardar")
+ def autoguardar():
++    # Sin licencia no se autoguarda, pero tampoco se grita: esto corre solo
++    # cada pocos minutos y nadie lo pidió. Se contesta que no hubo copia y la
++    # interfaz ya está avisando por su cuenta de cómo está la suscripción.
++    if not mod_licencia.puede_escribir():
++        return {"copia": None, "sin_licencia": True}
+     with S.candado:
+         copia = proyecto.autoguardar(S.doc, S.ruta)
+     return {"copia": str(copia) if copia else None}
+diff --git a/ui/app.js b/ui/app.js
+index e0a6731..482a0db 100644
+--- a/ui/app.js
++++ b/ui/app.js
+@@ -456,7 +456,13 @@ const Archivo = (() => {
+       aplicar(await post("/api/guardar", { ruta }));
+       avisar(comoOtro ? `Guardado como ${estado.resumen.nombre}.` : "Guardado.");
+       return true;
+-    } catch (e) { avisar(e.message, true); return false; }
++    } catch (e) { avisar(e.message, true); sinLicencia(e); return false; }
++  }
++
++  /** 402 es «no se puede porque no está pagado»: en vez de dejar el aviso y
++   * ya, se abre el panel de la suscripción, que es donde se arregla. */
++  function sinLicencia(e) {
++    if (e && e.codigo === 402 && typeof Licencia !== "undefined") Licencia.panel();
+   }
+ 
+   /** Escribe DXF o DWG en `ruta` y cuenta cómo fue. Lo usan «Guardar como…»
+@@ -470,7 +476,7 @@ const Archivo = (() => {
+         (r.perdidas.length ? `. Sin escribir: ${r.perdidas.length}` : "."),
+         r.perdidas.length > 0);
+       return true;
+-    } catch (e) { avisar(e.message, true); return false; }
++    } catch (e) { avisar(e.message, true); sinLicencia(e); return false; }
+   }
+ 
+   return { abrir, pedirYAbrir, guardar, exportar, filtrosGuardar, FILTROS_ABRIR };
+diff --git a/ui/base.js b/ui/base.js
+index 8f6f10b..8edabcb 100644
+--- a/ui/base.js
++++ b/ui/base.js
+@@ -116,7 +116,14 @@ const api = async (ruta, opciones) => {
+     const ms = performance.now() - tInicio;
+     const recarga = ruta.startsWith("/api/trazos") || (cuerpo && "parche" in cuerpo && cuerpo.parche === null);
+     if (ms >= DiagApi.umbral || recarga) _anotarLlamada(ruta, ms, bytes, recarga);
+-    if (!r.ok) throw new Error(cuerpo.detail || `Error ${r.status}`);
++    if (!r.ok) {
++      // El código viaja con el error: hay quien necesita distinguir «no se
++      // pudo» de «no se puede» (402 sin licencia, por ejemplo) sin ponerse a
++      // adivinar por el texto del mensaje.
++      const falla = new Error(cuerpo.detail || `Error ${r.status}`);
++      falla.codigo = r.status;
++      throw falla;
++    }
+     // Una respuesta buena que no se pudo leer (demasiado grande para el
+     // navegador, o rota) es un error, no un objeto vacío: con `{}` el
+     // programa seguía con `estado.trazos` indefinido y fallaba más adelante
+diff --git a/ui/idioma-en.js b/ui/idioma-en.js
+index 68a975f..88f0dbb 100644
+--- a/ui/idioma-en.js
++++ b/ui/idioma-en.js
+@@ -562,4 +562,52 @@ const IDIOMA_EN = {
+   "Ventana nueva en la hoja (NV)": "New viewport on the sheet (NV)",
+   "Hay una versión nueva de draw101: {0} (tienes la {1}).": "There is a new draw101 version: {0} (you have {1}).",
+   "Ver la descarga": "See the download",
++
++  /* La suscripción  ·  0.20.20 */
++  "Suscripción de draw101…": "draw101 subscription…",
++  "Suscripción de draw101": "draw101 subscription",
++  "draw101 se vende por suscripción mensual.": "draw101 is sold as a monthly subscription.",
++  "Activar draw101": "Activate draw101",
++  "La suscripción venció": "The subscription expired",
++  "Escribe la clave de suscripción que te dio Taller 101.": "Type the subscription key Taller 101 gave you.",
++  "Clave": "Key",
++  "Activar": "Activate",
++  "Activar…": "Activate…",
++  "Seguir en modo lectura": "Continue read-only",
++  "Modo lectura": "Read-only",
++  "Falta la clave (T101-XXXX-XXXX-XXXX).": "The key is missing (T101-XXXX-XXXX-XXXX).",
++  "La clave queda ligada a esta computadora. Para pasarla a otra, suelta ésta primero desde el mismo cuadro.": "The key is tied to this computer. To move it to another one, release this one first from the same box.",
++  "¿No tienes clave? Pídela a Taller 101. La suscripción es mensual y se puede soltar de una computadora para pasarla a otra.": "No key yet? Ask Taller 101 for one. The subscription is monthly and can be released from one computer to move it to another.",
++  "Soltar esta computadora": "Release this computer",
++  "Soltar": "Release",
++  "Se libera el lugar de esta máquina para poder activar otra. Aquí draw101 queda sin activar.": "This machine's seat is freed so another one can be activated. draw101 here goes back to not activated.",
++  "Esta computadora quedó suelta: el lugar está libre para otra.": "This computer was released: the seat is free for another one.",
++  "draw101 quedó activado: {0}, hasta el {1}.": "draw101 is activated: {0}, until {1}.",
++  "suscripción": "subscription",
++  "Estado": "Status",
++  "Plan": "Plan",
++  "Vigente hasta": "Valid until",
++  "Quedan {0} día(s).": "{0} day(s) left.",
++  "Al corriente": "Up to date",
++  "Por vencer": "Expiring",
++  "Vencida": "Expired",
++  "Sin activar": "Not activated",
++  "Por ahora draw101 no corta: se puede guardar y exportar aunque no esté activado.": "For now draw101 does not cut off: you can save and export even without activating.",
++  "Modo lectura: se puede ver, medir e imprimir, pero no guardar ni exportar.": "Read-only: you can view, measure and print, but not save or export.",
++  "Sin suscripción activa: se puede ver, medir e imprimir, pero no guardar ni exportar.": "Without an active subscription you can view, measure and print, but not save or export.",
++  "Sin suscripción activa no se puede guardar ni exportar.": "Without an active subscription you cannot save or export.",
++
++  /* Lo que dice el motor de licencias (core/licencia.py habla español) */
++  "draw101 no está activado en esta computadora. Con una clave de suscripción (T101-XXXX-XXXX-XXXX) se activa.": "draw101 is not activated on this computer. A subscription key (T101-XXXX-XXXX-XXXX) activates it.",
++  "draw101 no está activado en esta computadora: por ahora sólo lectura. Con una clave de suscripción se activa.": "draw101 is not activated on this computer: read-only for now. A subscription key activates it.",
++  "La suscripción de draw101 venció. Por ahora se puede seguir trabajando; renuévala para no quedarte en modo lectura.": "The draw101 subscription expired. You can keep working for now; renew it so you don't end up read-only.",
++  "La suscripción venció: draw101 quedó en modo lectura. Se puede ver, medir e imprimir, pero no guardar ni exportar.": "The subscription expired: draw101 is read-only. You can view, measure and print, but not save or export.",
++  "La clave no tiene la forma correcta (T101-XXXX-XXXX-XXXX).": "The key is not in the right shape (T101-XXXX-XXXX-XXXX).",
++  "Esa clave no existe. Revísala o pídela a Taller 101.": "That key does not exist. Check it or ask Taller 101 for one.",
++  "Esa licencia no está pagada o ya venció.": "That license is unpaid or has expired.",
++  "Taller 101 suspendió esa licencia.": "Taller 101 suspended that license.",
++  "Esa licencia ya está usada en todas sus computadoras. Libera una desde otra máquina o pide más lugares.": "That license is already used on all its computers. Release one from the other machine or ask for more seats.",
++  "El permiso guardado no sirve: hay que activar otra vez.": "The stored permit is no good: it has to be activated again.",
++  "Esta computadora ya no tiene lugar en la licencia: hay que activarla otra vez.": "This computer no longer has a seat in the license: it has to be activated again.",
++  "Esa licencia ya no existe.": "That license no longer exists.",
+ };
+diff --git a/ui/idioma.js b/ui/idioma.js
+index 5f20c4d..61264a2 100644
+--- a/ui/idioma.js
++++ b/ui/idioma.js
+@@ -198,6 +198,7 @@ const Idioma = (() => {
+     COMPARE: "COMPARAR", REGENALL: "REGENERAR", PERFORMANCE: "RENDIMIENTO", DRAFT: "BORRADOR",
+     SETTINGS: "CONFIGURACION", CONFIG: "CONFIGURACION", OPTIONS: "CONFIGURACION", LANGUAGE: "IDIOMA",
+     UPDATE: "ACTUALIZAR", UPDATES: "ACTUALIZAR", NOTICES: "AVISOS", NEWS: "AVISOS", LICENSES: "LICENCIAS", CREDITS: "LICENCIAS",
++    LICENSE: "LICENCIA", SUBSCRIPTION: "LICENCIA", ACTIVATE: "LICENCIA",
+     UNITS: "UNIDADES", CENTER: "CENTRAR", CENTERVIEWPORT: "CENTRAR", GUIDE: "GUIA", TOOLS: "GUIA",
+     PREVIEW: "VISTAPREVIA", PRINTPREVIEW: "VISTAPREVIA",
+   };
+diff --git a/ui/index.html b/ui/index.html
+index 10507f6..ef97e7a 100644
+--- a/ui/index.html
++++ b/ui/index.html
+@@ -94,6 +94,7 @@
+       <button data-cmd="ODA">Instalar ODA File Converter…</button>
+       <button data-cmd="ACTUALIZAR">Buscar actualizaciones…</button>
+       <button data-cmd="AVISOS">Avisos de Taller 101…</button>
++      <button data-cmd="LICENCIA">Suscripción de draw101…</button>
+       <button data-cmd="LICENCIAS">Licencias de terceros…</button>
+       <button data-cmd="VERSION">Acerca de draw101</button>
+     </div>
+@@ -355,6 +356,7 @@
+ <script src="barra.js"></script>
+ <script src="ajustes.js"></script>
+ <script src="actualizar.js"></script>
++<script src="licencia.js"></script>
+ <script src="color.js"></script>
+ <script src="app.js"></script>
+ <script src="sugeridor.js"></script>
+diff --git a/ui/styles.css b/ui/styles.css
+index 36c65d0..0c811de 100644
+--- a/ui/styles.css
++++ b/ui/styles.css
+@@ -866,6 +866,14 @@ select.campo-hoja{position:absolute;z-index:6;box-sizing:border-box;padding:2px
+  * de diálogo (z 60). Antes vivía dentro del lienzo con z 7: al arrancar, con
+  * la pantalla de inicio abierta, el aviso quedaba tapado y Mike nunca lo veía
+  * (15-sep-2026, tres versiones seguidas). */
++/* «Modo lectura»: se ve siempre, pero no grita. Se pica y abre el panel de
++   la suscripción, que es lo que uno quiere hacer al verlo. */
++#marca-lectura{align-self:center;margin-right:10px;padding:2px 8px;border-radius:999px;
++  background:color-mix(in srgb,var(--acc2) 16%,transparent);color:var(--acc2);
++  border:1px solid color-mix(in srgb,var(--acc2) 40%,transparent);
++  font-size:11px;letter-spacing:.02em;cursor:pointer;user-select:none;white-space:nowrap}
++#marca-lectura:hover{background:color-mix(in srgb,var(--acc2) 26%,transparent)}
++
+ #letrero-version{position:fixed;left:50%;top:14px;transform:translateX(-50%);z-index:56;
+   display:flex;align-items:center;gap:10px;padding:8px 10px 8px 14px;max-width:min(680px,90%);
+   background:var(--panel);border:1px solid var(--linea);border-left:3px solid var(--acc2);
