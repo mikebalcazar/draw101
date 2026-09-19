@@ -151,12 +151,16 @@ class Taller101Falso:
 # --- La prueba ---------------------------------------------------------------
 
 def correr(r: comun.Reporte) -> None:
+    # El corte va primero y sin condiciones: no necesita firmar nada, y es la
+    # comprobación que de verdad protege —que la versión publicada no deje a un
+    # taller sin poder guardar—. En el corredor, donde no hay `cryptography` ni
+    # navegador, ésta es la única que corre, y es la que tiene que correr.
+    _corte_encendido(r)
     if not _hay_cryptography():
-        r.cierto(True, "sin `cryptography` no se puede firmar: la prueba se salta",
+        r.cierto(True, "sin `cryptography` no se puede firmar: el resto se salta",
                  "pip install cryptography")
         return
     _motor(r)
-    _corte_encendido(r)
     _interfaz(r)
 
 
