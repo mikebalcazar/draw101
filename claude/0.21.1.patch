@@ -1,0 +1,71 @@
+diff --git a/core/version.py b/core/version.py
+index a773d8a..3b88b8f 100644
+--- a/core/version.py
++++ b/core/version.py
+@@ -21,13 +21,41 @@ Numeración: `mayor.menor.parche`.
+ 
+ from __future__ import annotations
+ 
+-VERSION = "0.20.20"
++VERSION = "0.21.1"
+ FECHA = "2026-09-19"
+ 
+ # Qué trae cada entrega, en el idioma del taller y no en el del código.
+ # La más nueva arriba. Lo que se lista aquí es lo que el comando VERSION
+ # enseña en la consola.
+ BITACORA: list[dict] = [
++    {
++        "version": "0.21.1",
++        "fecha": "2026-09-19",
++        "cambios": [
++            "draw101 se abre entrando con la cuenta de la suite: correo y "
++            "contraseña, o Google. La pantalla la sirve suite101, y abajo trae "
++            "«Tengo una clave T101-…» para quien ya la tenga. Sin licencia, no "
++            "abre.",
++            "IMPORTANTE, si venías de la 0.21.0: aquélla se armó desde una "
++            "rama vieja y se llevó por delante todo lo de la 0.20.7 a la "
++            "0.20.20 —paleta de color, sugeridor, Guardar como DXF/DWG, barra "
++            "de descarga, el panel de licencia—. Esta versión los trae de "
++            "vuelta, con la puerta de cuenta encima.",
++            "La puerta y el motor comparten carpeta y huella del equipo. En la "
++            "0.21.0 la puerta guardaba el permiso en un lado y el motor lo "
++            "buscaba en otro, con huellas distintas: el programa abría y "
++            "adentro seguía diciendo «sin activar».",
++            "La huella del equipo ya no sale de tu nombre de usuario ni del "
++            "nombre de la máquina: es un azar que se guarda la primera vez. No "
++            "identifica a nadie. Reinstalar Windows cuenta como equipo nuevo, "
++            "y el lugar viejo se libera desde master101.",
++            "Sin internet se abre igual mientras el permiso no venza —trae su "
++            "propia fecha firmada—. Un servidor caído no borra tu licencia: "
++            "«la suite dice que no» y «no se pudo llegar» son cosas distintas.",
++            "Pruebas t036 (14) y licencia.mjs (20) además de t033 y t035: en "
++            "total 710 comprobaciones en 36 pruebas.",
++        ],
++    },
+     {
+         "version": "0.20.20",
+         "fecha": "2026-09-19",
+diff --git a/package.json b/package.json
+index be185cf..a99d24c 100644
+--- a/package.json
++++ b/package.json
+@@ -1,8 +1,8 @@
+ {
+   "name": "draw101",
+   "productName": "draw101",
+-  "version": "0.20.20",
+-  "_versionApp": "0.20.20 — la que enseña la app viene de core/version.py; ésta sólo existe porque electron-builder exige semver",
++  "version": "0.21.1",
++  "_versionApp": "0.21.1 — la que enseña la app viene de core/version.py; ésta sólo existe porque electron-builder exige semver",
+   "_notaAsociaciones": "draw101 aparece en «Abrir con» de los DXF y DWG y en Aplicaciones predeterminadas, pero NO se roba la asociación: quién los abre por omisión lo sigue decidiendo el usuario (regla de Mike, 0.11.2). electron-builder registra el ProgID; Windows decide. El .t101d sí es nuestro. Ojo: dentro de «build» electron-builder rechaza cualquier clave que no conozca, aunque empiece con guión bajo (se cazó armando la 0.20.16).",
+   "_notaEmpaque": "asar apagado a propósito: main.js busca server.py junto a electron/, y el motor de Python no puede vivir dentro de un asar. Y electron-builder saca cualquier node_modules de los globs de `files`, así que los dos motores de DWG (dwgjs/node_modules) se copian por extraResources o la app se queda sin leer DWG.",
+   "description": "CAD 2D de Taller 101 — leer, trazar, acotar e imprimir planos",
+@@ -21,7 +21,7 @@
+   "build": {
+     "appId": "mx.taller101.dibujador",
+     "productName": "draw101",
+-    "artifactName": "draw101-0.20.20-setup.${ext}",
++    "artifactName": "draw101-0.21.1-setup.${ext}",
+     "directories": {
+       "output": "dist",
+       "buildResources": "build"
