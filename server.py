@@ -20,7 +20,7 @@ import sys
 import threading
 import time
 
-from fastapi import FastAPI, HTTPException
+from fastapi import FastAPI, HTTPException, Request
 from fastapi.responses import FileResponse, JSONResponse, Response
 from fastapi.staticfiles import StaticFiles
 from pydantic import BaseModel
@@ -285,6 +285,27 @@ def actualizacion(red: int = 1, forzar: int = 0):
 @app.post("/api/actualizacion/bajar")
 def actualizacion_bajar():
     return mod_actualizar.bajar()
+
+
+@app.post("/api/actualizacion/manifiesto")
+async def actualizacion_manifiesto(request: Request):
+    """El puntero, traído por la interfaz con el motor de red de Chromium
+    (respaldo cuando el de Python no llega al sitio; Mike, 15-sep-2026)."""
+    datos = await request.json()
+    if mod_actualizar.recibir_manifiesto(datos) is None:
+        raise HTTPException(400, "Ese puntero no trae una versión que entienda.")
+    return mod_actualizar.resumen(con_red=True, forzar=False)
+
+
+@app.post("/api/actualizacion/recibir")
+async def actualizacion_recibir(request: Request):
+    """El instalador bajado por la interfaz (mismo respaldo). Cuerpo: los bytes
+    tal cual; cabecera X-Nombre: el nombre del archivo."""
+    datos = await request.body()
+    try:
+        return mod_actualizar.recibir_archivo(request.headers.get("x-nombre", ""), datos)
+    except ValueError as exc:
+        raise HTTPException(400, str(exc))
 
 
 @app.get("/api/actualizacion/estado")

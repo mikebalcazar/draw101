@@ -56,7 +56,7 @@ AGENTE = f"draw101/{VERSION} (Taller 101)"
 _estado = {"fase": "nada", "pct": 0, "mensaje": "", "version": "", "ruta": ""}
 _hilo: threading.Thread | None = None
 _candado = threading.Lock()
-_ultima_revision: dict = {"cuando": 0.0, "datos": None}
+_ultima_revision: dict = {"cuando": 0.0, "datos": None, "error": ""}
 
 
 def _leer_url(url: str, espera: int = ESPERA_RED) -> bytes:
@@ -98,12 +98,50 @@ def _consultar(espera: int = ESPERA_RED) -> dict | None:
     """Va al puntero y guarda lo que diga. None si no contestó."""
     try:
         datos = json.loads(_leer_url(PUNTERO, espera).decode("utf-8"))
-    except Exception:
+    except Exception as exc:
+        # Mike (15-sep-2026): «nunca me avisa que hay nueva versión» y el cuadro
+        # decía sólo «no se pudo consultar (¿sin internet?)». Se guarda la razón
+        # de verdad para enseñarla, en vez de adivinar.
+        _ultima_revision["error"] = f"{type(exc).__name__}: {exc}"
         return None
     r = _interpretar(datos)
     if r is not None:
-        _ultima_revision.update({"cuando": time.time(), "datos": r})
+        _ultima_revision.update({"cuando": time.time(), "datos": r, "error": ""})
+    else:
+        _ultima_revision["error"] = "el puntero contestó pero no trae una versión que entienda"
     return r
+
+
+def recibir_manifiesto(datos: dict) -> dict | None:
+    """El puntero traído por OTRO camino (la interfaz lo baja con el motor de
+    red de Chromium cuando el de Python no llega). Se interpreta y se guarda
+    igual que si lo hubiera traído `_consultar`."""
+    r = _interpretar(datos or {})
+    if r is not None:
+        _ultima_revision.update({"cuando": time.time(), "datos": r, "error": ""})
+    return r
+
+
+def recibir_archivo(nombre: str, datos: bytes) -> dict:
+    """El instalador bajado por la interfaz (mismo respaldo por Chromium). Se
+    guarda en la carpeta de descargas, se comprueba contra la huella del
+    puntero y queda «listo» para instalar, como si lo hubiera bajado el hilo."""
+    ult = _ultima_revision["datos"]
+    if not ult:
+        raise ValueError("No sé qué versión es: primero hay que consultar el puntero.")
+    nombre = pathlib.Path(nombre or ult["archivo"] or f"draw101-{ult['version']}-setup.exe").name
+    destino = _carpeta_descargas() / nombre
+    parcial = destino.with_suffix(destino.suffix + ".parte")
+    parcial.write_bytes(datos)
+    if ult["bytes"] and len(datos) != ult["bytes"]:
+        parcial.unlink(missing_ok=True)
+        raise ValueError(f"Llegaron {len(datos)} bytes y el sitio dice {ult['bytes']}: descarga incompleta.")
+    if ult["sha256"] and _sha256(parcial) != ult["sha256"]:
+        parcial.unlink(missing_ok=True)
+        raise ValueError("Lo bajado no cuadra con la huella que publica Taller 101. No se instala.")
+    parcial.replace(destino)
+    _poner("listo", 100, f"draw101 {ult['version']} bajado y comprobado. Listo para instalar.", ult["version"], str(destino))
+    return dict(_estado)
 
 
 _vigilante: threading.Thread | None = None
@@ -192,6 +230,8 @@ def resumen(con_red: bool = True, forzar: bool = False) -> dict:
         "auto": bool(prefs.get("actualizaciones_auto", True)),
         "estado": dict(_estado),
         "consulto": ult is not None,
+        "error": "" if ult is not None else (_ultima_revision.get("error") or ""),
+        "puntero": PUNTERO,
     }
 
 

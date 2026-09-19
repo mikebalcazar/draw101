@@ -536,6 +536,14 @@ class Documento:
         elif clase == "ent~":
             _, id_, antes, despues = op
             self.entidades[id_] = ent_mod.de_dict(antes if invertir else despues)
+        elif clase == "unidades":
+            # ("unidades", vieja, nueva, escalar): deshacer es aplicar al revés.
+            from . import unidades as mod_unidades
+            _, vieja, nueva, escalar = op
+            if invertir:
+                mod_unidades.aplicar(self, nueva, vieja, escalar)
+            else:
+                mod_unidades.aplicar(self, vieja, nueva, escalar)
         elif clase == "capa+":
             _, nombre, datos = op
             if invertir:
@@ -584,7 +592,7 @@ class Documento:
         self.sucio = True
         self.ultimos_tocados = self._ids_de(tr)
         self.ultimo_toco_capas = any(
-            str(op[0]).startswith("capa") for op in tr.ops if op)
+            str(op[0]).startswith("capa") or op[0] == "unidades" for op in tr.ops if op)
         return tr.nombre
 
     def rehacer(self) -> str | None:
@@ -597,7 +605,7 @@ class Documento:
         self.sucio = True
         self.ultimos_tocados = self._ids_de(tr)
         self.ultimo_toco_capas = any(
-            str(op[0]).startswith("capa") for op in tr.ops if op)
+            str(op[0]).startswith("capa") or op[0] == "unidades" for op in tr.ops if op)
         return tr.nombre
 
     # =====================================================================

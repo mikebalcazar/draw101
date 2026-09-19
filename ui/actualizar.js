@@ -26,7 +26,7 @@ const Actualizar = (() => {
     return n.length ? n.map((x) => "· " + x).join("\n") : "";
   }
 
-  function vigilar(alTerminar) {
+  function vigilar(alTerminar, tambienAlFallar = false) {
     if (vigilando) return;
     vigilando = setInterval(async () => {
       let e;
@@ -42,6 +42,7 @@ const Actualizar = (() => {
       } else if (e.fase === "error") {
         avisar(e.mensaje, true, 12000);
         Comandos.eco(e.mensaje, "mal");
+        if (tambienAlFallar && alTerminar) alTerminar(e);
       }
     }, 600);
   }
@@ -84,14 +85,66 @@ const Actualizar = (() => {
     if (e.abrir) { window.open(e.abrir, "_blank"); return; }
     if (e.fase === "listo") { instalarBajada(e); return; }
     avisar(F("Bajando draw101 {0}…", ult.version), false, 0);
-    vigilar(instalarBajada);
+    vigilar(async (fin) => {
+      if (fin.fase !== "error" || !ult.url) return;
+      // El motor no pudo bajar: se intenta con el motor de red de Chromium.
+      Comandos.eco(Tr("El motor no pudo bajar el instalador; se intenta con el navegador…"));
+      try { instalarBajada(await bajarPorChromium(ult)); }
+      catch (err) { avisar(F("Tampoco se pudo bajar con el navegador: {0}", err.message), true, 12000); }
+    }, true);
   }
 
   /** Enseña el cuadro. `silencio`: sólo si hay versión nueva y no está ignorada. */
+  /* Respaldo por Chromium (Mike, 15-sep-2026: «nunca me avisa que hay nueva
+   * versión»). El motor de Python consulta el puntero con urllib; en la máquina
+   * de Mike eso fallaba y nunca supimos por qué, mientras el navegador sí
+   * llegaba a GitHub. Si el motor no pudo, la interfaz baja el puntero con
+   * fetch (el mismo motor de red de Chromium, con los certificados y el proxy
+   * de Windows) y se lo entrega al motor; lo mismo con el instalador. */
+  async function traerPunteroPorChromium(r) {
+    if (!r || r.consulto || !r.puntero) return r;
+    try {
+      const resp = await fetch(r.puntero, { cache: "no-store" });
+      if (!resp.ok) throw new Error(`HTTP ${resp.status}`);
+      const datos = await resp.json();
+      const r2 = await post("/api/actualizacion/manifiesto", datos);
+      r2.respaldo = "chromium";
+      return r2;
+    } catch (err) {
+      r.errorChromium = String(err && err.message || err);
+      return r;
+    }
+  }
+
+  async function bajarPorChromium(ult) {
+    avisar(F("Bajando draw101 {0}…", ult.version), false, 0);
+    const resp = await fetch(ult.url, { cache: "no-store" });
+    if (!resp.ok || !resp.body) throw new Error(`HTTP ${resp.status}`);
+    const lector = resp.body.getReader();
+    const trozos = [];
+    let ya = 0, ultimoAviso = 0;
+    for (;;) {
+      const { done, value } = await lector.read();
+      if (done) break;
+      trozos.push(value); ya += value.length;
+      if (Date.now() - ultimoAviso > 300) {
+        ultimoAviso = Date.now();
+        avisar(F("Bajando draw101 {0}… {1} de {2} MB", ult.version, Math.round(ya / 1e6), Math.round((ult.bytes || 0) / 1e6)), false, 0);
+      }
+    }
+    const cuerpo = new Blob(trozos);
+    avisar(Tr("Comprobando que lo bajado esté íntegro…"), false, 0);
+    const res = await fetch("/api/actualizacion/recibir", { method: "POST", headers: { "X-Nombre": ult.archivo || "" }, body: cuerpo });
+    const e = await res.json().catch(() => ({}));
+    if (!res.ok) throw new Error(e.detail || `HTTP ${res.status}`);
+    return e;
+  }
+
   async function revisar({ silencio = false, forzar = false } = {}) {
     let r;
     try { r = await api(`/api/actualizacion?red=1&forzar=${forzar ? 1 : 0}`); }
     catch (err) { if (!silencio) avisar(err.message, true); return null; }
+    if (!r.consulto) r = await traerPunteroPorChromium(r);
     const ult = r.ultimo;
     if (silencio) {
       if (!r.hay_nueva || r.ignorada || ofrecidaEnSesion === ult.version) return r;
@@ -110,7 +163,11 @@ const Actualizar = (() => {
       instalarBajada(r.estado); return r;
     }
     const lineas = [F("Tienes draw101 {0}.", r.actual)];
-    if (!r.consulto) lineas.push(Tr("No se pudo consultar el sitio de Taller 101 (¿sin internet?)."));
+    if (!r.consulto) {
+      lineas.push(Tr("No se pudo consultar el sitio de Taller 101 (¿sin internet?)."));
+      if (r.error) lineas.push(Tr("El motor dijo: ") + r.error);
+      if (r.errorChromium) lineas.push(Tr("Y el navegador dijo: ") + r.errorChromium);
+    }
     else if (!r.hay_nueva) lineas.push(Tr("Es la última versión."));
     else {
       lineas.push(F("Hay una versión nueva: {0} ({1}).", ult.version, ult.fecha || ""));
