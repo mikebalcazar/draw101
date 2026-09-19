@@ -24,3 +24,5 @@ B14-congeladas-y-circulos.patch
 B15-imagenes-instalador-node.patch
 B16-baja-y-pregunta.patch
 0.20.19.patch
+B17-licencias-en-la-app.patch
+0.20.20.patch
