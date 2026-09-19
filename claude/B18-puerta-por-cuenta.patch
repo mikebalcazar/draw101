@@ -1,0 +1,321 @@
+diff --git a/core/licencia.py b/core/licencia.py
+index 6b122ee..2016052 100644
+--- a/core/licencia.py
++++ b/core/licencia.py
+@@ -45,12 +45,13 @@ from __future__ import annotations
+ 
+ import base64
+ import datetime as dt
+-import getpass
+ import hashlib
+ import json
+ import os
+ import pathlib
+ import platform
++import secrets
++import sys
+ import time
+ import urllib.error
+ import urllib.request
+@@ -92,11 +93,15 @@ PROGRAMA = "draw101"
+ #: que Mike pidió el 19-sep-2026 para ver las pantallas antes de que corten.
+ #: En `True`, sin permiso válido no se guarda ni se exporta.
+ #:
+-#: Se puede encender por un rato sin armar una versión nueva, con
+-#: `DRAW101_CORTA=1` en el ambiente: así se ve cómo va a quedar la 0.20.21 sin
+-#: dejar a nadie sin guardar para siempre. Lo que manda el día de la
+-#: publicación es esta constante.
+-_CORTA_DE_FABRICA = False
++#: Se puede apagar por un rato sin armar una versión nueva, con
++#: `DRAW101_CORTA=0` en el ambiente. Lo que manda el día de la publicación es
++#: esta constante.
++#:
++#: **Encendido desde la 0.21.1** (Mike, 19-sep-2026 por la tarde): la puerta
++#: de arranque ya no deja abrir sin licencia, así que dejar guardar libre
++#: adentro no protegería de nada y sí confundiría. Los dos candados dicen lo
++#: mismo.
++_CORTA_DE_FABRICA = True
+ CORTA = os.environ.get("DRAW101_CORTA", "1" if _CORTA_DE_FABRICA else "0") == "1"
+ 
+ #: A partir de cuántos días por vencer se empieza a avisar.
+@@ -115,19 +120,44 @@ def _archivo() -> pathlib.Path:
+     return config.carpeta_usuario() / "licencia.json"
+ 
+ 
+-def huella_maquina() -> str:
+-    """Algo estable que identifique el equipo, sin identificar a la persona.
++def _archivo_equipo() -> pathlib.Path:
++    return config.carpeta_usuario() / "equipo.json"
++
+ 
+-    Nombre del equipo, usuario de Windows y arquitectura, pasados por sha256:
+-    lo que viaja es el resumen, no los datos. Cambiar de computadora obliga a
+-    reactivar, que es justo lo que se quiere cobrar por máquina.
++def huella_maquina() -> str:
++    """El identificador de este equipo: lo que la suite cuenta como un «lugar».
++
++    **Es un azar guardado la primera vez**, no el nombre del equipo ni la MAC
++    ni el número de serie del disco. No identifica a la persona y no se puede
++    volver atrás; el nombre del equipo entra sólo como sal. Reinstalar Windows
++    cuenta como equipo nuevo, que es lo honesto —para la suite lo es—, y el
++    lugar viejo se libera desde master101.
++
++    Vive en `equipo.json`, **el mismo archivo y la misma carpeta** que usa la
++    puerta de arranque (`electron/licencia-nucleo.js`). Tiene que ser el mismo
++    valor en los dos lados: el permiso viene atado a una huella, y si el motor
++    calculara otra, rechazaría el permiso que la puerta acaba de conseguir y
++    la app abriría diciendo «sin activar». Antes esto era un resumen de
++    nombre+usuario+arquitectura, y por eso no cuadraban.
+     """
++    archivo = _archivo_equipo()
++    try:
++        guardado = json.loads(archivo.read_text(encoding="utf-8"))
++        if isinstance(guardado.get("id"), str) and len(guardado["id"]) >= 16:
++            return guardado["id"]
++    except Exception:
++        pass                         # no había, o venía roto: se hace uno
++    semilla = secrets.token_hex(32) + platform.node() + sys.platform
++    ident = base64.urlsafe_b64encode(
++        hashlib.sha256(semilla.encode("utf-8")).digest()).decode().rstrip("=")
+     try:
+-        usuario = getpass.getuser()
++        archivo.parent.mkdir(parents=True, exist_ok=True)
++        archivo.write_text(json.dumps(
++            {"id": ident, "hecho": dt.datetime.utcnow().isoformat() + "Z"}, indent=2),
++            encoding="utf-8")
+     except Exception:
+-        usuario = "?"
+-    crudo = f"{platform.node()}|{usuario}|{platform.machine()}|{platform.system()}"
+-    return hashlib.sha256(crudo.encode("utf-8")).hexdigest()
++        pass                         # sin disco donde guardar: molesto, no fatal
++    return ident
+ 
+ 
+ # --- El permiso firmado -----------------------------------------------------
+diff --git a/electron/main.js b/electron/main.js
+index 8c9c61f..ec992ed 100644
+--- a/electron/main.js
++++ b/electron/main.js
+@@ -16,6 +16,19 @@
+ const { app, BrowserWindow, dialog, ipcMain, Menu, shell } = require("electron");
+ const { spawn } = require("child_process");
+ const path = require("path");
++const licencia = require("./licencia");
++
++const NOMBRE_APP = "draw101";
++
++/** La versión que enseña la app viene de core/version.py; aquí sólo se usa
++ *  para que master101 vea qué versión corre cada equipo, así que si no se
++ *  puede leer, no pasa nada. */
++function versionDeLaApp() {
++  try {
++    const txt = fs.readFileSync(path.join(RAIZ, "core", "version.py"), "utf8");
++    return (txt.match(/^VERSION\s*=\s*["']([^"']+)["']/m) || [])[1] || null;
++  } catch { return null; }
++}
+ const fs = require("fs");
+ const http = require("http");
+ 
+@@ -502,6 +515,30 @@ app.whenReady().then(async () => {
+   Menu.setApplicationMenu(null);
+   abrirCargando();
+   try {
++    /* La puerta de licencia va ANTES del motor: si esta máquina no tiene
++     * licencia, arrancar Python sería trabajo tirado, y la pantalla de la
++     * suite se ve mejor sin la de carga encima.
++     *
++     * La pantalla la sirve la suite (`GET /licencias/entrar`), no draw101:
++     * ahí viven las dos formas de entrar —cuenta de la suite con correo y
++     * contraseña o con Google, y abajo la clave T101-… para quien ya la
++     * tenga— y así draw101 y nest101 no acaban con dos puertas distintas.
++     * El permiso que devuelve queda en la misma carpeta que lee el motor,
++     * de modo que el panel de adentro habla de esta misma licencia. */
++    if (cargando && !cargando.isDestroyed()) cargando.hide();
++    const paso = await licencia.asegurar({ version: versionDeLaApp(), avisar: avisarCargando });
++    if (!paso.ok) {
++      if (cargando && !cargando.isDestroyed()) cargando.destroy();
++      if (paso.motivo === "sin_red") {
++        dialog.showErrorBox(NOMBRE_APP,
++          "La licencia de este equipo ya venció y no hubo forma de llegar a la suite para renovarla.\n\n" +
++          "Conéctate a internet y vuelve a abrir " + NOMBRE_APP + ".");
++      }
++      app.quit();
++      return;
++    }
++    if (cargando && !cargando.isDestroyed()) cargando.show();
++
+     avisarCargando("Arrancando el motor de dibujo");
+     await arrancarMotor();
+     avisarCargando("Abriendo la interfaz");
+diff --git a/pruebas/navegador.py b/pruebas/navegador.py
+index a759604..dbd3325 100644
+--- a/pruebas/navegador.py
++++ b/pruebas/navegador.py
+@@ -74,6 +74,11 @@ def programa(idioma: str = "es-MX", entorno: dict | None = None):
+              # las pruebas de interfaz. La que sí la quiere probar (t035) la
+              # vuelve a encender por `entorno`.
+              "DRAW101_OFRECER_ACTIVACION": "0",
++             # Y el corte, apagado: desde la 0.21.1 viene encendido de fábrica,
++             # y una prueba de dibujo no tiene licencia ni puede tenerla, así
++             # que cada guardado le contestaría 402. Las dos pruebas que miden
++             # el corte (t035 y t036) lo encienden a mano.
++             "DRAW101_CORTA": "0",
+              **(entorno or {})})
+     base = f"http://127.0.0.1:{puerto}"
+     try:
+diff --git a/pruebas/t033_licencia.py b/pruebas/t033_licencia.py
+index 71b7292..c87515a 100644
+--- a/pruebas/t033_licencia.py
++++ b/pruebas/t033_licencia.py
+@@ -180,9 +180,19 @@ def _motor(r: comun.Reporte) -> None:
+         r.igual(licencia.estado()["estado"], "sin_activar",
+                 "un token «v2» no se interpreta a la fuerza")
+ 
+-        # 9. La huella es estable dentro de la misma máquina.
++        # 9. La huella es estable dentro de la misma máquina. Desde la 0.21.1
++        # es un azar guardado, no un resumen de quién eres: 43 letras de
++        # base64url. Que no se pueda volver atrás es justo lo que la hace no
++        # identificar a nadie. El acuerdo con la puerta lo mide t036.
+         r.igual(licencia.huella_maquina(), maquina, "la huella de la máquina no cambia sola")
+-        r.igual(len(maquina), 64, "y es un resumen, no los datos de la persona")
++        r.cierto(len(maquina) >= 16 and all(c.isalnum() or c in "-_" for c in maquina),
++                 "y tiene la forma que la suite acepta", f"{len(maquina)} caracteres")
++        import getpass
++        try:
++            r.cierto(getpass.getuser() not in maquina,
++                     "sin el nombre de usuario dentro: no identifica a la persona")
++        except Exception:
++            pass
+     finally:
+         licencia.LLAVE_PUBLICA = viejo_llave
+         licencia.CORTA = viejo_corta
+diff --git a/pruebas/t035_licencia_en_la_app.py b/pruebas/t035_licencia_en_la_app.py
+index 3f582d0..88a2d98 100644
+--- a/pruebas/t035_licencia_en_la_app.py
++++ b/pruebas/t035_licencia_en_la_app.py
+@@ -10,11 +10,8 @@ ve quien usa draw101, que es lo que puede costar un cliente enojado:
+   · Una clave mala enseña **el motivo del servidor**, no «Error 402».
+   · El comando `LICENCIA` abre el panel, y de ahí se **suelta** la máquina.
+   · El **latido** corre la fecha de corte sola.
+-  · Con el corte **apagado** (0.20.20, como se publica) guardar y exportar
+-    funcionan sin licencia: es lo que Mike decidió el 19-sep-2026 y hay que
+-    dejarlo clavado, porque encenderlo antes de tiempo deja a un taller sin
+-    poder guardar.
+-  · Con el corte **encendido** (lo que será la 0.20.21) guardar y exportar
++  · Con el corte **encendido** —como sale desde la 0.21.1, decisión de Mike
++    del 19-sep-2026 por la tarde— guardar y exportar
+     contestan 402 con el motivo, el autoguardado se calla, e **imprimir sigue
+     funcionando**: quien ya pagó por el plano tiene derecho a verlo y
+     sacarlo en papel.
+@@ -151,12 +148,16 @@ class Taller101Falso:
+ # --- La prueba ---------------------------------------------------------------
+ 
+ def correr(r: comun.Reporte) -> None:
++    # El corte va primero y sin condiciones: no necesita firmar nada, y es la
++    # comprobación que de verdad protege —que la versión publicada no deje a un
++    # taller sin poder guardar—. En el corredor, donde no hay `cryptography` ni
++    # navegador, ésta es la única que corre, y es la que tiene que correr.
++    _corte_encendido(r)
+     if not _hay_cryptography():
+-        r.cierto(True, "sin `cryptography` no se puede firmar: la prueba se salta",
++        r.cierto(True, "sin `cryptography` no se puede firmar: el resto se salta",
+                  "pip install cryptography")
+         return
+     _motor(r)
+-    _corte_encendido(r)
+     _interfaz(r)
+ 
+ 
+@@ -187,8 +188,12 @@ def _motor(r: comun.Reporte) -> None:
+         try:
+             r.igual(licencia.estado()["estado"], "sin_activar",
+                     "recién instalado, draw101 está sin activar")
++            licencia.CORTA = False
+             r.cierto(licencia.puede_escribir(),
+-                     "y con el corte apagado (0.20.20) igual se puede guardar")
++                     "con el corte apagado se puede guardar aunque no haya licencia")
++            licencia.CORTA = True
++            r.cierto(not licencia.puede_escribir(),
++                     "y encendido —como sale la 0.21.1— no")
+ 
+             # Una clave que no existe: el motivo se dice en cristiano.
+             try:
+@@ -219,6 +224,7 @@ def _motor(r: comun.Reporte) -> None:
+             e = licencia.estado()
+             r.igual(e["estado"], "por_vencer", "a tres días avisa que está por vencer")
+             r.cierto(e["puede_escribir"], "pero deja trabajar: todavía está pagada")
++            r.cierto(e["licencia_al_corriente"], "y la suscripción cuenta como al corriente")
+ 
+             # El corte encendido es lo único que separa esto de la versión que cobra.
+             falso.dias = -1
+@@ -365,9 +371,11 @@ def _interfaz(r: comun.Reporte) -> None:
+             "DRAW101_LICENCIA_LLAVE": falso.publica,
+             "HOME": str(carpeta),
+             "USERPROFILE": str(carpeta),
+-            # navegador.py la apaga para todas las pruebas (taparía el
+-            # lienzo); ésta es justamente la que tiene que verla.
++            # navegador.py apaga las dos para todas las pruebas (la pantalla
++            # taparía el lienzo, y el corte tumbaría los guardados); ésta es
++            # justamente la que tiene que verlas.
+             "DRAW101_OFRECER_ACTIVACION": "1",
++            "DRAW101_CORTA": "1",
+         }
+         try:
+             with nav.programa(entorno=entorno) as (pagina, base):
+@@ -396,18 +404,22 @@ def _interfaz(r: comun.Reporte) -> None:
+                 e = pagina.evaluate("fetch('/api/licencia').then((r) => r.json())")
+                 r.igual(e["estado"], "sin_activar",
+                         "la app recién abierta se ve sin activar")
+-                r.cierto(e["puede_escribir"],
+-                         "y con el corte apagado la app sabe que sí se puede guardar")
+-                r.cierto(not e["corta"],
+-                         "la 0.20.20 sale con el corte apagado (Mike, 19-sep-2026)")
++                r.cierto(e["corta"], "la 0.21.1 sale cortando (Mike, 19-sep-2026)")
++                r.cierto(not e["puede_escribir"],
++                         "y sin licencia la app sabe que no se puede guardar")
+ 
+-                # 2. Sin corte no se apagan los botones: apagar algo que
+-                # funciona es mentir al revés.
++                # 2. Y se nota: la marca arriba y los botones apagados. Que se
++                # vea es la mitad del trabajo; un botón que falla al picarlo
++                # enseña menos que uno que ya venía apagado.
+                 nav.cerrar_inicio(pagina)
+-                r.cierto(not pagina.locator("#b-guardar").is_disabled(),
+-                         "con el corte apagado, el botón de guardar sigue vivo")
+-                r.cierto(not pagina.locator("#marca-lectura").count(),
+-                         "y no aparece la marca de «modo lectura»")
++                pagina.evaluate("Licencia.revisar({ofrecer: false})")
++                pagina.wait_for_timeout(500)
++                r.cierto(pagina.locator("#b-guardar").is_disabled(),
++                         "sin licencia, el botón de guardar viene apagado")
++                r.cierto(pagina.locator("#b-exportar").is_disabled(),
++                         "y el de exportar también")
++                r.igual(pagina.locator("#marca-lectura").count(), 1,
++                         "y arriba se ve la marca de «modo lectura»")
+ 
+                 # 3. El comando LICENCIA abre el panel y dice la verdad.
+                 nav.comando(pagina, "LICENCIA")
+@@ -415,8 +427,8 @@ def _interfaz(r: comun.Reporte) -> None:
+                 texto = pagina.locator(".dlg .panel").inner_text()
+                 r.cierto("Sin activar" in texto or "Not activated" in texto,
+                          "el panel dice que está sin activar", texto[:80])
+-                r.cierto("no corta" in texto or "does not cut" in texto,
+-                         "y avisa de que por ahora no corta", texto[:120])
++                r.cierto("lectura" in texto.lower() or "read-only" in texto.lower(),
++                         "y avisa de que está en modo lectura", texto[:120])
+ 
+                 # 4. Activar desde ahí, con la clave buena.
+                 pagina.click(".dlg .pie button.pri")        # «Activar…»
+@@ -428,6 +440,12 @@ def _interfaz(r: comun.Reporte) -> None:
+                 r.igual(e["estado"], "activa", "activar desde la app deja la licencia activa")
+                 r.igual(e["cliente"], "Carpintería Ruiz", "con el cliente que dijo el servidor")
+                 r.igual(len(falso.maquinas), 1, "y el servidor apuntó esta máquina")
++                # Y lo que estaba apagado revive sin recargar la app.
++                pagina.wait_for_timeout(300)
++                r.cierto(not pagina.locator("#b-guardar").is_disabled(),
++                         "al activar, el botón de guardar revive sin reiniciar")
++                r.igual(pagina.locator("#marca-lectura").count(), 0,
++                         "y la marca de modo lectura se quita sola")
+ 
+                 # 5. El panel ya dice otra cosa, y ofrece soltar.
+                 nav.comando(pagina, "LICENCIA")
