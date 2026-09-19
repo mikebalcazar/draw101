@@ -46,6 +46,25 @@ BITACORA: list[dict] = [
         ],
     },
     {
+        "version": "0.20.6",
+        "fecha": "2026-09-15",
+        "cambios": [
+            "Cambiar de unidades (UNIDADES) ya es un paso del historial: Ctrl+Z "
+            "lo deshace y devuelve tamaños y unidad, y los siguientes Ctrl+Z "
+            "siguen en orden. Antes el cambio no se anotaba, y deshacer después "
+            "de escalar restauraba la acción anterior con los números de antes "
+            "(en milímetros dentro de un plano en centímetros): lo dibujado "
+            "«desaparecía» diez veces más lejos.",
+            "El aviso de versión nueva tiene respaldo: si el motor no llega al "
+            "sitio de Taller 101, la interfaz consulta con el motor de red del "
+            "navegador (los mismos certificados y proxy que Chrome) y también "
+            "baja el instalador por ahí; se comprueba la huella igual. Y cuando "
+            "no se pudo consultar, el cuadro dice la razón exacta.",
+            "Pruebas t021 (unidades y deshacer, 20 comprobaciones) y t022 "
+            "(actualizador: razón del fallo y respaldo, 17 comprobaciones).",
+        ],
+    },
+    {
         "version": "0.20.5",
         "fecha": "2026-09-15",
         "cambios": [

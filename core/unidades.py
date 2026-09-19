@@ -197,26 +197,34 @@ def cambiar(doc, nueva: str, escalar: bool = True) -> dict:
     vieja = doc.unidades if doc.unidades in MM_POR_NOMBRE else "mm"
     if nueva == vieja:
         return {"unidades": nueva, "factor": 1.0, "escalado": False}
-    k = MM_POR_NOMBRE[vieja] / MM_POR_NOMBRE[nueva]      # unidades nuevas por unidad vieja
+    k = aplicar(doc, vieja, nueva, escalar)
+    # Una sola anotación en el historial (Mike, 14-sep-2026): antes el cambio
+    # se hacía en silencio y no quedaba en la pila. Consecuencia: Ctrl+Z justo
+    # después no deshacía el cambio de unidades sino la acción anterior, y la
+    # restauraba con los números de ANTES de escalar (en mm dentro de un plano
+    # que ya estaba en cm): las entidades «desaparecían» diez veces más lejos.
+    # Ahora deshacer devuelve las unidades y el tamaño, y luego sigue en orden.
+    doc.historial.anotar(("unidades", vieja, nueva, bool(escalar)))
+    return {"unidades": nueva, "factor": k if escalar else 1.0, "escalado": bool(escalar)}
+
+
+def aplicar(doc, vieja: str, nueva: str, escalar: bool) -> float:
+    """Hace el cambio de `vieja` a `nueva` sobre el documento, sin anotar nada.
+    Es lo que usan `cambiar` y el historial (deshacer = aplicar al revés).
+    Devuelve el factor k (unidades nuevas por unidad vieja)."""
+    k = MM_POR_NOMBRE[vieja] / MM_POR_NOMBRE[nueva]
     if escalar:
-        silencio = doc.historial.silencio
-        doc.historial.silencio = True
-        try:
-            for e in doc.entidades.values():
-                escalar_entidad(e, k)
-            for lay in (doc.layouts or []):
-                for v in (lay.get("ventanas") or []):
-                    c = v.get("centro") or [0, 0]
-                    v["centro"] = [c[0] * k, c[1] * k]
-            for est in doc.estilos_cota.values():
-                est["factor_escala"] = float(est.get("factor_escala", 1.0) or 1.0) * k
-                est["decimales"] = DECIMALES_POR_NOMBRE[nueva]
-        finally:
-            doc.historial.silencio = silencio
-        doc.olvidar()
-    else:
+        for e in doc.entidades.values():
+            escalar_entidad(e, k)
+        for lay in (doc.layouts or []):
+            for v in (lay.get("ventanas") or []):
+                c = v.get("centro") or [0, 0]
+                v["centro"] = [c[0] * k, c[1] * k]
         for est in doc.estilos_cota.values():
-            est["decimales"] = DECIMALES_POR_NOMBRE[nueva]
+            est["factor_escala"] = float(est.get("factor_escala", 1.0) or 1.0) * k
+    for est in doc.estilos_cota.values():
+        est["decimales"] = DECIMALES_POR_NOMBRE[nueva]
     doc.unidades = nueva
     doc.sucio = True
-    return {"unidades": nueva, "factor": k if escalar else 1.0, "escalado": bool(escalar)}
+    doc.olvidar()
+    return k
