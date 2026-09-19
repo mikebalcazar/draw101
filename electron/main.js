@@ -18,9 +18,22 @@ const { spawn } = require("child_process");
 const path = require("path");
 const fs = require("fs");
 const http = require("http");
+const licencia = require("./licencia");
 
 const RAIZ = path.join(__dirname, "..");
 const EXTENSIONES = [".t101d", ".dxf", ".dwg"];
+
+const NOMBRE_APP = "draw101";
+
+/** La versión que enseña la app viene de core/version.py; aquí sólo se usa
+ *  para que master101 vea qué versión corre cada equipo, así que si no se
+ *  puede leer, no pasa nada. */
+function versionDeLaApp() {
+  try {
+    const txt = fs.readFileSync(path.join(RAIZ, "core", "version.py"), "utf8");
+    return (txt.match(/^VERSION\s*=\s*["']([^"']+)["']/m) || [])[1] || null;
+  } catch { return null; }
+}
 
 let ventana = null;
 let python = null;
@@ -469,6 +482,22 @@ app.whenReady().then(async () => {
   Menu.setApplicationMenu(null);
   abrirCargando();
   try {
+    /* La puerta de licencia va ANTES del motor: si esta máquina no tiene
+     * licencia, arrancar Python sería trabajo tirado, y la pantalla de la
+     * suite se ve mejor sin la de carga encima. */
+    if (cargando && !cargando.isDestroyed()) cargando.hide();
+    const paso = await licencia.asegurar({ version: versionDeLaApp(), avisar: avisarCargando });
+    if (!paso.ok) {
+      if (cargando && !cargando.isDestroyed()) cargando.destroy();
+      if (paso.motivo === "sin_red") {
+        dialog.showErrorBox(NOMBRE_APP,
+          "La licencia de este equipo ya venció y no hubo forma de llegar a la suite para renovarla.\n\n" +
+          "Conéctate a internet y vuelve a abrir " + NOMBRE_APP + ".");
+      }
+      app.quit();
+      return;
+    }
+    if (cargando && !cargando.isDestroyed()) cargando.show();
     avisarCargando("Arrancando el motor de dibujo");
     await arrancarMotor();
     avisarCargando("Abriendo la interfaz");

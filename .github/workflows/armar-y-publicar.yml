@@ -135,6 +135,12 @@ jobs:
           test -d dwgjs/node_modules/@node-projects/acad-ts/dist
           echo "motores DWG ok"
 
+      # La puerta de licencia es JavaScript y no la alcanza verificar.py, que
+      # es de Python. Corre siempre, incluso con saltar_pruebas: son dos
+      # segundos y dejar salir un instalador que no abre es lo caro.
+      - name: Pruebas de la puerta de licencia
+        run: node pruebas/licencia.mjs
+
       - name: Pruebas (python verificar.py)
         if: ${{ !inputs.saltar_pruebas }}
         run: |
