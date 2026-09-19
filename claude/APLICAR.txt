@@ -27,4 +27,5 @@ B16-baja-y-pregunta.patch
 B17-licencias-en-la-app.patch
 0.20.20.patch
 B18-puerta-por-cuenta.patch
+B19-t035-al-dia.patch
 0.21.1.patch
