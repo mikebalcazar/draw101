@@ -1,0 +1,358 @@
+diff --git a/core/papel.py b/core/papel.py
+index 3acf521..f5c570a 100644
+--- a/core/papel.py
++++ b/core/papel.py
+@@ -475,11 +475,27 @@ def trazos_papel(doc: Documento, layout: dict, propias: bool = True) -> dict:
+                 continue
+             if not t.get("puntos"):
+                 continue
++            # El patrón del tipo de línea viaja en milímetros **del modelo**
++            # (core/capas.TIPOS_LINEA) y aquí todo pasa a milímetros de papel,
++            # así que también se escala por `f`. Sin esto, una raya de 12.7 mm
++            # de una capa HIDDEN se pintaba en la hoja como 12.7 mm de papel:
++            # a 1:20 son veinte veces más larga de lo que se ve en el modelo,
++            # y una línea oculta salía impresa casi continua (Mike,
++            # 22-sep-2026: «las líneas (tipo) en la página de impresión deben
++            # escalarse igual que como se ven en el modelo»). Es el PSLTSCALE
++            # 0 de AutoCAD: el patrón sigue a la ventana, no al papel.
++            #
++            # El texto ya se escalaba así unas líneas arriba; esto es lo mismo
++            # para las rayas. Lo que se dibujó **sobre la hoja** no pasa por
++            # aquí: ya está en milímetros de papel y su patrón también.
++            pat = t.get("patron")
++            extra = {"patron": [v * f for v in pat]} if pat else {}
+             pts = [aPapel(q) for q in t["puntos"]]
+             for i in range(len(pts) - 1):
+                 trozo = _recortar(pts[i], pts[i + 1], caja)
+                 if trozo:
+-                    salida.append({**t, "color": tinta, "puntos": [trozo[0], trozo[1]], "ventana": j})
++                    salida.append({**t, **extra, "color": tinta,
++                                   "puntos": [trozo[0], trozo[1]], "ventana": j})
+ 
+     # Una hoja que sale en blanco teniendo dibujo es el error que más caro se
+     # paga: se descubre en el plóter, con el papel puesto. Si el modelo tiene
+diff --git a/core/version.py b/core/version.py
+index ec7eb57..bb09013 100644
+--- a/core/version.py
++++ b/core/version.py
+@@ -39,6 +39,15 @@ BITACORA: list[dict] = [
+             "hacerla azul y corregirla después.",
+             "Comando CAPA (atajos CA y LA; LAYER en inglés): crea la capa y la "
+             "deja puesta a trabajar.",
++            "Un texto seleccionado ya se puede arrastrar de su cuadrito para "
++            "moverlo, sin teclear MOVER. Antes no enseñaba ninguno: los "
++            "cuadritos salían de las rayas de la entidad, y un texto no tiene "
++            "rayas.",
++            "Las rayas del tipo de línea (OCULTA, EJES, TRAZOS) se ven en la "
++            "hoja igual que en el modelo. Antes el patrón se copiaba a la hoja "
++            "sin escalar, así que a 1:20 una línea oculta salía impresa casi "
++            "continua. Ahora sigue a la escala de la ventana, en pantalla, en "
++            "PDF y en SVG.",
+         ],
+     },
+     {
+diff --git a/package.json b/package.json
+index e717688..a63fba2 100644
+--- a/package.json
++++ b/package.json
+@@ -2,7 +2,7 @@
+   "name": "draw101",
+   "productName": "draw101",
+   "version": "0.21.2",
+-  "_versionApp": "0.21.1 — la que enseña la app viene de core/version.py; ésta sólo existe porque electron-builder exige semver",
++  "_versionApp": "0.21.2 — la que enseña la app viene de core/version.py; ésta sólo existe porque electron-builder exige semver",
+   "_notaAsociaciones": "draw101 aparece en «Abrir con» de los DXF y DWG y en Aplicaciones predeterminadas, pero NO se roba la asociación: quién los abre por omisión lo sigue decidiendo el usuario (regla de Mike, 0.11.2). electron-builder registra el ProgID; Windows decide. El .t101d sí es nuestro. Ojo: dentro de «build» electron-builder rechaza cualquier clave que no conozca, aunque empiece con guión bajo (se cazó armando la 0.20.16).",
+   "_notaEmpaque": "asar apagado a propósito: main.js busca server.py junto a electron/, y el motor de Python no puede vivir dentro de un asar. Y electron-builder saca cualquier node_modules de los globs de `files`, así que los dos motores de DWG (dwgjs/node_modules) se copian por extraResources o la app se queda sin leer DWG.",
+   "description": "CAD 2D de Taller 101 — leer, trazar, acotar e imprimir planos",
+@@ -21,7 +21,7 @@
+   "build": {
+     "appId": "mx.taller101.dibujador",
+     "productName": "draw101",
+-    "artifactName": "draw101-0.21.1-setup.${ext}",
++    "artifactName": "draw101-0.21.2-setup.${ext}",
+     "directories": {
+       "output": "dist",
+       "buildResources": "build"
+diff --git a/pruebas/t038_arrastrar_y_tipo_linea.py b/pruebas/t038_arrastrar_y_tipo_linea.py
+new file mode 100644
+index 0000000..a91b0fa
+--- /dev/null
++++ b/pruebas/t038_arrastrar_y_tipo_linea.py
+@@ -0,0 +1,227 @@
++"""t038 · Dos cosas que Mike pidió el 22-sep-2026.
++
++  1. «Cuando selecciono un texto, quiero arrastrarlo de su handle y no puedo
++     para moverlo, tengo que poner MOVE. Quiero poder arrastrarlo sin
++     necesidad del comando.»
++
++     Un texto no tiene rayas, y los grips se sacaban de las rayas: un rótulo
++     seleccionado no enseñaba ni un cuadrito. Ahora su grip es el punto de
++     inserción y jalarlo lo mueve.
++
++  2. «Las líneas (tipo) en la página de impresión deben escalarse igual que
++     como se ven en el modelo.»
++
++     El patrón del tipo de línea viene en milímetros del modelo. Al componer
++     la hoja se transformaba la geometría a milímetros de papel pero el patrón
++     se copiaba tal cual, así que a 1:20 una raya de 12.7 mm salía veinte
++     veces más larga de lo que se ve en el modelo: una capa HIDDEN se imprimía
++     casi continua. Ahora el patrón escala con la ventana, como el texto. Es
++     el PSLTSCALE 0 de AutoCAD.
++"""
++
++from __future__ import annotations
++
++import json
++import pathlib
++import re
++
++from core import entidades as ent
++from core import papel
++from core.capas import Capa
++from core.documento import Documento
++from core.version import VERSION
++from pruebas import comun, navegador
++
++DESCRIPCION = "arrastrar un texto por su grip, el tipo de línea en la hoja y la versión del empaque"
++
++RAIZ = pathlib.Path(__file__).resolve().parent.parent
++
++
++def correr(r: comun.Reporte) -> None:
++    _version_del_empaque(r)
++    _tipo_linea_en_la_hoja(r)
++    if not navegador.hay_navegador():
++        r.cierto(True, "(sin Playwright en esta máquina: el resto se salta)")
++        return
++    with navegador.programa() as (pagina, base):
++        navegador.cerrar_inicio(pagina)
++        _grip_de_texto(r, pagina, base)
++        r.igual(pagina.errores, [], "sin errores de JavaScript")
++
++
++# --- 1 · El tipo de línea en la hoja ---------------------------------------
++
++def _hoja_con_linea_oculta() -> tuple[Documento, dict]:
++    doc = Documento.nuevo()
++    doc.unidades = "mm"
++    doc.capa_agregar(Capa("OCULTAS", tipo_linea="HIDDEN"))
++    with doc.transaccion("Dibujar"):
++        doc.agregar(ent.Linea(p1=[0, 0], p2=[600, 0], capa="OCULTAS"))
++    hoja = papel.layout_nuevo("Plano 1", "A3")
++    hoja["ventanas"] = [papel.ventana_nueva(20, 20, 120, 120, centro=[300, 0], escala=20)]
++    doc.layouts = [hoja]
++    return doc, hoja
++
++
++def _patron_de_la_ventana(salida: dict) -> list | None:
++    for t in salida["trazos"]:
++        if t.get("ventana") == 0 and t.get("id") != "ventana" and t.get("patron"):
++            return t["patron"]
++    return None
++
++
++def _tipo_linea_en_la_hoja(r: comun.Reporte) -> None:
++    doc, hoja = _hoja_con_linea_oculta()
++
++    salida = papel.trazos_papel(doc, hoja)
++    pat = _patron_de_la_ventana(salida)
++    r.exige(pat is not None, "la línea oculta llega a la hoja con su patrón")
++    # HIDDEN son 6.35 mm de raya y 3.175 de espacio en el modelo. A 1:20, en el
++    # papel son la veinteava parte: es exactamente lo que se ve en el modelo,
++    # reducido por la ventana.
++    r.casi(pat[0], 6.35 / 20, "a 1:20 la raya sale a la veinteava parte", 1e-9)
++    r.casi(pat[1], -3.175 / 20, "y el espacio también, con su signo", 1e-9)
++
++    # Cambiar la escala de la ventana cambia el patrón en la misma proporción:
++    # eso es lo que hace que la hoja se vea como el modelo a cualquier escala.
++    hoja["ventanas"][0]["escala"] = 50
++    pat50 = _patron_de_la_ventana(papel.trazos_papel(doc, hoja))
++    r.casi(pat50[0], 6.35 / 50, "a 1:50 la raya se reduce otro tanto", 1e-9)
++    r.casi(pat[0] / pat50[0], 50 / 20,
++           "el patrón sigue a la escala de la ventana, no al papel", 1e-9)
++
++    # Lo que se dibuja **sobre la hoja** ya está en milímetros de papel: su
++    # patrón no se toca. Si se tocara, una nota rayada cambiaría de aspecto al
++    # cambiar la escala de una ventana que no tiene nada que ver con ella.
++    with doc.transaccion("Sobre la hoja"):
++        doc.agregar(ent.Linea(p1=[10, 250], p2=[200, 250], capa="OCULTAS",
++                              espacio=hoja["nombre"]))
++    propias = [t for t in papel.trazos_papel(doc, hoja)["trazos"]
++               if t.get("ventana") is None and t.get("patron")]
++    r.exige(bool(propias), "lo dibujado sobre la hoja llega con su patrón")
++    r.casi(propias[0]["patron"][0], 6.35,
++           "y ése se queda en milímetros de papel, sin escalar", 1e-9)
++
++
++# --- 2 · El grip del texto -------------------------------------------------
++
++def _mover(pagina, p):
++    x, y = pagina.evaluate("""(p) => {
++        const [x, y] = aPX(p[0], p[1]);
++        const caja = document.querySelector('#lienzo').getBoundingClientRect();
++        return [caja.left + x, caja.top + y];
++    }""", list(p))
++    pagina.mouse.move(x, y)
++    pagina.wait_for_timeout(120)
++    return x, y
++
++
++def _grip_de_texto(r: comun.Reporte, pagina, base) -> None:
++    pagina.evaluate("""() => {
++        estado.prefs.osnap = false; estado.prefs.ortho = false;
++        estado.prefs.snap_rejilla = false; estado.prefs.dinamica = false;
++        encuadrarCaja(-200, -200, 1600, 1200);
++    }""")
++    pagina.wait_for_timeout(200)
++
++    navegador.comando(pagina, "TEXTO")
++    navegador.comando(pagina, "300,300")
++    pagina.wait_for_selector(".dlg", timeout=5000)
++    pagina.evaluate("""() => {
++        const t = document.querySelector('.dlg [data-clave=texto]');
++        t.value = 'ROTULO';
++        t.dispatchEvent(new Event('input', { bubbles: true }));
++        const a = document.querySelector('.dlg [data-clave=altura]');
++        if (a) { a.value = '40'; a.dispatchEvent(new Event('input', { bubbles: true })); }
++        document.querySelector('.dlg .pie .pri').click();
++    }""")
++    pagina.wait_for_selector(".dlg", state="detached", timeout=5000)
++    pagina.wait_for_timeout(400)
++
++    ident = pagina.evaluate(
++        "() => { const t = estado.trazos.find((x) => x.clase === 'texto'); return t ? t.id : null; }")
++    r.exige(bool(ident), "hay un texto en el dibujo")
++
++    # Seleccionarlo y mirar sus grips. Esto es lo que no existía: sin rayas,
++    # no había grip, y el texto sólo se podía mover tecleando MOVER.
++    grips = pagina.evaluate("""(id) => {
++        estado.sel.clear(); estado.sel.add(id);
++        return Seleccion.gripsDe(id).map((q) => [q[0], q[1]]);
++    }""", ident)
++    r.igual(len(grips), 1, "un texto seleccionado enseña un grip, y uno solo")
++    if grips:
++        r.punto(grips[0], [300, 300], "y está en su punto de inserción", 1e-6)
++
++    # Y se arrastra de verdad, con el ratón: agarrar el grip, mover, soltar.
++    _mover(pagina, [300, 300])
++    pagina.mouse.down()
++    _mover(pagina, [800, 700])
++    fantasma = pagina.evaluate("""() => {
++        const f = (estado.hule || {}).fantasma || [];
++        const t = f.find((x) => x.clase === 'texto');
++        return t ? [t.p[0], t.p[1]] : null;
++    }""")
++    if r.cierto(fantasma is not None, "mientras se jala, el texto se ve donde va a caer"):
++        r.punto(fantasma, [800, 700], "siguiendo al cursor", 3)
++    pagina.mouse.up()
++    pagina.wait_for_timeout(500)
++
++    donde = pagina.evaluate("""(id) => {
++        const t = estado.trazos.find((x) => x.id === id && x.clase === 'texto');
++        return t ? [t.p[0], t.p[1]] : null;
++    }""", ident)
++    r.exige(donde is not None, "el texto sigue ahí después de soltarlo")
++    r.punto(donde, [800, 700], "y quedó donde se soltó, sin teclear ningún comando", 3)
++
++    # Sin selección no hay grip que agarrar: arrastrar ahí es la ventana de
++    # selección de siempre, no un texto que se va sin querer.
++    pagina.keyboard.press("Escape")
++    pagina.evaluate("() => { estado.sel.clear(); }")
++    antes = pagina.evaluate("""(id) => {
++        const t = estado.trazos.find((x) => x.id === id);
++        return t ? [t.p[0], t.p[1]] : null;
++    }""", ident)
++    _mover(pagina, [800, 700])
++    pagina.mouse.down()
++    _mover(pagina, [1000, 900])
++    pagina.mouse.up()
++    pagina.wait_for_timeout(400)
++    despues = pagina.evaluate("""(id) => {
++        const t = estado.trazos.find((x) => x.id === id);
++        return t ? [t.p[0], t.p[1]] : null;
++    }""", ident)
++    r.punto(despues, antes, "sin seleccionar, arrastrar no mueve el texto", 1e-6)
++
++
++# --- 3 · La versión en el empaque ------------------------------------------
++
++def _version_del_empaque(r: comun.Reporte) -> None:
++    """`package.json` dice la versión en tres sitios y los tres tienen que
++    decir lo mismo que `core/version.py`.
++
++    Esto no es quisquillosería: es lo que ha tumbado dos armados. El de la
++    0.21.0 y el de la 0.21.2 murieron en el corredor, después de subir la
++    rama, porque `artifactName` —el nombre del .exe que sale— se quedó con la
++    versión anterior. El corredor lo comprueba y para; el problema es que lo
++    comprueba **allá**, con la rama ya empujada y veinte minutos de espera por
++    delante. Aquí se ve en un milisegundo, antes de publicar nada.
++    """
++    paquete = json.loads((RAIZ / "package.json").read_text(encoding="utf-8"))
++    r.igual(paquete.get("version"), VERSION,
++            "package.json dice la misma versión que core/version.py")
++
++    nombre = ((paquete.get("build") or {}).get("artifactName")) or ""
++    r.igual(nombre, "draw101-" + VERSION + "-setup.${ext}",
++            "y el artifactName —el nombre del instalador— también")
++
++    # La nota de al lado es documentación, pero envejece igual de mal: si dice
++    # otra versión, el siguiente que la lea se va a fiar de ella.
++    nota = paquete.get("_versionApp") or ""
++    m = re.match(r"\s*(\d+\.\d+\.\d+)", nota)
++    r.igual(m.group(1) if m else None, VERSION,
++            "y la nota de _versionApp no se quedó en una versión vieja")
++
++    # La bitácora que enseña el comando VERSION tiene que hablar de ésta.
++    from core.version import BITACORA
++    r.igual(BITACORA[0]["version"], VERSION,
++            "la bitácora arranca con la versión que se va a publicar")
+diff --git a/ui/seleccion.js b/ui/seleccion.js
+index c432646..42bd5db 100644
+--- a/ui/seleccion.js
++++ b/ui/seleccion.js
+@@ -530,6 +530,23 @@ const Seleccion = (() => {
+         }
+       } else if (pr.tipo === "punto") pts.push(pr.p);
+     }
++    // Un texto no tiene rayas, así que hasta aquí no le tocaba ningún grip:
++    // seleccionarlo no enseñaba ningún cuadrito y la única forma de moverlo
++    // era teclear MOVER (Mike, 22-sep-2026). Su grip es el punto de
++    // inserción, y jalarlo lo mueve.
++    //
++    // Sólo cuando la entidad no tiene una sola raya: así una cota —que lleva
++    // líneas *y* su número— no gana un grip de más encima del texto, y un
++    // bloque sigue enseñando los suyos. Y sólo si es nuestra: de una entidad
++    // «cruda» (la que el archivo trae y no sabemos editar) el motor no
++    // aceptaría el cambio, y un grip que no hace nada es peor que ninguno.
++    if (!pts.length) {
++      const tz = Indice.trazos(id);
++      if (tz.length === 1 && tz[0].clase === "texto" && tz[0].p && !tz[0].ajena) {
++        pts.push([tz[0].p[0], tz[0].p[1]]);
++      }
++    }
++
+     // sin repetidos: los vértices de una polilínea salen dos veces
+     const vistos = new Set();
+     const salida = pts.filter((q) => {
+@@ -600,6 +617,11 @@ const Seleccion = (() => {
+     const dx = destino[0] - punto[0], dy = destino[1] - punto[1];
+     const salida = [];
+     for (const tr of estado.trazos) {
++      // El texto se arrastra entero: no tiene vértices que mover, se corre.
++      if (tr.id === id && tr.clase === "texto" && tr.p) {
++        salida.push({ ...tr, p: [tr.p[0] + dx, tr.p[1] + dy] });
++        continue;
++      }
+       if (tr.id !== id || !tr.puntos || tr.puntos.length < 2) continue;
+       const pts = tr.puntos.map((q) => {
+         if (medio) {
+@@ -698,6 +720,9 @@ const Seleccion = (() => {
+         const liga = (ent.liga || []).slice();
+         if (liga[i]) { liga[i] = null; cambios.liga = liga; }
+       }
++    } else if (ent.tipo === "texto" || ent.tipo === "textom") {
++      // El grip de un texto es su punto de inserción: soltarlo lo mueve ahí.
++      if (igual([ent.p[0], ent.p[1]], punto)) cambios.p = [p[0], p[1]];
+     } else if (ent.tipo === "punto") {
+       cambios.p = p;
+     } else if (ent.tipo === "spline") {
