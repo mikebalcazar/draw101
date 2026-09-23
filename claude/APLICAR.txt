@@ -29,3 +29,4 @@ B17-licencias-en-la-app.patch
 B18-puerta-por-cuenta.patch
 B19-t035-al-dia.patch
 0.21.1.patch
+0.21.2.patch
