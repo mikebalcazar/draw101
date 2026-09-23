@@ -1,0 +1,382 @@
+diff --git a/core/version.py b/core/version.py
+index 3b88b8f..ec7eb57 100644
+--- a/core/version.py
++++ b/core/version.py
+@@ -21,13 +21,26 @@ Numeración: `mayor.menor.parche`.
+ 
+ from __future__ import annotations
+ 
+-VERSION = "0.21.1"
+-FECHA = "2026-09-19"
++VERSION = "0.21.2"
++FECHA = "2026-09-22"
+ 
+ # Qué trae cada entrega, en el idioma del taller y no en el del código.
+ # La más nueva arriba. Lo que se lista aquí es lo que el comando VERSION
+ # enseña en la consola.
+ BITACORA: list[dict] = [
++    {
++        "version": "0.21.2",
++        "fecha": "2026-09-22",
++        "cambios": [
++            "El botón «Nueva capa» ya sirve. Pedía el nombre con la ventanita "
++            "del navegador, que dentro de la aplicación no existe: no salía "
++            "nada, ni capa ni aviso. Ahora abre el cuadro de siempre y de paso "
++            "deja escoger color, grosor y tipo de línea al crearla, en vez de "
++            "hacerla azul y corregirla después.",
++            "Comando CAPA (atajos CA y LA; LAYER en inglés): crea la capa y la "
++            "deja puesta a trabajar.",
++        ],
++    },
+     {
+         "version": "0.21.1",
+         "fecha": "2026-09-19",
+diff --git a/package.json b/package.json
+index a99d24c..e717688 100644
+--- a/package.json
++++ b/package.json
+@@ -1,7 +1,7 @@
+ {
+   "name": "draw101",
+   "productName": "draw101",
+-  "version": "0.21.1",
++  "version": "0.21.2",
+   "_versionApp": "0.21.1 — la que enseña la app viene de core/version.py; ésta sólo existe porque electron-builder exige semver",
+   "_notaAsociaciones": "draw101 aparece en «Abrir con» de los DXF y DWG y en Aplicaciones predeterminadas, pero NO se roba la asociación: quién los abre por omisión lo sigue decidiendo el usuario (regla de Mike, 0.11.2). electron-builder registra el ProgID; Windows decide. El .t101d sí es nuestro. Ojo: dentro de «build» electron-builder rechaza cualquier clave que no conozca, aunque empiece con guión bajo (se cazó armando la 0.20.16).",
+   "_notaEmpaque": "asar apagado a propósito: main.js busca server.py junto a electron/, y el motor de Python no puede vivir dentro de un asar. Y electron-builder saca cualquier node_modules de los globs de `files`, así que los dos motores de DWG (dwgjs/node_modules) se copian por extraResources o la app se queda sin leer DWG.",
+diff --git a/pruebas/t025_sugeridor.py b/pruebas/t025_sugeridor.py
+index ff73de8..426185a 100644
+--- a/pruebas/t025_sugeridor.py
++++ b/pruebas/t025_sugeridor.py
+@@ -95,9 +95,14 @@ def _flechas(r: comun.Reporte, pagina) -> None:
+     pagina.keyboard.press("ArrowDown")
+     r.igual(pagina.evaluate("document.getElementById('cmd').value"), "CIRCULO",
+             "la flecha abajo escribe CIRCULO en la caja (no borra lo tecleado)")
++    # CIRCULO va primero porque «C» es su atajo exacto; las demás salen en
++    # orden. CAPA entró en la lista el 22-sep-2026 y por eso se cuela aquí.
++    pagina.keyboard.press("ArrowDown")
++    r.igual(pagina.evaluate("document.getElementById('cmd').value"), "CAPA",
++            "y la siguiente baja a CAPA")
+     pagina.keyboard.press("ArrowDown")
+     r.igual(pagina.evaluate("document.getElementById('cmd').value"), "COTA",
+-            "y la siguiente baja a COTA")
++            "y la de después a COTA")
+     pagina.keyboard.press("Escape")
+     pagina.evaluate("() => { const c = document.getElementById('cmd'); c.value = ''; c.dispatchEvent(new Event('input')); }")
+ 
+diff --git a/pruebas/t035_licencia_en_la_app.py b/pruebas/t035_licencia_en_la_app.py
+index 88a2d98..436d87c 100644
+--- a/pruebas/t035_licencia_en_la_app.py
++++ b/pruebas/t035_licencia_en_la_app.py
+@@ -227,7 +227,16 @@ def _motor(r: comun.Reporte) -> None:
+             r.cierto(e["licencia_al_corriente"], "y la suscripción cuenta como al corriente")
+ 
+             # El corte encendido es lo único que separa esto de la versión que cobra.
+-            falso.dias = -1
++            #
++            # −2 días y no −1, y la razón no es capricho: el servidor falso
++            # fecha el permiso con la hora **UTC** y el motor compara con el
++            # día **local** (core/licencia._hoy), a propósito, para no pelearse
++            # con la zona horaria de cada taller. En México —seis horas atrás—
++            # de las 18:00 a la medianoche el UTC ya es del día siguiente, así
++            # que «hace un día» en UTC cae en el mismo día local y el permiso
++            # todavía no está vencido. Con −1 la prueba pasaba en el corredor
++            # (que va en UTC) y fallaba en la máquina de Mike por la tarde.
++            falso.dias = -2
+             licencia.latido()
+             licencia.CORTA = False
+             r.cierto(licencia.puede_escribir(),
+diff --git a/pruebas/t037_capa_nueva.py b/pruebas/t037_capa_nueva.py
+new file mode 100644
+index 0000000..09b449c
+--- /dev/null
++++ b/pruebas/t037_capa_nueva.py
+@@ -0,0 +1,157 @@
++"""t037 · La capa nueva: el cuadro, el comando CAPA, y nada de `prompt()`.
++
++Mike, 22-sep-2026: «le pongo en new layer y no me hace un nuevo layer, no
++sirve el comando».
++
++Lo que pasaba: el botón «Nueva capa» pedía el nombre con `prompt()`, la
++ventanita del navegador. **Electron no tiene `prompt()`** —la llamada lanza
++«prompt() is not supported.»— y como el manejador era `async`, el error se iba
++a una promesa que nadie miraba. Resultado: ni ventana, ni capa, ni aviso. El
++botón quedaba mudo y desde fuera parecía que el comando no servía.
++
++En el navegador de las pruebas `prompt()` sí existe, así que la prueba de
++antes nunca lo iba a cazar. Por eso aquí hay dos cosas distintas:
++
++  · Una revisión **del código**: en `ui/` no puede quedar ninguna llamada a
++    `prompt()`. Es la única forma de cazar esto sin arrancar Electron, y es lo
++    que faltaba. (`alert` y `confirm` sí existen en Electron; ésos se quedan.)
++  · Una revisión **de que funciona**: se pica el botón de verdad, se llena el
++    cuadro y se comprueba que la capa nace en el motor, con su color y su
++    grosor. Y el comando CAPA, que antes no existía aunque el código lo
++    mencionara.
++"""
++
++from __future__ import annotations
++
++import pathlib
++import re
++
++from pruebas import comun, navegador
++
++DESCRIPCION = "capa nueva: cuadro propio, comando CAPA y cero prompt()"
++
++RAIZ = pathlib.Path(__file__).resolve().parent.parent
++
++
++def correr(r: comun.Reporte) -> None:
++    _sin_prompt(r)
++    if not navegador.hay_navegador():
++        r.cierto(True, "(sin Playwright en esta máquina: el resto se salta)")
++        return
++    with navegador.programa() as (pagina, base):
++        navegador.cerrar_inicio(pagina)
++        _el_boton(r, pagina, base)
++        _nombre_repetido(r, pagina)
++        _comando_capa(r, pagina, base)
++        r.igual(pagina.errores, [], "sin errores de JavaScript")
++
++
++# --- 1 · Que no vuelva a entrar un prompt() --------------------------------
++
++def _sin_prompt(r: comun.Reporte) -> None:
++    """`prompt(` en ui/, fuera de comentarios y de cadenas."""
++    culpables = []
++    for archivo in sorted((RAIZ / "ui").glob("*.js")):
++        for n, linea in enumerate(archivo.read_text(encoding="utf-8").splitlines(), 1):
++            limpia = linea.strip()
++            if limpia.startswith("//") or limpia.startswith("*") or limpia.startswith("/*"):
++                continue
++            # `prompt(` pegado a algo (`Dialogo.prompt(`, `.prompt(`) no es la
++            # del navegador; la que importa es la suelta.
++            if re.search(r"(?<![\w.$])prompt\s*\(", linea):
++                culpables.append(f"{archivo.name}:{n}")
++    r.igual(culpables, [],
++            "ningún archivo de ui/ llama a prompt(): Electron no lo tiene")
++
++
++# --- 2 · El botón, picado de verdad ----------------------------------------
++
++def _abrir_cuadro(pagina, selector: str = "#b-capa-nueva"):
++    # Sin `await`: el cuadro devuelve una promesa que no se resuelve hasta que
++    # alguien le pica, y esperarla aquí dejaría colgada la prueba.
++    pagina.evaluate(f"() => {{ document.querySelector('{selector}').click(); }}")
++    pagina.wait_for_selector(".dlg", timeout=5000)
++
++
++def _llenar(pagina, valores: dict) -> None:
++    for clave, valor in valores.items():
++        pagina.evaluate(
++            """([c, v]) => {
++                const el = document.querySelector(`.dlg [data-clave="${c}"]`);
++                el.value = v;
++                el.dispatchEvent(new Event('input', { bubbles: true }));
++                el.dispatchEvent(new Event('change', { bubbles: true }));
++            }""", [clave, valor])
++
++
++def _el_boton(r: comun.Reporte, pagina, base) -> None:
++    _abrir_cuadro(pagina)
++    campos = pagina.evaluate(
++        "() => [...document.querySelectorAll('.dlg [data-clave]')].map((e) => e.dataset.clave)")
++    r.igual(sorted(campos), ["color", "grosor", "nombre", "tipo_linea"],
++            "el botón abre el cuadro de la casa, con nombre, color, grosor y tipo de línea")
++
++    sugerido = pagina.evaluate("() => document.querySelector('.dlg [data-clave=nombre]').value")
++    r.igual(sugerido, "T101-", "con el prefijo de la casa ya puesto")
++
++    _llenar(pagina, {"nombre": "T101-PRUEBA", "color": "#f2603c", "grosor": "50"})
++    pagina.click(".dlg .pie .pri")
++    pagina.wait_for_selector(".dlg", state="detached", timeout=5000)
++    pagina.wait_for_timeout(250)
++
++    capas = {c["nombre"]: c for c in navegador.estado(base)["capas"]}
++    r.cierto("T101-PRUEBA" in capas, "y al aceptar la capa nace en el motor")
++    if "T101-PRUEBA" in capas:
++        c = capas["T101-PRUEBA"]
++        r.igual(c["color"].upper(), "#F2603C", "con el color que se escogió")
++        r.igual(c["grosor"], 50, "y con el grosor que se escogió")
++
++    en_panel = pagina.evaluate(
++        "() => [...document.querySelectorAll('#capas .capa')].some((e) => e.textContent.includes('T101-PRUEBA'))")
++    r.cierto(en_panel, "y aparece en el panel sin recargar")
++
++
++def _nombre_repetido(r: comun.Reporte, pagina) -> None:
++    _abrir_cuadro(pagina)
++    _llenar(pagina, {"nombre": "T101-PRUEBA"})
++    pagina.click(".dlg .pie .pri")
++    pagina.wait_for_timeout(200)
++    abierto = pagina.evaluate("() => !!document.querySelector('.dlg')")
++    queja = pagina.evaluate(
++        "() => { const q = document.querySelector('.dlg .queja'); return q && !q.hidden ? q.textContent : null; }")
++    r.cierto(abierto, "un nombre repetido no cierra el cuadro")
++    r.cierto(bool(queja), f"y dice por qué ({queja})")
++    pagina.evaluate("() => { Dialogo.cerrar(null); }")
++    pagina.wait_for_timeout(150)
++
++
++# --- 3 · El comando CAPA ---------------------------------------------------
++
++def _comando_capa(r: comun.Reporte, pagina, base) -> None:
++    r.cierto(pagina.evaluate("() => Comandos.existe('CAPA')"), "el comando CAPA existe")
++    r.cierto(pagina.evaluate("() => Comandos.existe('LAYER')"), "y en inglés también (LAYER)")
++    r.cierto(pagina.evaluate("() => Comandos.existe('LA')"), "y el atajo LA, como en AutoCAD")
++
++    # Tecleado en la línea de comandos, que es como lo va a usar quien dibuja.
++    navegador.comando(pagina, "CAPA")
++    pagina.wait_for_selector(".dlg", timeout=5000)
++    r.cierto(True, "CAPA tecleado abre el cuadro")
++
++    _llenar(pagina, {"nombre": "T101-MUROS"})
++    pagina.click(".dlg .pie .pri")
++    pagina.wait_for_selector(".dlg", state="detached", timeout=5000)
++    pagina.wait_for_timeout(350)
++
++    est = navegador.estado(base)
++    r.cierto(any(c["nombre"] == "T101-MUROS" for c in est["capas"]), "la capa se crea")
++    r.igual(est["capa_activa"], "T101-MUROS",
++            "y queda puesta a trabajar: los trazos nuevos caen ahí")
++
++    # Cancelar no deja nada a medias.
++    navegador.comando(pagina, "CAPA")
++    pagina.wait_for_selector(".dlg", timeout=5000)
++    pagina.evaluate("() => { Dialogo.cerrar(null); }")
++    pagina.wait_for_timeout(300)
++    est2 = navegador.estado(base)
++    r.igual(len(est2["capas"]), len(est["capas"]), "cancelar el cuadro no crea nada")
++    r.igual(est2["capa_activa"], "T101-MUROS", "ni cambia la capa de trabajo")
+diff --git a/ui/app.js b/ui/app.js
+index 482a0db..257faaa 100644
+--- a/ui/app.js
++++ b/ui/app.js
+@@ -379,8 +379,12 @@ const enElectron = () => !!window.t101;
+ 
+ async function pedirRuta(modo, filtros, sugerido) {
+   if (enElectron()) return window.t101[modo](filtros, sugerido);
+-  const r = prompt(modo === "abrir" ? "Ruta del archivo a abrir:" : "Ruta donde guardar:", sugerido || "");
+-  return r || null;
++  // Fuera de la aplicación (navegador, pruebas) no hay explorador de archivos
++  // que abrir. Aquí había un `prompt()`, que además de inútil dentro de la app
++  // es lo que tenía mudo el botón de capa nueva: en Electron `prompt()` lanza
++  // error. En ui/ ya no se usa ninguno, y la prueba t037 lo vigila.
++  avisar("Abrir y guardar archivos sólo funciona desde la aplicación.", true);
++  return null;
+ }
+ 
+ /* Abrir, guardar y dibujo nuevo viven aquí y no sueltos porque ahora los llama
+@@ -516,15 +520,76 @@ $("#b-rehacer").onclick = async () => {
+ };
+ 
+ /* --- Capas: alta, baja y propiedades ----------------------------------- */
+-$("#b-capa-nueva").onclick = async () => {
+-  const nombre = prompt("Nombre de la capa nueva:", "T101-");
+-  if (!nombre) return;
++/* El cuadro de capa nueva  ·  22-sep-2026.
++ *
++ * Aquí había un `prompt()` del navegador. En Electron `prompt()` no existe: la
++ * llamada lanza «prompt() is not supported.» y, como el manejador era `async`,
++ * el error se iba a una promesa que nadie miraba. El botón quedaba mudo —ni
++ * ventana, ni capa, ni aviso— y desde fuera parecía que el comando no servía.
++ *
++ * Ahora usa el cuadro de la casa (ui/dialogo.js), el mismo de todo lo demás, y
++ * de paso deja escoger color, grosor y tipo de línea en el momento, en vez de
++ * crear la capa azul y corregirla después. */
++async function pedirCapaNueva(sugerido = "T101-") {
++  const r = estado.resumen || {};
++  const grosores = (r.grosores || [25]).map((v) => [String(v), (v / 100).toFixed(2) + " mm"]);
++  const tipos = Object.entries(r.tipos_linea || { CONTINUOUS: "Continua" });
++  const usados = new Set((r.capas || []).map((c) => c.nombre.toLowerCase()));
++  const grosorPorDefecto = String((r.capas || []).find((c) => c.nombre === r.capa_activa)?.grosor ?? 25);
++
++  const v = await Dialogo.abrir({
++    titulo: "Nueva capa",
++    pista: "El nombre no se puede repetir.",
++    campos: [
++      { clave: "nombre", etiqueta: "Nombre", tipo: "texto", valor: sugerido },
++      { clave: "color", etiqueta: "Color", tipo: "color", valor: "#0080C1" },
++      { clave: "grosor", etiqueta: "Grosor", tipo: "lista",
++        valor: grosores.some((g) => g[0] === grosorPorDefecto) ? grosorPorDefecto : grosores[0][0],
++        opciones: grosores },
++      { clave: "tipo_linea", etiqueta: "Tipo de línea", tipo: "lista",
++        valor: "CONTINUOUS", opciones: tipos },
++    ],
++    aceptar: "Crear",
++    validar: (x) => {
++      const n = String(x.nombre || "").trim();
++      if (!n) return Tr("Ponle un nombre a la capa.");
++      if (usados.has(n.toLowerCase())) return Tr("Ya hay una capa con ese nombre.");
++      return null;
++    },
++  });
++  if (!v) return null;
++
++  const nombre = String(v.nombre).trim();
+   try {
+-    aplicar(await post("/api/capa", { nombre, color: "#0080C1", grosor: 25, tipo_linea: "CONTINUOUS" }));
+-    estado.seleccion = nombre.trim();
++    aplicar(await post("/api/capa", { nombre, color: v.color,
++                                      grosor: parseInt(v.grosor, 10) || 25,
++                                      tipo_linea: v.tipo_linea }));
++    estado.seleccion = nombre;
+     pintarCapas();
+-  } catch (e) { avisar(e.message, true); }
+-};
++    return nombre;
++  } catch (e) { avisar(e.message, true); return null; }
++}
++
++$("#b-capa-nueva").onclick = () => pedirCapaNueva();
++
++/* CAPA: el comando que faltaba. El código ya lo mencionaba —«Doble clic, o el
++ * comando CAPA»— pero nadie lo había registrado nunca, así que la única puerta
++ * a una capa nueva era el botón, y el botón estaba mudo.
++ *
++ * Sin argumentos a propósito: en esta casa **el espacio confirma el comando**
++ * (ver ui/comandos.js), así que un «CAPA MUROS» tecleado se dispara en el
++ * espacio y el nombre nunca llegaría. Se pide en el cuadro, que es donde de
++ * todos modos hay que escoger color y grosor. La capa recién hecha queda
++ * puesta a trabajar, que es a lo que uno la hace. */
++Comandos.registrar({
++  nombre: "CAPA", alias: ["CA", "LA"],
++  ayuda: "Crea una capa (nombre, color, grosor y tipo de línea) y la pone a trabajar",
++  correr: async () => {
++    const nombre = await pedirCapaNueva();
++    if (!nombre) return Comandos.eco(Tr("Cancelado."));
++    await activarCapa(nombre);
++  },
++});
+ 
+ $("#b-capa-borrar").onclick = async () => {
+   const c = capaSel();
+diff --git a/ui/idioma-en.js b/ui/idioma-en.js
+index 88f0dbb..3bfebaf 100644
+--- a/ui/idioma-en.js
++++ b/ui/idioma-en.js
+@@ -136,6 +136,11 @@ const IDIOMA_EN = {
+ 
+   // --- capas y propiedades ------------------------------------------------
+   "Nueva capa": "New layer", "Borrar": "Erase", "Nombre": "Name", "Color": "Color", "Grosor": "Lineweight",
++  "Crear": "Create", "El nombre no se puede repetir.": "Names can’t repeat.",
++  "Ponle un nombre a la capa.": "Give the layer a name.",
++  "Ya hay una capa con ese nombre.": "There’s already a layer with that name.",
++  "Crea una capa (nombre, color, grosor y tipo de línea) y la pone a trabajar":
++    "Creates a layer (name, color, lineweight and linetype) and makes it current",
+   "Escala del tipo": "Linetype scale",
+   "La escala del tipo de línea tiene que ser mayor que cero.": "Linetype scale must be greater than zero.",
+   "Tipo de línea": "Linetype", "Imprime": "Plots", "sí": "yes", "no": "no", "Objeto": "Object",
+diff --git a/ui/idioma.js b/ui/idioma.js
+index 61264a2..0730504 100644
+--- a/ui/idioma.js
++++ b/ui/idioma.js
+@@ -190,6 +190,7 @@ const Idioma = (() => {
+     BLOCK: "BLOQUE", INSERT: "INSERTAR", WBLOCK: "GUARDARBLOQUE", LIBRARY: "BIBLIOTECA",
+     UNDO: "DESHACER", REDO: "REHACER", MEASURE: "MEDIR", DISTANCE: "MEDIR", ZOOMEXTENTS: "ENCUADRAR",
+     EXTENTS: "ENCUADRAR", LAYOUT: "PLANO", SHEET: "PLANO", MODEL: "MODELO", TITLEBLOCK: "ROTULO",
++    LAYER: "CAPA", NEWLAYER: "CAPA",
+     PRINT: "IMPRIMIRFISICO", PLOTTER: "IMPRIMIRFISICO", VPSCALE: "ESCALAVENTANA", VPFIT: "ENCUADRARVENTANA",
+     DELETESHEET: "BORRARPLANO", EDITSHEET: "EDITARHOJA", IMAGE: "IMAGEN", IMAGEREF: "IMAGENREF",
+     PDFBACKGROUND: "PDFFONDO", BACKGROUND: "PDFFONDO", GRID: "REJILLA", OSNAP: "REFERENCIAS",
