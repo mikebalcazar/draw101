@@ -225,5 +225,5 @@ index ea4117f..e904fff 100644
 +    // aparecía. Ahora los dos salen del mismo sitio.
 +    const alturaPrevia = Entrada.ultimoValor("altura_texto") || alturaTextoOmision();
      const p = await Entrada.pedirPunto({
-       nombre: "placeholder"
-     });
+       mensaje: "Punto de inserción del texto",
+       hule: (q) => ({ fantasma: [{ clase: "texto", p: q, texto: Tr("Texto"),
