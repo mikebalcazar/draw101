@@ -1,0 +1,229 @@
+diff --git a/core/version.py b/core/version.py
+index bb09013..53bc653 100644
+--- a/core/version.py
++++ b/core/version.py
+@@ -21,13 +21,25 @@ Numeración: `mayor.menor.parche`.
+ 
+ from __future__ import annotations
+ 
+-VERSION = "0.21.2"
+-FECHA = "2026-09-22"
++VERSION = "0.21.3"
++FECHA = "2026-09-24"
+ 
+ # Qué trae cada entrega, en el idioma del taller y no en el del código.
+ # La más nueva arriba. Lo que se lista aquí es lo que el comando VERSION
+ # enseña en la consola.
+ BITACORA: list[dict] = [
++    {
++        "version": "0.21.3",
++        "fecha": "2026-09-24",
++        "cambios": [
++            "La letra de fábrica del comando TEXTO sube de 0.75 a 3 cm. Era "
++            "demasiado chica y había que cambiarla cada vez. Como siempre, en "
++            "cuanto escribes otra altura el programa se queda con ésa.",
++            "La previa del texto —la que se ve pegada al cursor antes de "
++            "escribirlo— salía diez veces más grande que la letra de verdad en "
++            "un dibujo en centímetros. Ya coinciden.",
++        ],
++    },
+     {
+         "version": "0.21.2",
+         "fecha": "2026-09-22",
+diff --git a/package.json b/package.json
+index a63fba2..e53992c 100644
+--- a/package.json
++++ b/package.json
+@@ -1,8 +1,8 @@
+ {
+   "name": "draw101",
+   "productName": "draw101",
+-  "version": "0.21.2",
+-  "_versionApp": "0.21.2 — la que enseña la app viene de core/version.py; ésta sólo existe porque electron-builder exige semver",
++  "version": "0.21.3",
++  "_versionApp": "0.21.3 — la que enseña la app viene de core/version.py; ésta sólo existe porque electron-builder exige semver",
+   "_notaAsociaciones": "draw101 aparece en «Abrir con» de los DXF y DWG y en Aplicaciones predeterminadas, pero NO se roba la asociación: quién los abre por omisión lo sigue decidiendo el usuario (regla de Mike, 0.11.2). electron-builder registra el ProgID; Windows decide. El .t101d sí es nuestro. Ojo: dentro de «build» electron-builder rechaza cualquier clave que no conozca, aunque empiece con guión bajo (se cazó armando la 0.20.16).",
+   "_notaEmpaque": "asar apagado a propósito: main.js busca server.py junto a electron/, y el motor de Python no puede vivir dentro de un asar. Y electron-builder saca cualquier node_modules de los globs de `files`, así que los dos motores de DWG (dwgjs/node_modules) se copian por extraResources o la app se queda sin leer DWG.",
+   "description": "CAD 2D de Taller 101 — leer, trazar, acotar e imprimir planos",
+@@ -21,7 +21,7 @@
+   "build": {
+     "appId": "mx.taller101.dibujador",
+     "productName": "draw101",
+-    "artifactName": "draw101-0.21.2-setup.${ext}",
++    "artifactName": "draw101-0.21.3-setup.${ext}",
+     "directories": {
+       "output": "dist",
+       "buildResources": "build"
+diff --git a/pruebas/t039_altura_de_letra.py b/pruebas/t039_altura_de_letra.py
+new file mode 100644
+index 0000000..50fbade
+--- /dev/null
++++ b/pruebas/t039_altura_de_letra.py
+@@ -0,0 +1,120 @@
++"""t039 · La altura de letra de fábrica, y que la previa mida lo mismo.
++
++Mike (24-sep-2026): «the text default size is too small. I had to change it
++to 3. Can we make 3 the default text size?»
++
++Los 3 son **centímetros**: un dibujo nuevo va en cm desde la 0.20.1. El cuadro
++de TEXTO ofrecía 0.75, porque la altura de fábrica se guardaba en milímetros
++(7.5) y se dividía entre los 10 mm que mide un centímetro. Ahora son 30 mm, o
++sea 3 cm.
++
++Se guarda en milímetros a propósito, y no como un 3 pelón: así la letra mide
++lo mismo *de verdad* se dibuje en cm, en mm o en metros. Un 3 pelón valdría 3
++cm en un dibujo en cm y 3 mm en uno en mm — la misma letra, diez veces más
++chica, sólo por abrir un DXF ajeno.
++
++Y de paso: la previa que se ve pegada al cursor antes de escribir el texto
++usaba «7.5» en unidades del dibujo mientras el cuadro usaba 7.5 milímetros. En
++un dibujo en centímetros el fantasma salía diez veces más grande que la letra
++que aparecía después. Se ve raro y hace escoger mal la altura.
++"""
++
++from __future__ import annotations
++
++from pruebas import comun, navegador
++
++DESCRIPCION = "la letra de fábrica son 3 cm, y la previa mide lo mismo"
++
++
++def correr(r: comun.Reporte) -> None:
++    if not navegador.hay_navegador():
++        r.cierto(True, "(sin Playwright en esta máquina: la prueba se salta)")
++        return
++    with navegador.programa() as (pagina, base):
++        navegador.cerrar_inicio(pagina)
++        _de_fabrica(r, pagina, base)
++        _la_previa(r, pagina)
++        _lo_recordado_manda(r, pagina)
++        r.igual(pagina.errores, [], "sin errores de JavaScript")
++
++
++def _sin_memoria(pagina) -> None:
++    """Como una instalación recién hecha: sin altura recordada."""
++    pagina.evaluate("""() => {
++        estado.prefs = estado.prefs || {};
++        const u = Object.assign({}, estado.prefs.ultimos_valores || {});
++        delete u.altura_texto;
++        estado.prefs.ultimos_valores = u;
++    }""")
++
++
++def _abrir_texto(pagina):
++    navegador.comando(pagina, "TEXTO")
++    navegador.comando(pagina, "100,100")
++    pagina.wait_for_selector(".dlg", timeout=5000)
++    return pagina.evaluate(
++        "() => document.querySelector('.dlg [data-clave=altura]').value")
++
++
++def _de_fabrica(r: comun.Reporte, pagina, base) -> None:
++    r.igual(navegador.estado(base)["unidades"], "cm",
++            "un dibujo nuevo va en centímetros")
++
++    _sin_memoria(pagina)
++    altura = _abrir_texto(pagina)
++    r.igual(altura, "3", "y el cuadro de TEXTO ofrece 3 de altura, no 0.75")
++
++    sufijo = pagina.evaluate(
++        "() => { const f = document.querySelector('.dlg [data-fila=altura] .suf'); return f ? f.textContent : null; }")
++    r.igual(sufijo, "cm", "y dice en qué unidad son esos 3")
++    pagina.evaluate("() => { Dialogo.cerrar(null); }")
++    pagina.wait_for_timeout(200)
++
++    # Los 30 mm son físicos: en un dibujo en milímetros la letra mide lo mismo
++    # y por eso el número que se ofrece es otro. Es lo que evita que abrir un
++    # DXF ajeno cambie el tamaño de la letra.
++    en_mm = pagina.evaluate("""() => {
++        const antes = estado.resumen.mm_por_unidad;
++        estado.resumen.mm_por_unidad = 1;
++        const v = alturaTextoOmision();
++        estado.resumen.mm_por_unidad = antes;
++        return v;
++    }""")
++    r.casi(en_mm, 30.0, "en un dibujo en milímetros son 30: la misma letra", 1e-9)
++
++
++def _la_previa(r: comun.Reporte, pagina) -> None:
++    """El fantasma pegado al cursor mide lo que va a medir la letra."""
++    _sin_memoria(pagina)
++    pagina.evaluate("() => { encuadrarCaja(-200, -200, 600, 600); }")
++    pagina.wait_for_timeout(150)
++    navegador.comando(pagina, "TEXTO")
++    pagina.wait_for_timeout(300)
++    # Mover el cursor para que el hule se pinte.
++    pagina.evaluate("""() => {
++        const c = document.querySelector('#lienzo').getBoundingClientRect();
++        document.querySelector('#lienzo').dispatchEvent(new MouseEvent('mousemove',
++            { clientX: c.left + 300, clientY: c.top + 300, bubbles: true }));
++    }""")
++    pagina.wait_for_timeout(250)
++    alto = pagina.evaluate("""() => {
++        const f = ((estado.hule || {}).fantasma || []).find((x) => x.clase === 'texto');
++        return f ? f.altura : null;
++    }""")
++    r.exige(alto is not None, "antes de escribir se ve una previa del texto")
++    r.casi(alto, 3.0, "y mide 3, lo mismo que va a medir la letra (no 7.5)", 1e-9)
++    pagina.keyboard.press("Escape")
++    pagina.wait_for_timeout(200)
++
++
++def _lo_recordado_manda(r: comun.Reporte, pagina) -> None:
++    """Esto es de fábrica, no una imposición: lo último que se escribe manda."""
++    pagina.evaluate("""() => {
++        estado.prefs = estado.prefs || {};
++        estado.prefs.ultimos_valores = Object.assign(
++            {}, estado.prefs.ultimos_valores || {}, { altura_texto: 12 });
++    }""")
++    altura = _abrir_texto(pagina)
++    r.igual(altura, "12", "si ya escribiste otra altura, ésa manda sobre la de fábrica")
++    pagina.evaluate("() => { Dialogo.cerrar(null); }")
++    pagina.wait_for_timeout(200)
+diff --git a/ui/dibujar.js b/ui/dibujar.js
+index ea4117f..e904fff 100644
+--- a/ui/dibujar.js
++++ b/ui/dibujar.js
+@@ -716,12 +716,24 @@ Comandos.registrar({
+ /* ===================================================================== */
+ /* 27 · Texto  ·  28 · Texto de párrafo                                  */
+ /* ===================================================================== */
+-// Mike (7-sep-2026): «el default que sea 3 veces lo que es ahorita»: 2.5 → 7.5 mm.
+-// Se recuerda entre sesiones (Entrada.ultimoValor).
+-// En unidades del dibujo: 7.5 mm (0.75 cm en un dibujo en cm, que es la unidad
+-// de la casa desde 0.20.1). Cuando hay un valor recordado, ése manda.
++// La altura de letra de fábrica.
++//
++// Mike (7-sep-2026): «el default que sea 3 veces lo que es ahorita»: 2.5 → 7.5
++// mm. Y Mike otra vez (24-sep-2026): «the text default size is too small. I
++// had to change it to 3». Ese 3 son **centímetros**, que es la unidad de un
++// dibujo nuevo desde la 0.20.1: el cuadro enseñaba 0.75 y ahora enseña 3.
++//
++// Se guarda en milímetros y se divide entre los mm de la unidad, para que sea
++// el mismo tamaño *de verdad* se dibuje en cm, en mm o en metros. Un número
++// pelón (3 y ya) valdría 3 cm en un dibujo en cm y 3 mm en uno en mm: la misma
++// letra saldría diez veces más chica al abrir un DXF ajeno.
++//
++// Esto es sólo el arranque: en cuanto alguien escribe otra altura, ésa se
++// recuerda y manda (Entrada.ultimoValor, vive en preferencias y sobrevive a
++// cerrar el programa).
+ let ultimaAlturaTexto = null;
+-const alturaTextoOmision = () => 7.5 / mmPorUnidad();
++const ALTURA_TEXTO_MM = 30;
++const alturaTextoOmision = () => ALTURA_TEXTO_MM / mmPorUnidad();
+ 
+ let ultimaRotacionTexto = 0;
+ 
+@@ -773,7 +785,11 @@ Comandos.registrar({
+   correr: async () => {
+     // Previa: la caja del texto a la altura que se va a usar, para ver de qué
+     // tamaño va a quedar antes de escribirlo (Mike, 16-sep-2026).
+-    const alturaPrevia = Entrada.ultimoValor("altura_texto") || 7.5;
++    // Ojo con la unidad: aquí decía `|| 7.5` pelado, en unidades del dibujo,
++    // mientras el cuadro ofrecía 7.5 **milímetros**. En un dibujo en cm —el de
++    // siempre— el fantasma salía diez veces más grande que la letra que luego
++    // aparecía. Ahora los dos salen del mismo sitio.
++    const alturaPrevia = Entrada.ultimoValor("altura_texto") || alturaTextoOmision();
+     const p = await Entrada.pedirPunto({
+       nombre: "placeholder"
+     });
