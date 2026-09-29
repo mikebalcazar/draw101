@@ -1,0 +1,236 @@
+diff --git a/pruebas/t051_nube_interruptor.py b/pruebas/t051_nube_interruptor.py
+new file mode 100644
+index 0000000..1dd8ba7
+--- /dev/null
++++ b/pruebas/t051_nube_interruptor.py
+@@ -0,0 +1,229 @@
++"""t051 · El interruptor de la nube: todo o nada, y sin rastrear el disco.
++
++Mike, 29-sep-2026, escogiendo con botones y luego afinando la opción con sus
++palabras: «Todo sube por default, o desactivas todo. No hay selección de
++archivos. Y si lo tenías desactivado y lo activas, sólo se irá subiendo conforme
++vayas abriendo archivos, no se suben los que ya existen en tu compu si nunca los
++abres».
++
++Esa última frase es la que esta prueba cuida, porque es la que se pierde: lo
++natural de programar, al prender la nube, es «subir lo que ya hay». En una
++máquina con años de planos eso son miles de subidas que nadie pidió, tardando
++horas, la primera vez que alguien pica una casilla. Que NO pase se mide de
++verdad —espiando `fs`— en pruebas/nube-indice.mjs, que corre desde t049.
++
++Aquí se mide la otra mitad, la que se ve:
++
++  · que la casilla exista en Configuración, con un solo interruptor y no una
++    lista de archivos que escoger (eso es la decisión, no un pendiente);
++  · que empiece encendida, porque «todo sube por default»;
++  · que apagarla llame a apagarla, y prenderla a prenderla;
++  · que cancelar el cuadro NO cambie nada, que es el error clásico de los
++    paneles de configuración: aplicar lo que se picó aunque se cancele;
++  · y que sin la app instalada la casilla no salga, porque un interruptor que
++    no hace nada es peor que no tener interruptor.
++"""
++
++from __future__ import annotations
++
++from pruebas import comun, navegador
++
++DESCRIPCION = "el interruptor de la nube: un solo botón, encendido de fábrica, y cancelar no lo mueve"
++
++
++def _poner_puente(pagina) -> None:
++    pagina.evaluate("""() => {
++        window.espia = { prender: [] };
++        window.nubeEncendida = true;
++        window.t101 = window.t101 || {};
++        window.t101.nube = {
++          encendida: async () => window.nubeEncendida,
++          prender: async (si) => { window.espia.prender.push(!!si); window.nubeEncendida = !!si; return !!si; },
++          indiceYa: async () => ({ archivos: [] }),
++          indiceBajar: async () => ({ archivos: [] }),
++          bajar: async () => ({ ok: true, ruta: 'x' }),
++          quitar: async () => ({ ok: true }),
++          alLlegarIndice: () => {},
++        };
++    }""")
++
++
++def _abrir_config(pagina):
++    pagina.evaluate("() => { Ajustes.general(); }")
++    pagina.wait_for_selector(".dlg .panel", timeout=4000)
++    pagina.wait_for_timeout(200)
++
++
++def _casilla(pagina) -> str:
++    """El input de la casilla de la nube, encontrado por su etiqueta y no por
++    su posición: agregar un ajuste arriba no debe romper esta prueba."""
++    return """() => {
++        const filas = [...document.querySelectorAll('.dlg .fila')];
++        const f = filas.find((x) => {
++          const t = (x.querySelector('.et') || {}).textContent || '';
++          return /nube|cloud/i.test(t);
++        });
++        return f ? f.querySelector('input[type=checkbox]') : null;
++    }"""
++
++
++def correr(r: comun.Reporte) -> None:
++    if not navegador.hay_navegador():
++        r.cierto(True, "(sin Playwright en esta máquina: se salta)")
++        return
++
++    with navegador.programa() as (pagina, base):
++        navegador.cerrar_inicio(pagina)
++        _poner_puente(pagina)
++
++        # 1 · Existe, y es UNA casilla.
++        _abrir_config(pagina)
++        r.cierto(pagina.evaluate(f"() => !!({_casilla(pagina)})()"),
++                 "en Configuración hay una casilla para la nube")
++        r.cierto(pagina.evaluate(f"() => ({_casilla(pagina)})().checked"),
++                 "y empieza ENCENDIDA: «todo sube por default»")
++
++        # No hay una lista de archivos que escoger. Es la decisión de Mike, no
++        # algo que falte: si algún día aparece una, esta prueba lo dice.
++        r.cierto(pagina.evaluate("""() => {
++            const t = document.querySelector('.dlg .panel').textContent.toLowerCase();
++            return !t.includes('escoger archivos') && !t.includes('seleccionar archivos')
++                && !t.includes('choose files') && !t.includes('select files');
++        }"""), "y no hay que escoger archivos: es todo o nada, como se pidió")
++
++        # 2 · CANCELAR NO CAMBIA NADA. El error clásico del panel que aplica lo
++        # que se picó aunque se cancele.
++        pagina.evaluate(f"() => {{ ({_casilla(pagina)})().click(); }}")
++        pagina.wait_for_timeout(80)
++        r.cierto(not pagina.evaluate(f"() => ({_casilla(pagina)})().checked"),
++                 "(control: la casilla sí se despicó, o sea que lo de abajo mide algo)")
++        pagina.evaluate("() => { Dialogo.cerrar(null); }")
++        pagina.wait_for_timeout(200)
++        r.igual(pagina.evaluate("() => window.espia.prender"), [],
++                "CANCELAR no apagó nada: no se llamó a prender ni una vez")
++        r.cierto(pagina.evaluate("() => window.nubeEncendida"),
++                 "y la nube sigue encendida")
++
++        # 3 · Apagarla y aplicar: se apaga, una sola vez.
++        _abrir_config(pagina)
++        r.cierto(pagina.evaluate(f"() => ({_casilla(pagina)})().checked"),
++                 "al reabrir, la casilla vuelve a salir como está de verdad (encendida)")
++        pagina.evaluate(f"() => {{ ({_casilla(pagina)})().click(); }}")
++        pagina.evaluate("""() => { [...document.querySelectorAll('.dlg .pie button, .dlg button')]
++            .find((b) => /aplicar|apply/i.test(b.textContent)).click(); }""")
++        pagina.wait_for_timeout(300)
++        r.igual(pagina.evaluate("() => window.espia.prender"), [False],
++                "aplicar con la casilla despicada apaga la nube, una sola vez")
++        r.cierto(not pagina.evaluate("() => window.nubeEncendida"), "y queda apagada")
++
++        # 4 · Prenderla otra vez.
++        _abrir_config(pagina)
++        r.cierto(not pagina.evaluate(f"() => ({_casilla(pagina)})().checked"),
++                 "apagada, la casilla sale despicada")
++        pagina.evaluate(f"() => {{ ({_casilla(pagina)})().click(); }}")
++        pagina.evaluate("""() => { [...document.querySelectorAll('.dlg .pie button, .dlg button')]
++            .find((b) => /aplicar|apply/i.test(b.textContent)).click(); }""")
++        pagina.wait_for_timeout(300)
++        r.igual(pagina.evaluate("() => window.espia.prender"), [False, True],
++                "y se puede volver a prender")
++
++        # 5 · Aplicar sin tocar la casilla no llama a nada. Un panel que
++        # reescribe todo en cada Aplicar hace trabajo invisible y esconde
++        # errores: aquí se ve.
++        _abrir_config(pagina)
++        pagina.evaluate("""() => { [...document.querySelectorAll('.dlg .pie button, .dlg button')]
++            .find((b) => /aplicar|apply/i.test(b.textContent)).click(); }""")
++        pagina.wait_for_timeout(300)
++        r.igual(pagina.evaluate("() => window.espia.prender"), [False, True],
++                "aplicar sin mover la casilla no vuelve a llamar a nada")
++
++        # 6 · Sin la app instalada, la casilla no sale.
++        pagina.evaluate("() => { delete window.t101.nube; }")
++        _abrir_config(pagina)
++        r.cierto(not pagina.evaluate(f"() => !!({_casilla(pagina)})()"),
++                 "sin la app instalada la casilla NO sale: un interruptor que no hace nada es peor que ninguno")
++        r.cierto(pagina.evaluate("""() => !!document.querySelector('.dlg .fila')"""),
++                 "(control: el resto de la configuración sigue ahí)")
++        pagina.evaluate("() => { Dialogo.cerrar(null); }")
++
++        # --- 7 · Y LO PRINCIPAL DEL «todo sube»: que al guardar suba ---
++        #
++        # Sin esto, el interruptor no interruptor nada: la nube estaría
++        # encendida y no subiría un solo plano. Se mide con el puente espiado,
++        # porque guardar de verdad necesita el proceso de Electron.
++        pagina.evaluate("""() => {
++            window.espia = { prender: [], subir: [] };
++            window.nubeEncendida = true;
++            window.respuestaSubir = { ok: true, version: 1 };
++            window.t101.nube = {
++              encendida: async () => window.nubeEncendida,
++              prender: async (si) => { window.espia.prender.push(!!si); window.nubeEncendida = !!si; return !!si; },
++              subir: async (d) => { window.espia.subir.push(d); return window.respuestaSubir; },
++              indiceYa: async () => ({ archivos: [] }), indiceBajar: async () => ({ archivos: [] }),
++              bajar: async () => ({ ok: true, ruta: 'x' }), quitar: async () => ({ ok: true }),
++              alLlegarIndice: () => {},
++            };
++        }""")
++
++        pagina.evaluate("""() => Nube.alGuardar({ ruta: 'C:/planos/Cocina Ruiz.t101d',
++            token: 'AAA0000000000000000000000A', nombre: 'Cocina Ruiz.t101d',
++            modificado: '2026-09-29T20:00:00Z' })""")
++        pagina.wait_for_timeout(250)
++        r.igual(pagina.evaluate("() => window.espia.subir.length"), 1,
++                "guardar sube el plano a la nube, sin preguntar: «todo sube por default»")
++        r.igual(pagina.evaluate("() => window.espia.subir[0].doc"), "AAA0000000000000000000000A",
++                "con el token del documento, que es lo que lo identifica allá")
++        r.igual(pagina.evaluate("() => window.espia.subir[0].modificado"), "2026-09-29T20:00:00Z",
++                "y con la fecha en que se guardó: es la que decide cuál copia es más nueva")
++        r.igual(pagina.evaluate("() => Nube.ultimaSubida"), "subio", "y se sube")
++
++        # Un DXF no va a la nube: es una exportación, no el documento.
++        pagina.evaluate("""() => Nube.alGuardar({ ruta: 'C:/planos/Cocina Ruiz.dxf',
++            token: 'AAA0000000000000000000000A', nombre: 'Cocina Ruiz.t101d' })""")
++        pagina.wait_for_timeout(200)
++        r.igual(pagina.evaluate("() => window.espia.subir.length"), 1,
++                "un DXF NO se sube: es una exportación, no el documento")
++        r.igual(pagina.evaluate("() => Nube.ultimaSubida"), "no_es_t101d", "y se dice por qué")
++
++        # Apagada: no sube, y NO se avisa nada (no es un error, es una decisión).
++        pagina.evaluate("""() => { window.respuestaSubir = { apagada: true };
++            Nube._olvidarAviso(); }""")
++        pagina.evaluate("""() => Nube.alGuardar({ ruta: 'C:/planos/x.t101d',
++            token: 'AAA0000000000000000000000A', nombre: 'x.t101d' })""")
++        pagina.wait_for_timeout(200)
++        r.igual(pagina.evaluate("() => Nube.ultimaSubida"), "apagada",
++                "con la nube apagada no se sube")
++
++        # Sin red: se avisa UNA vez por sesión, no en cada guardado.
++        pagina.evaluate("""() => {
++            window.respuestaSubir = { sinRed: true };
++            Nube._olvidarAviso();
++            // Se intercepta el aviso para contarlos. `avisar` es una función
++            // global declarada con `function`, así que reasignarla por
++            // `window.` la reemplaza también para quien la llame por nombre.
++            window.avisados = [];
++            window.avisarDeVerdad = avisar;
++            window.avisar = (t) => { window.avisados.push(t); };
++        }""")
++        # Se comprueba que de verdad se reemplazó antes de medir: si no, contar
++        # avisos no mediría nada.
++        r.cierto(pagina.evaluate("() => avisar === window.avisar"),
++                 "(control: el aviso está interceptado, o lo de abajo no mediría nada)")
++        for _ in range(3):
++            pagina.evaluate("""() => Nube.alGuardar({ ruta: 'C:/planos/x.t101d',
++                token: 'AAA0000000000000000000000A', nombre: 'x.t101d' })""")
++            pagina.wait_for_timeout(150)
++        r.igual(pagina.evaluate("() => Nube.ultimaSubida"), "sin_red",
++                "sin red se dice que fue la red")
++        r.igual(pagina.evaluate("() => window.avisados.length"), 1,
++                "y se avisa UNA sola vez en tres guardados: a la tercera nadie lo leería")
++        # En los dos idiomas: el de la interfaz lo decide el motor, no el
++        # navegador, así que una prueba atada a una sola palabra falla sin que
++        # nada esté mal. Ya pasó una vez.
++        primero = pagina.evaluate("() => window.avisados[0] || ''")
++        r.cierto(primero.startswith("Guardado") or primero.startswith("Saved"),
++                 "y el aviso EMPIEZA diciendo que sí se guardó, que es lo que importa",
++                 primero)
++        r.cierto("nube" in primero or "cloud" in primero,
++                 "y sólo después habla de la nube")
++        pagina.evaluate("() => { window.avisar = window.avisarDeVerdad; }")
+# fin del parche: el renglon de cola absorbe el recorte del conector.
