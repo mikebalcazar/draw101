@@ -1,0 +1,315 @@
+diff --git a/pruebas/nube.mjs b/pruebas/nube.mjs
+new file mode 100644
+index 0000000..c411478
+--- /dev/null
++++ b/pruebas/nube.mjs
+@@ -0,0 +1,204 @@
++/* El núcleo de la nube, medido sin abrir la app  ·  node pruebas/nube.mjs
++ *
++ * Mide lo que corre en el proceso principal: la llave, el cifrado, y qué hace
++ * cada llamada con cada respuesta del servidor.
++ *
++ * LO QUE DE VERDAD APORTA, que es lo que se rompería sin que nadie lo note:
++ *
++ *   · QUE EL NONCE NO SE REPITA. Es la única regla de AES-GCM que, rota, no
++ *     se nota nunca probando a mano: todo sigue cifrando y descifrando bien.
++ *     Y con la misma llave y el mismo nonce dos veces, lo cifrado se puede
++ *     recuperar. Aquí un mismo plano se sube docenas de veces con la misma
++ *     llave, así que es el riesgo real, no el teórico.
++ *
++ *   · QUE DESCIFRAR FALLE cuando alguien tocó un byte, en vez de devolver
++ *     basura. Un `.t101d` con basura dentro, escrito encima del archivo de
++ *     alguien, es la peor forma posible de fallar aquí.
++ *
++ *   · LA DIFERENCIA ENTRE «no se pudo llegar» Y «el servidor dijo que no».
++ *     Confundirlas deja a un taller sin sus archivos porque el servidor tuvo
++ *     un mal rato. Es lo mismo que ya vigila pruebas/licencia.mjs para la
++ *     puerta, y por la misma razón.
++ *
++ *   · QUE UN RENGLÓN ILEGIBLE NO TUMBE LA LISTA ENTERA. Perder el índice
++ *     completo por un archivo raro sería cambiar un problema chico por uno
++ *     grande.
++ */
++
++import { mkdtempSync, existsSync, readFileSync } from 'node:fs';
++import { tmpdir } from 'node:os';
++import path from 'node:path';
++import crypto from 'node:crypto';
++import { createRequire } from 'node:module';
++
++const require = createRequire(import.meta.url);
++const n = require('../electron/nube-nucleo.js');
++
++let fallas = 0, revisadas = 0;
++const rev = (ok, texto, extra = '') => {
++  revisadas++; if (!ok) fallas++;
++  console.log(`  ${ok ? 'ok   ' : 'FALLA'} ${texto}${extra ? '  →  ' + extra : ''}`);
++};
++const dir = () => mkdtempSync(path.join(tmpdir(), 'draw101-nube-'));
++const unaLlave = () => crypto.randomBytes(32).toString('base64url');
++
++/* Un servidor de mentiras que apunta lo que le mandan. */
++const servidor = (respuestas) => {
++  const visto = [];
++  const traer = async (url, opciones = {}) => {
++    visto.push({ url, ...opciones });
++    const r = respuestas.shift();
++    if (r === 'truena') throw new Error('sin red');
++    return r;
++  };
++  return { traer, visto };
++};
++const json = (cuerpo, status = 200) => ({
++  ok: status >= 200 && status < 300, status,
++  json: async () => cuerpo,
++  headers: { get: () => null },
++});
++
++console.log('\n· el cifrado');
++{
++  const k = unaLlave();
++  const datos = crypto.randomBytes(200_000);      // un plano de buen tamaño
++  const bulto = n.cifrar(datos, k);
++  rev(n.descifrar(bulto, k).equals(datos), 'ida y vuelta, byte por byte', `${datos.length} bytes`);
++  rev(!bulto.subarray(0, 2000).equals(datos.subarray(0, 2000)), 'y lo que sale NO se parece a lo que entró');
++  rev(bulto.length === datos.length + n.NONCE + n.MARCA, 'crece lo justo: nonce y marca', `+${n.NONCE + n.MARCA}`);
++
++  // LA regla. Cien cifrados del MISMO dato con la MISMA llave: cien nonces.
++  const nonces = new Set();
++  for (let i = 0; i < 100; i++) nonces.add(n.cifrar(datos, k).subarray(0, n.NONCE).toString('hex'));
++  rev(nonces.size === 100,
++    'cien cifrados del mismo plano dan cien nonces distintos (repetirlo rompe AES-GCM de verdad)',
++    `${nonces.size} de 100`);
++
++  // Tocado por el camino: tiene que FALLAR, no devolver basura.
++  for (const donde of [0, n.NONCE, n.NONCE + n.MARCA, bulto.length - 1]) {
++    const roto = Buffer.from(bulto); roto[donde] ^= 1;
++    let fallo = false;
++    try { n.descifrar(roto, k); } catch { fallo = true; }
++    rev(fallo, `un byte cambiado en la posición ${donde} hace que descifrar FALLE`);
++  }
++
++  let conOtra = false;
++  try { n.descifrar(bulto, unaLlave()); } catch { conOtra = true; }
++  rev(conOtra, 'y con otra llave también falla, en vez de devolver basura');
++
++  let corto = false;
++  try { n.descifrar(Buffer.from([1, 2, 3]), k); } catch { corto = true; }
++  rev(corto, 'un bulto incompleto no truena feo: se dice y ya');
++
++  let malaLlave = false;
++  try { n.cifrar(Buffer.from('x'), 'corta'); } catch { malaLlave = true; }
++  rev(malaLlave, 'una llave que no mide 32 bytes se rechaza antes de cifrar nada');
++
++  // El nombre del archivo, que también va cifrado.
++  const nombre = 'Cocina Ruiz — etapa 2 (ñ, á, 中).t101d';
++  const cif = n.cifrarTexto(nombre, k);
++  rev(n.descifrarTexto(cif, k) === nombre, 'el nombre va y vuelve, con acentos y todo');
++  rev(!cif.includes('Cocina') && /^[A-Za-z0-9_-]+$/.test(cif),
++    'y cifrado cabe en una cabecera HTTP, sin dejar ver el nombre');
++}
++
++console.log('\n· la llave de la cuenta');
++{
++  const carpeta = dir();
++  const s = servidor([json({ ok: true, data: { llave: 'LA-LLAVE-DE-LA-CUENTA-CON-SUS-CUARENTA-Y-TANTOS' } })]);
++  const r1 = await n.llave({ api: 'https://x', carpeta, token: 'v1.t', traer: s.traer });
++  rev(r1.llave?.startsWith('LA-LLAVE'), 'se pide al servidor la primera vez');
++  rev(s.visto[0].headers.Authorization === 'Bearer v1.t', 'con el token de la licencia, que es la única puerta');
++
++  // Se guarda: sin internet la app tiene que poder abrir lo que ya bajó.
++  const s2 = servidor(['truena']);
++  const r2 = await n.llave({ api: 'https://x', carpeta, token: 'v1.t', traer: s2.traer });
++  rev(r2.llave === r1.llave, 'la segunda vez sale de la máquina, sin tocar la red');
++  rev(s2.visto.length === 0, 'ni siquiera lo intenta: sin internet se sigue abriendo lo de ayer');
++
++  // Sin nada guardado y sin red: se dice, y NO se inventa una llave.
++  const s3 = servidor(['truena']);
++  const r3 = await n.llave({ api: 'https://x', carpeta: dir(), token: 'v1.t', traer: s3.traer });
++  rev(r3.sinRed === true && !r3.llave, 'sin red y sin nada guardado: «no se pudo llegar», y ninguna llave inventada');
++
++  // Un 500 es del servidor, no de la licencia.
++  const s4 = servidor([json({ ok: false, error: 'lo que sea' }, 503)]);
++  const r4 = await n.llave({ api: 'https://x', carpeta: dir(), token: 'v1.t', traer: s4.traer });
++  rev(r4.sinRed === true, 'un 503 se lee como «no se pudo llegar», no como «tu licencia no vale»');
++
++  // Sin licencia no se pide nada.
++  const s5 = servidor([]);
++  const r5 = await n.llave({ api: 'https://x', carpeta: dir(), token: '', traer: s5.traer });
++  rev(r5.sinLicencia === true && s5.visto.length === 0, 'sin licencia ni se molesta al servidor');
++}
++
++console.log('\n· subir, el índice y bajar');
++{
++  const k = unaLlave();
++  const datos = Buffer.from('esto es un plano', 'utf8');
++  const doc = '01ARCHVSENANBE9876543210AB';
++
++  const s = servidor([json({ ok: true, data: { version: 1, bytes: 44 } })]);
++  const r = await n.subir({ api: 'https://x', token: 'v1.t', llave: k, doc,
++    nombre: 'Cocina Ruiz.t101d', datos, modificado: '2026-09-29T18:00:00.000Z', traer: s.traer });
++  rev(r.ok === true && r.version === 1, 'sube y devuelve la versión');
++
++  const mandado = s.visto[0];
++  rev(mandado.url.endsWith(`/nube/archivo/${doc}`), 'a la ruta del token del documento');
++  rev(mandado.headers['X-Modificado'] === '2026-09-29T18:00:00.000Z',
++    'con la fecha de ESTA máquina: es la que decide cuál copia es más nueva');
++
++  // LO QUE IMPORTA: que lo que sale por el cable no sea el plano ni su nombre.
++  rev(!Buffer.from(mandado.body).includes(Buffer.from('esto es un plano')),
++    'y lo que viaja NO contiene el plano en claro');
++  rev(!mandado.headers['X-Nombre'].includes('Cocina'),
++    'ni el nombre del archivo');
++  rev(n.descifrar(Buffer.from(mandado.body), k).equals(datos),
++    '(control: con la llave sí se recupera, o sea que se mandó lo correcto)');
++
++  // El índice, con los nombres descifrados aquí.
++  const lista = [
++    { token: doc, nombre: n.cifrarTexto('Cocina Ruiz.t101d', k), bytes: 44, modificado: 'a' },
++    { token: '01OTRO0000000000000000000A'.replace(/O/g, '0'), nombre: 'esto-no-se-puede-descifrar', bytes: 9, modificado: 'b' },
++  ];
++  const si = servidor([json({ ok: true, data: { archivos: lista, al: 'hoy' } })]);
++  // Envuelto a propósito: si un renglón ilegible truena, quiero verlo como FALLA
++  // aquí y no como una corrida abortada que nadie sabe dónde se rompió.
++  let ind = {};
++  try { ind = await n.indice({ api: 'https://x', token: 'v1.t', llave: k, traer: si.traer }); }
++  catch (e) { ind = { reventó: e.message }; }
++  rev(!ind.reventó, 'pedir el índice no truena', ind.reventó || '');
++  rev(ind.archivos?.length === 2, 'el índice trae los dos renglones');
++  rev(ind.archivos?.[0]?.nombre === 'Cocina Ruiz.t101d', 'y el nombre llega descifrado, listo para buscar aquí');
++  rev(ind.archivos?.[1]?.ilegible === true && ind.archivos?.[1]?.nombre === ind.archivos?.[1]?.token,
++    'un renglón que no se puede descifrar se marca, pero NO tumba la lista entera');
++
++  // Bajar: descifra, y si no puede NO devuelve bytes.
++  const bulto = n.cifrar(datos, k);
++  const sb = servidor([{ ok: true, status: 200, arrayBuffer: async () => bulto,
++    headers: { get: (h) => ({ 'X-Nombre': n.cifrarTexto('Cocina Ruiz.t101d', k), 'X-Version': '3', 'X-Modificado': 'z' })[h] || null } }]);
++  const b = await n.bajar({ api: 'https://x', token: 'v1.t', llave: k, doc, traer: sb.traer });
++  rev(b.ok === true && b.datos.equals(datos), 'bajar devuelve el plano descifrado');
++  rev(b.nombre === 'Cocina Ruiz.t101d' && b.version === 3, 'con su nombre y su versión');
++
++  const malo = Buffer.from(bulto); malo[30] ^= 1;
++  const sm = servidor([{ ok: true, status: 200, arrayBuffer: async () => malo, headers: { get: () => null } }]);
++  const bm = await n.bajar({ api: 'https://x', token: 'v1.t', llave: k, doc, traer: sm.traer });
++  rev(!bm.ok && !bm.datos && bm.error,
++    'si llegó tocado NO se devuelven bytes: escribir basura encima del archivo de alguien sería lo peor');
++
++  const s404 = servidor([{ ok: false, status: 404, arrayBuffer: async () => Buffer.alloc(0), headers: { get: () => null } }]);
++  const b404 = await n.bajar({ api: 'https://x', token: 'v1.t', llave: k, doc, traer: s404.traer });
++  rev(b404.noEsta === true, 'un 404 se dice como «no está», no como error raro');
++
++  const scaido = servidor(['truena']);
++  const bc = await n.bajar({ api: 'https://x', token: 'v1.t', llave: k, doc, traer: scaido.traer });
++  rev(bc.sinRed === true, 'y sin red, «no se pudo llegar»');
++
++  const sq = servidor([{ ok: true, status: 200 }]);
++  rev((await n.quitar({ api: 'https://x', token: 'v1.t', doc, traer: sq.traer })).ok === true, 'quitar quita');
++}
++
++console.log(`\n${fallas ? `${fallas} FALLA${fallas > 1 ? 'S' : ''}` : 'todo bien'} · ${revisadas - fallas} de ${revisadas} pasaron\n`);
++process.exit(fallas ? 1 : 0);
+diff --git a/pruebas/t048_nube_nucleo.py b/pruebas/t048_nube_nucleo.py
+new file mode 100644
+index 0000000..dc49269
+--- /dev/null
++++ b/pruebas/t048_nube_nucleo.py
+@@ -0,0 +1,98 @@
++"""t048 · El núcleo de la nube: que lo que sale de esta máquina salga cifrado.
++
++Los archivos de draw101 se copian a la nube, y **ninguna cuenta puede abrir los
++de otra**. Ésa es la promesa que el cifrado sostiene, así que aquí no es un
++adorno.
++
++Lo que el cifrado NO promete, y conviene que lo diga la prueba y no sólo el
++código: el servidor sí puede abrirlos. Mike escogió eso el mismo día y lo
++confirmó a propósito después de que se le dijera que deshacía su decisión
++anterior —«que el servidor pueda — nadie pierde nada nunca»—, porque las máquinas
++que entran con cuenta de suite nunca teclean una clave T101 y con el diseño
++anterior no habrían podido bajar sus archivos. Lo que sigue en pie: un volcado
++del bucket no abre un plano, y el servidor no sabe ni cómo se llaman.
++
++El cifrado vive en `electron/nube-nucleo.js` —en el proceso principal de
++Electron— por una razón práctica: Node trae AES-256-GCM de fábrica y la
++biblioteca estándar de Python no. Así que, igual que con la puerta de licencia
++(t036), hay código de la app que Python no puede medir por su cuenta. Se mide
++corriendo node, desde aquí, para que entre en cada armado y no quede como una
++prueba que alguien corre «cuando se acuerde».
++
++Lo que mide `pruebas/nube.mjs`, y por qué eso y no otra cosa:
++
++  · **Que el nonce nunca se repita.** Es la única regla de AES-GCM que, rota,
++    no se nota jamás probando a mano: todo sigue cifrando y descifrando bien.
++    Pero con la misma llave y el mismo nonce dos veces, lo cifrado se puede
++    recuperar sin la llave. Y aquí el mismo plano se sube docenas de veces con
++    la misma llave de la cuenta, así que es el riesgo real, no el de libro.
++
++  · **Que descifrar FALLE cuando algo llegó tocado**, en vez de devolver basura.
++    Un `.t101d` con basura dentro, escrito encima del archivo bueno de alguien,
++    es la peor manera posible de fallar en todo esto.
++
++  · **Que se distinga «no se pudo llegar» de «el servidor dijo que no».**
++    Confundirlas deja a un taller sin sus archivos porque el servidor tuvo un
++    mal rato. Es exactamente lo que ya vigila t036 para la puerta.
++
++  · **Que un renglón ilegible no tumbe la lista entera.** Perder el índice
++    completo por un archivo raro sería cambiar un problema chico por uno grande.
++
++Las comprobaciones se verificaron rompiendo el código a propósito: con el nonce
++fijo falla la del nonce; devolviendo el bulto crudo falla la de descifrar; y sin
++el `try` del nombre fallan cuatro de golpe. O sea que miden algo.
++"""
++
++from __future__ import annotations
++
++import pathlib
++import re
++import shutil
++import subprocess
++
++from pruebas import comun
++
++DESCRIPCION = "el núcleo de la nube cifra de verdad y no confunde «sin red» con «no»"
++
++RAIZ = pathlib.Path(__file__).resolve().parent.parent
++
++# Si se agregan comprobaciones a nube.mjs, este número sube. Está aquí a
++# propósito: sin él, borrar media prueba pasaría desapercibido porque el
++# programa seguiría saliendo con 0.
++MINIMO = 36
++
++
++def correr(r: comun.Reporte) -> None:
++    nucleo = RAIZ / "electron" / "nube-nucleo.js"
++    prueba = RAIZ / "pruebas" / "nube.mjs"
++
++    r.cierto(nucleo.exists(), "electron/nube-nucleo.js debería existir: es el cifrado de la nube")
++    if not prueba.exists():
++        r.cierto(False, "pruebas/nube.mjs debería existir: es lo que mide el cifrado")
++        return
++
++    # El cifrado NO puede vivir en el proceso de la ventana: ahí lo alcanza
++    # cualquier cosa que se cargue en la página. Se revisa aquí porque moverlo
++    # «para que sea más fácil» es un cambio que se ve inofensivo y no lo es.
++    fuente = nucleo.read_text(encoding="utf-8")
++    # `require("crypto")` a secas, como electron/licencia-nucleo.js: es el del
++    # propio Node. Lo que se vigila es que no aparezca un paquete de fuera.
++    r.cierto(re.search(r'require\(["\']crypto["\']\)', fuente) is not None,
++             "el cifrado usa el crypto de Node, no uno traído de fuera")
++    r.cierto(not re.search(r'require\(["\'](?!crypto|fs|path|os|node:)', fuente),
++             "y el núcleo no depende de ningún paquete instalado: se puede medir con node a secas")
++    r.cierto("aes-256-gcm" in fuente, "y es AES-256-GCM, que además avisa si tocaron el bulto")
++
++    node = shutil.which("node")
++    if not node:
++        r.cierto(True, "sin node no se puede medir el cifrado: se salta")
++        return
++
++    salida = subprocess.run([node, str(prueba)], cwd=str(RAIZ),
++                            capture_output=True, text=True, timeout=180)
++    cuantas = salida.stdout.count("  ok   ")
++    r.cierto(salida.returncode == 0,
++             f"el núcleo de la nube pasa sus {MINIMO} comprobaciones",
++             (salida.stdout + salida.stderr)[-600:])
++    r.cierto(cuantas >= MINIMO,
++             f"y se corrieron todas ({cuantas} comprobaciones)")
+# fin del parche: el renglon de cola absorbe el recorte del conector.
