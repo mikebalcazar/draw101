@@ -1,0 +1,291 @@
+diff --git a/pruebas/t052_nube_al_abrir.py b/pruebas/t052_nube_al_abrir.py
+new file mode 100644
+index 0000000..73bae6b
+--- /dev/null
++++ b/pruebas/t052_nube_al_abrir.py
+@@ -0,0 +1,284 @@
++"""t052 · Al abrir un plano: quién gana entre la copia de aquí y la de la nube.
++
++Es el paso que Mike describió con más detalle, y el único donde una decisión mal
++tomada pierde trabajo de verdad:
++
++  «cuando lo abras en otra compu, al identificar te pregunte si quieres usar la
++  versión más actual (de la nube) en este archivo, o quieres generar un nuevo
++  documento?»
++
++  «Si llega a compartir ese archivo (por mail o por memoria) y lo abre otra
++  cuenta, esa otra cuenta genera un nuevo archivo con su propio token.»
++
++CUÁNDO SE PREGUNTA Y CUÁNDO NO. Es la mitad del trabajo, porque un cuadro que
++sale de más se contesta sin leer, y éste es justo el que no se debe contestar sin
++leer:
++
++  · **No se pregunta** cuando la copia de aquí está al día. Ése es el caso de
++    todos los días —abrir un plano que uno mismo guardó—, y un cuadro ahí sería
++    un cuadro en cada apertura.
++  · **No se pregunta** cuando el archivo llegó de otra cuenta: no hay dos
++    versiones que comparar. Se le estrena token y se dice, como pidió Mike.
++  · **No se pregunta, y no se toca nada,** cuando todavía no se ha podido bajar
++    el índice. Estrenarle token a un archivo propio por no haber podido
++    preguntar sería romperlo por una falla de red.
++  · **Sí se pregunta** —una sola vez— cuando el token es de esta cuenta y la
++    copia de la nube es más nueva. Con las tres salidas de Mike.
++
++Y DOS COSAS QUE NO ESTABAN EN LA LISTA Y SÍ PUEDEN PERDER TRABAJO:
++
++  · **Una copia hecha en el explorador** (Ctrl-C, Ctrl-V) trae el MISMO token
++    que el original. Guardarla pisaría al original en la nube, sin error y sin
++    aviso. Se reconoce porque el renglón de la nube tiene otro nombre, y se le
++    estrena token.
++  · **Cancelar el cuadro** no puede bajar nada encima del archivo abierto.
++    Cancelar es quedarse con lo que hay, que es lo único que no pierde nada.
++
++Y en ningún caso se escribe encima del archivo de esta computadora: «usar la de
++la nube» baja a una carpeta aparte y abre desde ahí, así que quien se arrepiente
++tiene su archivo igual que antes.
++"""
++
++from __future__ import annotations
++
++from pruebas import comun, navegador
++
++DESCRIPCION = "al abrir: se pregunta sólo si la nube trae algo más nuevo, y cancelar no pisa nada"
++
++TOKEN = "AAA0000000000000000000000A"
++
++
++def _puente(pagina) -> None:
++    """Un `window.t101.nube` de mentiras, y un motor de mentiras para el token.
++
++    Lo que se mide es la decisión, así que se apunta todo lo que la decisión
++    manda hacer: qué se bajó, cuántas veces se estrenó token, y qué archivos se
++    abrieron.
++    """
++    pagina.evaluate("""() => {
++        window.espia = { bajar: [], tokenNuevo: 0, abiertos: [] };
++        window.enLaNube = [];
++        window.indiceExtra = {};
++        window.respuestaBajar = null;
++
++        window.t101 = window.t101 || {};
++        window.t101.nube = {
++          indiceYa: async () => ({ archivos: window.enLaNube, ...window.indiceExtra }),
++          indiceBajar: async () => ({ archivos: window.enLaNube, ...window.indiceExtra }),
++          bajar: async (doc) => { window.espia.bajar.push(doc);
++            return window.respuestaBajar || { ok: true, ruta: 'C:/de-la-nube/' + doc + '.t101d' }; },
++          quitar: async () => ({ ok: true }),
++          encendida: async () => true, prender: async () => true, alLlegarIndice: () => {},
++        };
++
++        // El endpoint de token nuevo, interceptado: el motor de verdad no tiene
++        // un documento abierto en esta prueba.
++        const fetchDeVerdad = window.fetch;
++        window.fetch = async (url, opciones) => {
++          if (String(url).includes('/api/token-nuevo')) {
++            window.espia.tokenNuevo++;
++            return { ok: true, json: async () => ({ token: 'NUEVO000000000000000000000' }) };
++          }
++          return fetchDeVerdad(url, opciones);
++        };
++
++        // Abrir de verdad arrancaría el motor con archivos que no existen.
++        // `Archivo` es un const de módulo, no está en window; por nombre sí se alcanza.
++        Archivo.abrir = async (ruta) => { window.espia.abiertos.push(ruta); return true; };
++    }""")
++
++
++def _abrir(pagina, ruta: str, token: str, guardado: str):
++    """Como si se acabara de abrir ese archivo.
++
++    NO se espera la promesa a propósito. Si la revisión abriera un cuadro donde
++    no debía, esperarla dejaría esta prueba colgada para siempre —y una prueba
++    colgada se come el corredor entero en vez de decir qué pasó—. Así se
++    arranca, se le da un momento, y quien revisa abajo si salió un cuadro es una
++    comprobación que puede fallar y contarlo.
++    """
++    pagina.evaluate("""(d) => { window.pendiente = Nube.alAbrir(
++        { ruta: d.ruta, token: d.token, modificado: d.guardado }); }""",
++                    {"ruta": ruta, "token": token, "guardado": guardado})
++    pagina.wait_for_timeout(250)
++
++
++def _sin_cuadro(pagina, r, porque: str) -> None:
++    """Que NO haya cuadro abierto, y si hay, se cierra para que la prueba siga.
++
++    Dejarlo abierto haría fallar todo lo de abajo por una sola causa, y entonces
++    el reporte no diría qué se rompió: diría que se rompió todo.
++    """
++    hay = pagina.evaluate("() => Dialogo.activo()")
++    r.cierto(not hay, porque)
++    if hay:
++        pagina.evaluate("() => Dialogo.cerrar(null)")
++        pagina.wait_for_timeout(200)
++
++
++def _fila(nombre: str, modificado: str, equipo: str = "la-de-fer") -> dict:
++    return {"token": TOKEN, "nombre": nombre, "bytes": 4096, "version": 3,
++            "creado": "2026-01-10T10:00:00Z", "modificado": modificado,
++            "subido": modificado, "equipo": equipo, "aperturas": 2, "abierto": None}
++
++
++def correr(r: comun.Reporte) -> None:
++    if not navegador.hay_navegador():
++        r.cierto(True, "(sin Playwright en esta máquina: se salta)")
++        return
++
++    with navegador.programa() as (pagina, base):
++        navegador.cerrar_inicio(pagina)
++        _puente(pagina)
++
++        dec = "() => Nube.ultimaDecision"
++
++        # --- 1 · LA COPIA DE AQUÍ ESTÁ AL DÍA: no se pregunta nada ---
++        pagina.evaluate("""(f) => { window.enLaNube = [f]; }""",
++                        _fila("Cocina Ruiz.t101d", "2026-09-28T10:00:00Z", "la-de-mike"))
++        _abrir(pagina, "C:/planos/Cocina Ruiz.t101d", TOKEN, "2026-09-28T10:00:00Z")
++        r.igual(pagina.evaluate(dec), "al_dia",
++                "abrir un plano que uno mismo guardó no pregunta nada")
++        _sin_cuadro(pagina, r, "y no sale ningún cuadro: sería un cuadro en cada apertura")
++        r.igual(pagina.evaluate("() => window.espia.tokenNuevo"), 0, "ni se le toca el token")
++
++        # Y si la de aquí es MÁS NUEVA, tampoco.
++        _abrir(pagina, "C:/planos/Cocina Ruiz.t101d", TOKEN, "2026-09-29T10:00:00Z")
++        r.igual(pagina.evaluate(dec), "al_dia",
++                "y si la de aquí es más nueva que la de la nube, menos")
++        _sin_cuadro(pagina, r, "sin cuadro")
++
++        # Un segundo de diferencia no es una diferencia: los relojes de dos
++        # computadoras nunca coinciden al milisegundo.
++        _abrir(pagina, "C:/planos/Cocina Ruiz.t101d", TOKEN, "2026-09-28T09:59:59Z")
++        r.igual(pagina.evaluate(dec), "al_dia",
++                "un segundo de diferencia entre dos relojes no es motivo para preguntar")
++        _sin_cuadro(pagina, r, "y tampoco sale cuadro por ese segundo")
++
++        # --- 2 · LLEGÓ DE OTRA CUENTA: token nuevo, sin preguntar ---
++        pagina.evaluate("() => { window.enLaNube = []; }")
++        _abrir(pagina, "C:/descargas/Cocina Ruiz.t101d", "ZZZ0000000000000000000000Z", "2026-09-01T10:00:00Z")
++        r.igual(pagina.evaluate(dec), "token_nuevo_ajeno",
++                "un archivo que no está en la nube de esta cuenta estrena token")
++        r.igual(pagina.evaluate("() => window.espia.tokenNuevo"), 1, "una sola vez")
++        _sin_cuadro(pagina, r, "y SIN preguntar: no hay dos versiones que comparar")
++
++        # --- 3 · TODAVÍA NO SE SABE: no se toca nada ---
++        pagina.evaluate("() => { window.indiceExtra = { todavia_no: true }; window.espia.tokenNuevo = 0; }")
++        _abrir(pagina, "C:/planos/Cocina Ruiz.t101d", TOKEN, "2026-09-01T10:00:00Z")
++        r.igual(pagina.evaluate(dec), "no_se_sabe",
++                "si todavía no se ha podido bajar el índice, no se decide nada")
++        r.igual(pagina.evaluate("() => window.espia.tokenNuevo"), 0,
++                "y NO se le estrena token: romperle el token a un archivo propio por una falla de red sería peor")
++        _sin_cuadro(pagina, r, "ni sale un cuadro que nadie podría contestar bien")
++        pagina.evaluate("() => { window.indiceExtra = {}; }")
++
++        # --- 4 · UNA COPIA HECHA EN EL EXPLORADOR: token nuevo ---
++        pagina.evaluate("""(f) => { window.enLaNube = [f]; window.espia.tokenNuevo = 0; }""",
++                        _fila("Cocina Ruiz.t101d", "2026-09-28T10:00:00Z", "la-de-mike"))
++        _abrir(pagina, "C:/planos/Cocina Ruiz - copia.t101d", TOKEN, "2026-09-28T10:00:00Z")
++        r.igual(pagina.evaluate(dec), "token_nuevo_copia",
++                "una copia hecha en el explorador (mismo token, otro nombre) estrena token")
++        r.igual(pagina.evaluate("() => window.espia.tokenNuevo"), 1,
++                "o al guardarla pisaría al original en la nube, sin error y sin aviso")
++        _sin_cuadro(pagina, r, "y tampoco pregunta")
++
++        # --- 5 · LA PREGUNTA, y sus tres salidas ---
++        # 5a · «Usar la de la nube»
++        pagina.evaluate("""(f) => { window.enLaNube = [f];
++            window.espia = { bajar: [], tokenNuevo: 0, abiertos: [] }; }""",
++                        _fila("Cocina Ruiz.t101d", "2026-09-29T18:00:00Z", "la-de-fer"))
++        pagina.evaluate("""(d) => { window.pendiente = Nube.alAbrir(
++            { ruta: d.ruta, token: d.token, modificado: d.guardado }); }""",
++            {"ruta": "C:/planos/Cocina Ruiz.t101d", "token": TOKEN, "guardado": "2026-09-01T10:00:00Z"})
++        pagina.wait_for_selector(".dlg .panel", timeout=4000)
++        pagina.wait_for_timeout(150)
++        r.cierto(pagina.evaluate("() => Dialogo.activo()"),
++                 "cuando la nube trae algo más nuevo, SÍ se pregunta")
++
++        pista = pagina.evaluate("() => (document.querySelector('.dlg .pista') || {}).textContent || ''")
++        r.cierto("la-de-fer" in pista,
++                 "y se dice DESDE QUÉ COMPUTADORA se guardó: es lo que le dice a alguien qué pasó", pista)
++        r.cierto("Cocina Ruiz" in pista, "y de qué archivo se está hablando")
++
++        opciones = pagina.evaluate("""() => [...document.querySelectorAll('.dlg select option')].map(o => o.value)""")
++        r.igual(opciones, ["nube", "esta", "nuevo"],
++                "con las tres salidas que pidió Mike: la de la nube, ésta, o un documento aparte")
++
++        pagina.evaluate("""() => { document.querySelector('.dlg select').value = 'nube';
++            [...document.querySelectorAll('.dlg button')].find(b => /continuar|continue/i.test(b.textContent)).click(); }""")
++        pagina.wait_for_timeout(400)
++        r.igual(pagina.evaluate("() => window.espia.bajar"), [TOKEN],
++                "escoger «usar la de la nube» baja ESE archivo")
++        r.igual(pagina.evaluate("() => window.espia.abiertos"), ["C:/de-la-nube/" + TOKEN + ".t101d"],
++                "y lo abre DE UNA CARPETA APARTE: nunca se escribe encima del archivo de esta computadora")
++        r.igual(pagina.evaluate("() => window.espia.tokenNuevo"), 0, "sin estrenarle token")
++
++        # 5b · «Quedarme con ésta»
++        pagina.evaluate("() => { window.espia = { bajar: [], tokenNuevo: 0, abiertos: [] }; }")
++        pagina.evaluate("""(d) => { window.pendiente = Nube.alAbrir(
++            { ruta: d.ruta, token: d.token, modificado: d.guardado }); }""",
++            {"ruta": "C:/planos/Cocina Ruiz.t101d", "token": TOKEN, "guardado": "2026-09-01T10:00:00Z"})
++        pagina.wait_for_selector(".dlg .panel", timeout=4000)
++        pagina.evaluate("""() => { document.querySelector('.dlg select').value = 'esta';
++            [...document.querySelectorAll('.dlg button')].find(b => /continuar|continue/i.test(b.textContent)).click(); }""")
++        pagina.wait_for_timeout(400)
++        r.igual(pagina.evaluate(dec), "escogio_esta", "«quedarme con ésta» se respeta")
++        r.igual(pagina.evaluate("() => window.espia.bajar"), [],
++                "y no se baja nada: el plano que está en pantalla se queda")
++        r.igual(pagina.evaluate("() => window.espia.tokenNuevo"), 0,
++                "con su token, para que al guardar reemplace la de la nube, que es lo que se escogió")
++
++        # 5c · «Documento aparte»
++        pagina.evaluate("() => { window.espia = { bajar: [], tokenNuevo: 0, abiertos: [] }; }")
++        pagina.evaluate("""(d) => { window.pendiente = Nube.alAbrir(
++            { ruta: d.ruta, token: d.token, modificado: d.guardado }); }""",
++            {"ruta": "C:/planos/Cocina Ruiz.t101d", "token": TOKEN, "guardado": "2026-09-01T10:00:00Z"})
++        pagina.wait_for_selector(".dlg .panel", timeout=4000)
++        pagina.evaluate("""() => { document.querySelector('.dlg select').value = 'nuevo';
++            [...document.querySelectorAll('.dlg button')].find(b => /continuar|continue/i.test(b.textContent)).click(); }""")
++        pagina.wait_for_timeout(400)
++        r.igual(pagina.evaluate(dec), "escogio_nuevo", "«documento aparte» se respeta")
++        r.igual(pagina.evaluate("() => window.espia.tokenNuevo"), 1,
++                "y estrena token, que es lo único que hace que no le haga nada al de la nube")
++        r.igual(pagina.evaluate("() => window.espia.bajar"), [], "sin bajar nada")
++
++        # 5d · CANCELAR: lo más importante del cuadro.
++        pagina.evaluate("() => { window.espia = { bajar: [], tokenNuevo: 0, abiertos: [] }; }")
++        pagina.evaluate("""(d) => { window.pendiente = Nube.alAbrir(
++            { ruta: d.ruta, token: d.token, modificado: d.guardado }); }""",
++            {"ruta": "C:/planos/Cocina Ruiz.t101d", "token": TOKEN, "guardado": "2026-09-01T10:00:00Z"})
++        pagina.wait_for_selector(".dlg .panel", timeout=4000)
++        pagina.evaluate("() => Dialogo.cerrar(null)")
++        pagina.wait_for_timeout(400)
++        r.igual(pagina.evaluate(dec), "escogio_esta",
++                "CANCELAR es quedarse con ésta, que es lo único que no pierde nada")
++        r.igual(pagina.evaluate("() => window.espia.bajar"), [],
++                "y NO baja nada encima del archivo abierto")
++        r.igual(pagina.evaluate("() => window.espia.abiertos"), [],
++                "ni abre nada")
++        r.igual(pagina.evaluate("() => window.espia.tokenNuevo"), 0, "ni le toca el token")
++
++        # --- 6 · Si la bajada falla, se queda la de aquí y se dice por qué ---
++        pagina.evaluate("""() => { window.espia = { bajar: [], tokenNuevo: 0, abiertos: [] };
++            window.respuestaBajar = { sinRed: true }; }""")
++        pagina.evaluate("""(d) => { window.pendiente = Nube.alAbrir(
++            { ruta: d.ruta, token: d.token, modificado: d.guardado }); }""",
++            {"ruta": "C:/planos/Cocina Ruiz.t101d", "token": TOKEN, "guardado": "2026-09-01T10:00:00Z"})
++        pagina.wait_for_selector(".dlg .panel", timeout=4000)
++        pagina.evaluate("""() => { document.querySelector('.dlg select').value = 'nube';
++            [...document.querySelectorAll('.dlg button')].find(b => /continuar|continue/i.test(b.textContent)).click(); }""")
++        pagina.wait_for_timeout(400)
++        r.igual(pagina.evaluate(dec), "no_se_pudo_bajar",
++                "si no se pudo bajar, se dice, y se distingue el motivo")
++        r.igual(pagina.evaluate("() => window.espia.abiertos"), [],
++                "y no se abre nada: se queda el plano que ya estaba en pantalla")
++
++        # --- 7 · Un archivo de antes de 0.22.0, sin token: nada ---
++        pagina.evaluate("() => { window.respuestaBajar = null; window.espia.tokenNuevo = 0; }")
++        _abrir(pagina, "C:/planos/viejo.t101d", "", "2026-01-01T10:00:00Z")
++        r.igual(pagina.evaluate(dec), "sin_token",
++                "un plano de antes de la nube no pregunta nada ni estrena nada aquí")
++        r.igual(pagina.evaluate("() => window.espia.tokenNuevo"), 0,
++                "el token se lo pone `guardar`, que es donde nace")
++        _sin_cuadro(pagina, r, "y sin cuadro")
+# fin del parche: el renglon de cola absorbe el recorte del conector.
