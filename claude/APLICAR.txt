@@ -36,3 +36,10 @@ B19-t035-al-dia.patch
 0.21.5-spline-geometria.patch
 0.21.5-recortar.patch
 0.21.5-version.patch
+0.21.6-capas-en-la-hoja.patch
+0.21.6-a-capas.patch
+0.21.6-b-cotas.patch
+0.21.6-c-proyecto.patch
+0.21.6-d-interfaz.patch
+0.21.6-e-pruebas.patch
+0.21.6-version.patch
