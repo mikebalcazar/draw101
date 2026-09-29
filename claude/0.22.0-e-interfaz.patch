@@ -1,0 +1,164 @@
+diff --git a/ui/ajustes.js b/ui/ajustes.js
+index 15bd40f..745e743 100644
+--- a/ui/ajustes.js
++++ b/ui/ajustes.js
+@@ -212,6 +212,22 @@ const Ajustes = (() => {
+   /* --- Configuración general: idioma y tema  ·  0.19.0 ------------------ */
+   async function general() {
+     const prefs = estado.prefs || {};
++
++    /* LA NUBE (0.22.0). Va aquí y no en un panel propio porque es UN
++     * interruptor: Mike lo decidió así —«Todo sube por default, o desactivas
++     * todo. No hay selección de archivos»—, y un panel entero para una casilla
++     * sería inventarle complejidad a una decisión que ya se tomó.
++     *
++     * No se guarda en las preferencias del motor sino con la licencia y la
++     * llave, en la carpeta de draw101, porque es de ESTA computadora: quien
++     * apaga la nube en la laptop del taller no la apaga en la de su casa. Y el
++     * motor no tiene por qué saber de la nube: el cifrado vive en Electron.
++     *
++     * Sin la app instalada (navegador suelto) la casilla no sale: ofrecer un
++     * interruptor que no hace nada es peor que no ofrecerlo. */
++    const hayNube = !!(window.t101 && window.t101.nube);
++    const nubeAntes = hayNube ? await window.t101.nube.encendida() : false;
++
+     const v = await Dialogo.abrir({
+       titulo: "Configuración de draw101",
+       pista: "Los comandos se aceptan en los dos idiomas siempre (LINE y LINEA). Cambiar el idioma recarga la ventana.",
+@@ -223,10 +239,20 @@ const Ajustes = (() => {
+         { clave: "parpadeo_comando", etiqueta: "Parpadeo al ejecutar", tipo: "casilla",
+           valor: prefs.parpadeo_comando !== false,
+           pista: "Un parpadeo casi imperceptible del lienzo cuando un comando cambia algo" },
++        ...(hayNube ? [{ clave: "nube", etiqueta: "Copia en la nube", tipo: "casilla",
++          valor: nubeAntes,
++          pista: "Cada plano que guardes se copia a tu cuenta, cifrado. Al volver a prenderla "
++               + "no se sube lo que ya tienes en la computadora: se va subiendo conforme lo abras." }] : []),
+       ],
+       aceptar: "Aplicar",
+     });
+     if (!v) return;
++    if (hayNube && !!v.nube !== nubeAntes) {
++      await window.t101.nube.prender(!!v.nube);
++      avisar(!!v.nube
++        ? Tr("La nube queda encendida. Lo que guardes de aquí en adelante se copia a tu cuenta.")
++        : Tr("La nube queda apagada en esta computadora. Lo que ya está subido se queda donde está."));
++    }
+     if (!!v.parpadeo_comando !== (prefs.parpadeo_comando !== false)) {
+       await guardarPrefs({ parpadeo_comando: !!v.parpadeo_comando });
+     }
+diff --git a/ui/app.js b/ui/app.js
+index f8af750..1444e15 100644
+--- a/ui/app.js
++++ b/ui/app.js
+@@ -432,6 +432,8 @@ const Archivo = (() => {
+     { name: "DWG", extensions: ["dwg"] },
+   ];
+ 
++  let revisandoNube = false;   // ver el bloque de la nube, dentro de `abrir`
++
+   /** Abre un plano. En pestaña nueva, salvo que la de enfrente esté en blanco:
+    *  abrir tres planos seguidos no debe dejar dos pestañas vacías detrás. */
+   async function abrir(ruta) {
+@@ -450,6 +452,23 @@ const Archivo = (() => {
+       avisar(`Abierto: ${nat} entidades editables` +
+         (pre ? ` y ${pre} que se conservan tal cual (${Object.keys(inf.preservadas).join(", ").toLowerCase()}).` : "."));
+     }
++    /* LA NUBE, después de abrir (0.22.0). Va al final a propósito: el plano ya
++     * está en pantalla, así que si esto pregunta algo, se pregunta sobre algo
++     * que ya se puede ver, y si falla, el plano abrió igual.
++     *
++     * No se espera —salvo que haya que preguntar, y de eso se encarga Nube—, y
++     * `revisandoNube` evita el círculo: cuando alguien escoge «usar la de la
++     * nube», Nube baja el archivo y lo abre por aquí otra vez, y sin esta
++     * guardia volvería a preguntar por el archivo que acaba de bajar. */
++    if (window.Nube && Nube.alAbrir && !revisandoNube) {
++      revisandoNube = true;
++      try {
++        await Nube.alAbrir({ ruta, token: estado.resumen.token,
++                             modificado: estado.resumen.guardado_en });
++      } catch (e) { /* la nube nunca estorba al plano abierto */ }
++      finally { revisandoNube = false; }
++    }
++
+     // Un DWG grande y sin ODA: se ofrece instalarlo, una sola vez en la vida
+     // del programa (el motor lleva la cuenta). No se espera: el plano ya abrió.
+     const mb = estado.resumen.sugerir_oda;
+@@ -494,6 +513,21 @@ const Archivo = (() => {
+     try {
+       aplicar(await post("/api/guardar", { ruta }));
+       avisar(comoOtro ? `Guardado como ${estado.resumen.nombre}.` : "Guardado.");
++      /* Y LA COPIA A LA NUBE (0.22.0). Va DESPUÉS de avisar que se guardó, y
++       * sin esperarla, por una razón que no es de estilo: el archivo ya está
++       * escrito en el disco: lo que importa ya pasó. Si la subida tardara o
++       * fallara, «Guardado» seguiría siendo cierto, y guardar no puede ponerse
++       * lento porque el wifi ande mal.
++       *
++       * `Nube.alGuardar` decide si sube (la nube puede estar apagada) y se
++       * calla si no puede. Lo que NUNCA hace es convertir un guardado bueno en
++       * un error. */
++      if (window.Nube && Nube.alGuardar) {
++        Nube.alGuardar({ ruta, token: estado.resumen.token,
++                         nombre: estado.resumen.nombre,
++                         modificado: estado.resumen.guardado_en })
++          .catch(() => { /* la nube nunca estorba a un guardado que ya está */ });
++      }
+       return true;
+     } catch (e) { avisar(e.message, true); sinLicencia(e); return false; }
+   }
+diff --git a/ui/idioma.js b/ui/idioma.js
+index 0730504..244bcce 100644
+--- a/ui/idioma.js
++++ b/ui/idioma.js
+@@ -200,6 +200,7 @@ const Idioma = (() => {
+     SETTINGS: "CONFIGURACION", CONFIG: "CONFIGURACION", OPTIONS: "CONFIGURACION", LANGUAGE: "IDIOMA",
+     UPDATE: "ACTUALIZAR", UPDATES: "ACTUALIZAR", NOTICES: "AVISOS", NEWS: "AVISOS", LICENSES: "LICENCIAS", CREDITS: "LICENCIAS",
+     LICENSE: "LICENCIA", SUBSCRIPTION: "LICENCIA", ACTIVATE: "LICENCIA",
++    CLOUD: "NUBE", MYFILES: "NUBE",
+     UNITS: "UNIDADES", CENTER: "CENTRAR", CENTERVIEWPORT: "CENTRAR", GUIDE: "GUIA", TOOLS: "GUIA",
+     PREVIEW: "VISTAPREVIA", PRINTPREVIEW: "VISTAPREVIA",
+   };
+diff --git a/ui/index.html b/ui/index.html
+index 9f2b662..3e98def 100644
+--- a/ui/index.html
++++ b/ui/index.html
+@@ -357,6 +357,7 @@
+ <script src="ajustes.js"></script>
+ <script src="actualizar.js"></script>
+ <script src="licencia.js"></script>
++<script src="nube.js"></script>
+ <script src="color.js"></script>
+ <script src="app.js"></script>
+ <script src="sugeridor.js"></script>
+diff --git a/ui/styles.css b/ui/styles.css
+index 0c811de..b1fa933 100644
+--- a/ui/styles.css
++++ b/ui/styles.css
+@@ -880,3 +880,27 @@ select.campo-hoja{position:absolute;z-index:6;box-sizing:border-box;padding:2px
+   border-radius:var(--r);box-shadow:0 6px 20px var(--sombra);font-size:12.5px}
+ #letrero-version span{color:var(--txt)}
+ #letrero-version button{white-space:nowrap}
++
++/* Mis archivos en la nube (0.22.0). Reusa .dlg: lo único propio es la lista,
++   la barra de búsqueda y los botones de orden. Un panel aparte sería otro
++   juego de colores y bordes que mantener al día. */
++.dlg.nube .panel{width:min(620px,calc(100% - 48px))}
++.nube-barra{display:flex;gap:8px;align-items:center;flex-wrap:wrap;
++  padding:10px 18px;border-bottom:1px solid var(--linea)}
++.nube-busca{flex:1 1 180px;min-width:140px}
++.nube-ordenes{display:flex;gap:4px;flex-wrap:wrap}
++.nube-ordenes .gh{font-size:11px;padding:3px 8px}
++.nube-ordenes .gh.puesto{background:var(--acc2);color:#fff;border-color:var(--acc2)}
++.nube-aviso{padding:8px 18px;font-size:11.5px;line-height:1.45;color:var(--txt2);
++  background:var(--panel3);border-bottom:1px solid var(--linea2)}
++.nube-lista{min-height:120px;max-height:52vh;gap:0;display:block}
++.nube-fila{display:grid;grid-template-columns:1fr auto auto;gap:10px;
++  align-items:center;padding:8px 0;border-bottom:1px solid var(--linea2);cursor:default}
++.nube-fila:last-child{border-bottom:none}
++.nube-fila:hover{background:var(--panel3)}
++.nube-nom{font-size:12.5px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
++.nube-fila.ilegible .nube-nom{color:var(--txt3);font-style:italic}
++.nube-dat{font-size:11px;color:var(--txt3);white-space:nowrap}
++.nube-vacio{padding:26px 0;text-align:center;font-size:12px;color:var(--txt3)}
++.nube-pie{padding:11px 18px;border-top:1px solid var(--linea);
++  display:flex;justify-content:flex-end}
+# fin del parche: el renglon de cola absorbe el recorte del conector.
