@@ -1,0 +1,38 @@
+diff --git a/core/version.py b/core/version.py
+index db2b68d..4ce1f25 100644
+--- a/core/version.py
++++ b/core/version.py
+@@ -41,9 +41,32 @@ BITACORA: list[dict] = [
+             "La capa COTAS ahora se llama ANOTACIONES, y el TEXTO también nace "
+             "en ella, como ya nacían las cotas y las directrices. El nombre "
+             "viejo dejó de describir lo que hay dentro.",
++            "Las cotas ya no escriben los ceros que no dicen nada: 120 en vez "
++            "de 120.00, y 120.5 en vez de 120.50. Importa trabajando en "
++            "centímetros, donde hay que pedir un decimal para no perder los "
++            "milímetros y toda medida redonda arrastraba un punto cero. Se "
++            "puede devolver con una casilla en el estilo de cota, y el DXF "
++            "sale igual en AutoCAD.",
+             "Al abrir un dibujo tuyo de antes, su capa COTAS se renombra sola "
+             "y todo lo que vivía en ella se va con ella. Un DXF de alguien más "
+             "que traiga su propia COTAS no se toca: es suya, no nuestra.",
++            "En la hoja, una ventana puede ir SIN ESCALA: ahí la rueda la "
++            "acerca y la aleja como uno quiera, con EDITARVENTANA encendido. "
++            "El pie de plano escribe S/E en vez de un número que sería "
++            "mentira. Las ventanas con escala siguen intocables, que es lo que "
++            "hace que el plano se pueda medir.",
++            "El ESPACIO acepta la respuesta de una pregunta S/N o R/P, igual "
++            "que el Enter. Antes la borraba: en ESPEJO se tecleaba N, se daba "
++            "espacio y no pasaba nada. Un rótulo o el nombre de un bloque "
++            "siguen llevando espacios de verdad; el cambio es sólo donde se "
++            "contesta con una letra.",
++            "Y en inglés esa misma pregunta sale «Y/N»: ahora la Y vale igual "
++            "que la S. Antes sólo se miraba la S y en inglés no había manera "
++            "de contestar que sí.",
++            "CAPTURA (atajo SS) copia al portapapeles una imagen de lo que se "
++            "ve del dibujo, lista para pegar en un correo o en una cotización. "
++            "Va el plano solo: sin la mira, sin los agarres de la selección y "
++            "con el fondo puesto, para que no salga negra al pegarla.",
+         ],
+     },
+     {
+# fin del parche: el renglon de cola absorbe el recorte del conector.
