@@ -43,3 +43,8 @@ B19-t035-al-dia.patch
 0.21.6-d-interfaz.patch
 0.21.6-e-pruebas.patch
 0.21.6-version.patch
+0.21.6-e2-sin-ceros.patch
+0.21.6-f-sin-escala.patch
+0.21.6-g-el-espacio.patch
+0.21.6-h-captura.patch
+0.21.6-i-version.patch

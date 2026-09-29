@@ -1,0 +1,73 @@
+diff --git a/core/cotas.py b/core/cotas.py
+index f746b61..7657ee0 100644
+--- a/core/cotas.py
++++ b/core/cotas.py
+@@ -53,7 +53,21 @@ def formato(valor: float, est: dict, texto: str = "") -> str:
+     # 1:20 son 3 450 mm de mueble, y lo que tiene que decir el plano es 3 450.
+     valor = valor * float(est.get("factor_medida", 1.0) or 1.0)
+     dec = int(est.get("decimales", 0))
+-    medida = f"{valor:.{dec}f}" + (est.get("sufijo") or "")
++    medida = f"{valor:.{dec}f}"
++    # Los ceros que no dicen nada se van  ·  Mike, 29-sep-2026: «que por
++    # default eliminen los trailing zeros. Si no hay decimales que marcar, no
++    # se ponen decimales». Es el DIMZIN 8 de AutoCAD, y es lo normal en un
++    # plano de arquitectura: 120 se lee de un vistazo, 120.00 hay que leerlo.
++    #
++    # Importa sobre todo desde que el taller trabaja en CENTÍMETROS: para no
++    # perder los milímetros hay que pedir un decimal, y entonces CADA medida
++    # redonda arrastraba un «.0» que no aporta nada.
++    #
++    # Se quita el punto también, si al quitar los ceros se queda solo. Y si
++    # alguien quiere los ceros de vuelta, es una casilla en el estilo de cota.
++    if dec and est.get("quitar_ceros", True) and "." in medida:
++        medida = medida.rstrip("0").rstrip(".")
++    medida += (est.get("sufijo") or "")
+     if not texto:
+         return medida
+     return texto.replace("<>", medida)
+diff --git a/core/documento.py b/core/documento.py
+index 22e90cd..09a29b8 100644
+--- a/core/documento.py
++++ b/core/documento.py
+@@ -47,6 +47,11 @@ ESTILO_COTA_T101 = {
+     "ext_linea": 1.25,          # cuánto sobresale la línea de extensión
+     "hueco_origen": 0.625,      # separación entre la pieza y la línea
+     "decimales": 0,             # el taller trabaja en milímetros enteros
++    # Los ceros de más no se escriben (el DIMZIN 8 de AutoCAD): 120 y no
++    # 120.00, 120.5 y no 120.50. Pedido de Mike el 29-sep-2026. Importa desde
++    # que se trabaja en centímetros, donde hay que pedir un decimal para no
++    # perder los milímetros y entonces toda medida redonda arrastraba un «.0».
++    "quitar_ceros": True,
+     "sufijo": "",
+     # 2.5 × 12 = 30 mm de texto en el dibujo, que es lo que Mike pidió ver
+     # mientras traza. Con el 1.0 de antes el texto medía 2.5 mm dentro de un
+diff --git a/export/dxf.py b/export/dxf.py
+index 08cfee3..d3d57c4 100644
+--- a/export/dxf.py
++++ b/export/dxf.py
+@@ -102,6 +102,10 @@ def _preparar_estilos(doc_dxf, doc: Documento) -> None:
+         ds.dxf.dimexe = est.get("ext_linea", 1.25)
+         ds.dxf.dimexo = est.get("hueco_origen", 0.625)
+         ds.dxf.dimdec = est.get("decimales", 0)
++        # DIMZIN 8: no escribir los ceros de más. Sin esto el DXF se vería
++        # distinto en AutoCAD que aquí, porque el texto de la cota va como
++        # «<>» y quien lo formatea allá es AutoCAD, con SU estilo.
++        ds.dxf.dimzin = 8 if est.get("quitar_ceros", True) else 0
+         ds.dxf.dimscale = est.get("factor_escala", 1.0)
+         if est.get("estilo_texto") in doc_dxf.styles:
+             ds.dxf.dimtxsty = est["estilo_texto"]
+diff --git a/ui/ajustes.js b/ui/ajustes.js
+index b079f04..15bd40f 100644
+--- a/ui/ajustes.js
++++ b/ui/ajustes.js
+@@ -97,6 +97,9 @@ const Ajustes = (() => {
+           pista: enModelo(est.altura_texto) },
+         { clave: "decimales", etiqueta: "Decimales", tipo: "numero",
+           valor: est.decimales },
++        { clave: "quitar_ceros", etiqueta: "Sin ceros de más", tipo: "casilla",
++          valor: est.quitar_ceros !== false,
++          pista: "120 en vez de 120.00, y 120.5 en vez de 120.50. Es el DIMZIN de AutoCAD." },
+         { clave: "sufijo", etiqueta: "Sufijo", tipo: "texto",
+           valor: est.sufijo || "", marcador: "mm, cm…" },
+         { clave: "_t2", etiqueta: "Flechas y líneas", tipo: "titulo" },
+# fin del parche: el renglon de cola absorbe el recorte del conector.

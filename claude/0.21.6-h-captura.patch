@@ -1,0 +1,123 @@
+diff --git a/electron/main.js b/electron/main.js
+index ec992ed..2425b91 100644
+--- a/electron/main.js
++++ b/electron/main.js
+@@ -364,6 +364,19 @@ ipcMain.handle("abrir-con-sistema", async (_e, ruta) => {
+  */
+ 
+ /** Las impresoras instaladas en esta máquina, tal como las ve Windows. */
++/* Una imagen al portapapeles del sistema. Va por el proceso principal y no
++ * por `navigator.clipboard` de la página: ahí una imagen grande se atora y
++ * hace falta que la ventana tenga el foco, que es justo lo que no pasa cuando
++ * se teclea SS y se va uno a otro programa a pegar. */
++ipcMain.handle("copiar-imagen", async (_e, dataURL) => {
++  const { clipboard, nativeImage } = require("electron");
++  if (typeof dataURL !== "string" || !dataURL.startsWith("data:image/")) return false;
++  const img = nativeImage.createFromDataURL(dataURL);
++  if (img.isEmpty()) return false;
++  clipboard.writeImage(img);
++  return true;
++});
++
+ ipcMain.handle("listar-impresoras", async () => {
+   const w = ventana || BrowserWindow.getAllWindows()[0];
+   if (!w) return [];
+diff --git a/electron/preload.js b/electron/preload.js
+index ea70d57..a0476c2 100644
+--- a/electron/preload.js
++++ b/electron/preload.js
+@@ -10,6 +10,8 @@ contextBridge.exposeInMainWorld("t101", {
+   imprimirPDF: (ruta, opciones) => ipcRenderer.invoke("imprimir-pdf", ruta, opciones),
+   imprimirHTML: (html, opciones) => ipcRenderer.invoke("imprimir-html", html, opciones),
+   impresoras: () => ipcRenderer.invoke("listar-impresoras"),
++  // Una imagen al portapapeles del sistema (CAPTURA / SS).
++  copiarImagen: (dataURL) => ipcRenderer.invoke("copiar-imagen", dataURL),
+   // Bajar un archivo con la red de Chromium (proceso principal: sin CORS y con
+   // los certificados de Windows). Devuelve la ruta donde quedó.
+   bajar: (url, nombre, alAvanzar) => {
+diff --git a/ui/comandos.js b/ui/comandos.js
+index 24bebb5..53ecf0e 100644
+--- a/ui/comandos.js
++++ b/ui/comandos.js
+@@ -559,6 +559,64 @@ Comandos.registrar({
+   },
+ });
+ 
++/* CAPTURA (SS) · Mike, 29-sep-2026: «necesito un comando de screenshot que
++ * ponga en el portapapeles un screenshot de la ventana de modelo. El shortcut
++ * podría ser SS».
++ *
++ * Se copia **el lienzo del dibujo y nada más**: no la mira, ni los agarres de
++ * la selección, ni la gomita del borrador, que viven en el lienzo de encima.
++ * Es lo que uno quiere pegar en un correo o en una cotización —el plano, no la
++ * foto de alguien trabajando—. El fondo se pinta a mano con el color del tema
++ * porque el lienzo es transparente: sin eso, pegado en Word, sale en negro.
++ *
++ * Dos caminos al portapapeles, en este orden:
++ *   1. Electron, por el puente: `clipboard.writeImage`. Es el que corre en la
++ *      máquina de Mike y el que aguanta imágenes grandes.
++ *   2. El del navegador (`ClipboardItem`), para el banco de pruebas y por si
++ *      algún día esto corre en una pestaña. */
++async function _imagenDelModelo() {
++  const dpr = window.devicePixelRatio || 1;
++  const fuera = document.createElement("canvas");
++  fuera.width = lienzo.width;
++  fuera.height = lienzo.height;
++  const c = fuera.getContext("2d");
++  const tema = getComputedStyle(document.documentElement)
++    .getPropertyValue("--lienzo").trim();
++  c.fillStyle = tema || "#ffffff";
++  c.fillRect(0, 0, fuera.width, fuera.height);
++  c.drawImage(lienzo, 0, 0);
++  return { lienzo: fuera, ancho: Math.round(fuera.width / dpr),
++           alto: Math.round(fuera.height / dpr) };
++}
++
++async function _alPortapapeles(cv) {
++  if (window.t101 && window.t101.copiarImagen) {
++    return await window.t101.copiarImagen(cv.toDataURL("image/png"));
++  }
++  if (navigator.clipboard && window.ClipboardItem) {
++    const trozo = await new Promise((r) => cv.toBlob(r, "image/png"));
++    if (!trozo) return false;
++    await navigator.clipboard.write([new ClipboardItem({ "image/png": trozo })]);
++    return true;
++  }
++  return false;
++}
++
++Comandos.registrar({
++  nombre: "CAPTURA", alias: ["SS", "SCREENSHOT"],
++  ayuda: "Copia al portapapeles una imagen de lo que se ve del dibujo",
++  correr: async () => {
++    try {
++      const { lienzo: cv, ancho, alto } = await _imagenDelModelo();
++      const fue = await _alPortapapeles(cv);
++      if (fue) Comandos.eco(`Copiado al portapapeles: ${ancho} × ${alto} px.`, "bien");
++      else Comandos.eco("No se pudo llegar al portapapeles desde aquí.", "mal");
++    } catch (e) {
++      Comandos.eco("No se pudo copiar: " + (e && e.message ? e.message : e), "mal");
++    }
++  },
++});
++
+ Comandos.registrar({
+   nombre: "VERSION", alias: ["VER", "ACERCADE"],
+   ayuda: "Qué versión es ésta y qué trajo",
+diff --git a/ui/idioma-en.js b/ui/idioma-en.js
+index 8c46c22..650db20 100644
+--- a/ui/idioma-en.js
++++ b/ui/idioma-en.js
+@@ -210,6 +210,11 @@ const IDIOMA_EN = {
+   "ZOOM: usa E (extensión), V (ventana), P (previo) o un factor.": "ZOOM: use E (extents), V (window), P (previous) or a factor.",
+   "No hay vista anterior.": "There is no previous view.",
+   "Encuadra todo el dibujo": "Zooms to the whole drawing",
++  "Copia al portapapeles una imagen de lo que se ve del dibujo":
++    "Copies a picture of the visible drawing to the clipboard",
++  "Copiado al portapapeles: {0} × {1} px.": "Copied to the clipboard: {0} × {1} px.",
++  "No se pudo llegar al portapapeles desde aquí.":
++    "The clipboard could not be reached from here.",
+   "Mueve la vista (o arrastra con el botón central o derecho)": "Pans the view (or drag with the middle or right button)",
+   "Arrastra con el botón central, el derecho, o Shift+izquierdo.": "Drag with the middle button, the right one, or Shift+left.",
+   "Redibuja el plano fino y rehace el índice (como REGEN de AutoCAD)": "Redraws the drawing at full quality and rebuilds the index (like AutoCAD's REGEN)",
+# fin del parche: el renglon de cola absorbe el recorte del conector.
