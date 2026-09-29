@@ -1,0 +1,397 @@
+diff --git a/ui/editar.js b/ui/editar.js
+index 11945d4..2c5cc2a 100644
+--- a/ui/editar.js
++++ b/ui/editar.js
+@@ -579,21 +579,98 @@ Comandos.registrar({
+ /* ===================================================================== */
+ /* Se recorta contra **todo lo que hay**, como el TRIM moderno de AutoCAD: pedir
+  * primero los bordes de corte y luego los trozos era el paso que más se
+- * saltaba y el que más confundía. Funciona con líneas y arcos; una polilínea se
+- * explota antes (todavía no) — lo dice y no lo intenta a medias. */
++ * saltaba y el que más confundía.
++ *
++ * Recorta línea, arco, polilínea, círculo, elipse y spline —todo lo que el
++ * programa sabe qué es—. Cada una tiene su ramal porque cada una se corta de
++ * otra manera: la línea por parámetro, el arco y el círculo por ángulo, la
++ * elipse por su propio parámetro (y sigue siendo elipse), la polilínea por
++ * tramo y la spline por sus puntos de paso.
++ *
++ * Extender es sólo para línea y arco, y eso no es un pendiente: un círculo
++ * y una polilínea cerrada no tienen extremo hacia donde alargarse. */
+ function paramEnSeg(pr, p) {
+   const dx = pr.b[0] - pr.a[0], dy = pr.b[1] - pr.a[1];
+   const L2 = dx * dx + dy * dy;
+   return L2 < 1e-18 ? 0 : ((p[0] - pr.a[0]) * dx + (p[1] - pr.a[1]) * dy) / L2;
+ }
+ 
++/* ---------------------------------------------------------------------- */
++/* Recortar elipses y splines (Mike, 28-sep-2026: «hagamos correcto el     */
++/* recorte de elipse y spline»)                                            */
++/* ---------------------------------------------------------------------- */
++
++/** El marco de una elipse: centro, semiejes y giro. Con esto se pasa de un
++ *  punto del dibujo a su parámetro sobre la elipse y de vuelta. */
++function _marcoElipse(ent) {
++  const ex = ent.eje_mayor[0], ey = ent.eje_mayor[1];
++  const a = Math.hypot(ex, ey);
++  return { c: ent.centro, a, b: a * (ent.razon === undefined ? 1 : ent.razon), rot: Math.atan2(ey, ex) };
++}
++
++const _enElipse = (m, t) => {
++  const x = m.a * Math.cos(t), y = m.b * Math.sin(t);
++  return [m.c[0] + x * Math.cos(m.rot) - y * Math.sin(m.rot),
++          m.c[1] + x * Math.sin(m.rot) + y * Math.cos(m.rot)];
++};
++
++/** El parámetro de un punto sobre la elipse. Deshace el giro y divide por cada
++ *  semieje: el resultado cae SIEMPRE sobre la elipse exacta, aunque el punto
++ *  venga de la aproximación con la que se dibuja. */
++function _paramElipse(m, p) {
++  const dx = p[0] - m.c[0], dy = p[1] - m.c[1];
++  const x = dx * Math.cos(m.rot) + dy * Math.sin(m.rot);
++  const y = -dx * Math.sin(m.rot) + dy * Math.cos(m.rot);
++  return Math.atan2(y / (m.b || 1e-12), x / (m.a || 1e-12));
++}
++
++/** De qué lado de la entidad que corta cae un punto. Sólo importa el SIGNO:
++ *  cambia al cruzarla, y eso es lo que permite afinar el corte. */
++function _ladoDe(pr, p) {
++  if (pr.tipo === "seg") {
++    return (pr.b[0] - pr.a[0]) * (p[1] - pr.a[1]) - (pr.b[1] - pr.a[1]) * (p[0] - pr.a[0]);
++  }
++  if (pr.tipo === "arco") return Math.hypot(p[0] - pr.c[0], p[1] - pr.c[1]) - pr.r;
++  return NaN;
++}
++
++/** Afina el parámetro del cruce sobre la elipse EXACTA.
++ *
++ *  Hace falta y no es un lujo: la elipse se dibuja —y por tanto se cruza— como
++ *  72 segmentos, y el cruce con la cuerda NO está sobre la curva. En una
++ *  elipse de radio 500 el error son 0.48 unidades: casi 5 mm en un dibujo en
++ *  centímetros, que en un plano de taller se ve. Aquí se busca el parámetro
++ *  donde el punto de la elipse cambia de lado de la entidad que corta, que es
++ *  donde la cruza de verdad, partiendo el intervalo en dos una y otra vez.
++ *  Cincuenta partidas dejan el error por debajo de lo que cualquier dibujo
++ *  puede notar.
++ */
++function _afinarElipse(m, t0, pr) {
++  const paso = Math.PI / 36;                       // el mismo del trazo: 72 por vuelta
++  let lo = t0 - paso, hi = t0 + paso;
++  let flo = _ladoDe(pr, _enElipse(m, lo)), fhi = _ladoDe(pr, _enElipse(m, hi));
++  if (!Number.isFinite(flo) || !Number.isFinite(fhi)) return t0;
++  if (flo === 0) return lo;
++  if (fhi === 0) return hi;
++  if ((flo > 0) === (fhi > 0)) return t0;           // sin cambio de lado: se deja como venía
++  for (let k = 0; k < 50; k++) {
++    const md = (lo + hi) / 2, f = _ladoDe(pr, _enElipse(m, md));
++    if (f === 0) return md;
++    if ((f > 0) === (flo > 0)) { lo = md; flo = f; } else { hi = md; }
++  }
++  return (lo + hi) / 2;
++}
++
+ async function recortarOExtender(extender) {
+   await repetir(async () => {
+     const id = await Seleccion.pedirUna({
+       mensaje: extender ? "Elige la línea a extender" : "Elige el trozo a quitar",
+       icono: extender ? "extender" : "tijera",
+-      filtro: (e) => ["linea", "arco"].includes(e.tipo) || (!extender && e.tipo === "polilinea"),
+-      queja: extender ? "Por ahora se extienden líneas y arcos." : "Por ahora se recortan líneas, arcos y polilíneas.",
++      filtro: (e) => ["linea", "arco"].includes(e.tipo)
++                     || (!extender && ["polilinea", "circulo", "elipse", "spline"].includes(e.tipo)),
++      queja: extender
++        ? "Por ahora se extienden líneas y arcos. Lo cerrado —círculo, elipse— no tiene extremo hacia dónde alargarse."
++        : "Eso no se puede recortar: este programa todavía no sabe qué es.",
+     });
+     const ent = await api(`/api/entidad/${id}`);
+     const p = [estado.cursor.x, estado.cursor.y];
+@@ -604,9 +681,18 @@ async function recortarOExtender(extender) {
+     const mias = estado.geometria.filter((pr) => pr.id === id);
+     const otras = estado.geometria.filter((pr) => pr.id !== id);
+     const cruces = [];
+-    for (const a of mias) {
++    /* La elipse y la spline necesitan saber más que el punto del cruce: en qué
++     * trozo de su PROPIA curva cayó (para cortar justo ahí) y contra qué se
++     * cruzó (para afinar el corte sobre la curva exacta, no sobre los
++     * segmentitos con que se dibuja). La línea, el arco y el círculo sólo usan
++     * el punto, y por eso `cruces` sigue siendo una lista de puntos pelones. */
++    const cruzados = [];
++    for (let i = 0; i < mias.length; i++) {
+       for (const b of otras) {
+-        for (const q of Osnap.interseccion(extender ? alargada(a) : a, b)) cruces.push(q);
++        for (const q of Osnap.interseccion(extender ? alargada(mias[i]) : mias[i], b)) {
++          cruces.push(q);
++          cruzados.push({ p: q, i, corte: b });
++        }
+       }
+     }
+     if (!cruces.length) {
+@@ -615,6 +701,12 @@ async function recortarOExtender(extender) {
+         : "Esa entidad no cruza con ninguna otra: no hay dónde recortar.", "malo");
+     }
+ 
++    if (ent.tipo === "spline") {
++      await recortarSpline(ent, id, p, cruzados, mias);
++      Seleccion.limpiar();
++      return;
++    }
++
+     if (ent.tipo === "linea") {
+       const pr = { tipo: "seg", a: ent.p1, b: ent.p2 };
+       const ts = cruces.map((q) => paramEnSeg(pr, q)).sort((x, y) => x - y);
+@@ -650,6 +742,98 @@ async function recortarOExtender(extender) {
+           await aplicarOperacion({ accion: "Recortar", cambios: { [id]: { p2: en(t0) } } });
+         }
+       }
++    } else if (ent.tipo === "circulo") {
++      /* Recortar un círculo  ·  Mike, 28-sep-2026: «cuando trazo un círculo, no
++       * puedo trimearlo con otras líneas. TODAS las líneas se deberían poder
++       * trimear».
++       *
++       * Un círculo recortado DEJA DE SER círculo: se vuelve un arco. Por eso
++       * esto no es un `cambios` sino borrar y agregar — lo mismo que hace el
++       * círculo al que se le escala un solo eje y se vuelve elipse.
++       *
++       * Y a diferencia de una línea o un arco, un círculo no tiene extremos:
++       * se necesitan DOS cruces para poder quitarle un trozo. Con uno solo
++       * (una tangente) no hay por dónde abrirlo, y se dice.
++       */
++      const ang = (q) => (deg(Math.atan2(q[1] - ent.centro[1], q[0] - ent.centro[0])) + 360) % 360;
++      const lejos = (a, b) => { const d = Math.abs(a - b) % 360; return Math.min(d, 360 - d); };
++      // Dos cruces en el mismo punto son uno: una entidad que se apoya ahí, o
++      // el mismo cruce visto por dos primitivas vecinas de una polilínea.
++      const angs = [];
++      for (const a of cruces.map(ang).sort((x, y) => x - y)) {
++        if (!angs.length || lejos(a, angs[angs.length - 1]) > 1e-6) angs.push(a);
++      }
++      if (angs.length > 1 && lejos(angs[0], angs[angs.length - 1]) <= 1e-6) angs.pop();
++      if (angs.length < 2) {
++        return Comandos.eco("Para recortar un círculo hacen falta dos cruces: ahi sólo toca en uno.", "malo");
++      }
++      const tp = ang(p);
++      /* El trozo que se va es el que tiene el clic dentro: del cruce anterior
++       * al siguiente, contando en sentido antihorario. Lo que QUEDA es el
++       * resto, o sea el arco que va del siguiente al anterior. */
++      let i = angs.findIndex((a) => a > tp);
++      if (i === -1) i = 0;            // el clic va después del último cruce: el que sigue es el primero, dando la vuelta
++      const aIni = angs[i];                                    // el cruce que sigue al clic
++      const aFin = angs[(i - 1 + angs.length) % angs.length];   // el cruce anterior al clic
++      await aplicarOperacion({
++        accion: "Recortar círculo",
++        borrar: [id],
++        // Se copia la entidad entera y sólo se le cambia el tipo: así el arco
++        // hereda capa, color, grosor, tipo de línea y el espacio (modelo u
++        // hoja) sin que haya que acordarse de cada uno. El handle del DXF no
++        // se hereda: ya no es la misma entidad que venía en el archivo.
++        agregar: [{ ...ent, id: undefined, handle_origen: "", tipo: "arco",
++                    ang_ini: aIni, ang_fin: aFin }],
++      });
++    } else if (ent.tipo === "elipse") {
++      /* La elipse es el caso limpio: ya guarda su tramo en `param_ini` y
++       * `param_fin`, así que recortarla NO le cambia el tipo —sigue siendo una
++       * elipse, con menos vuelta— y el corte es exacto, no aproximado. */
++      const TAU = Math.PI * 2;
++      const m = _marcoElipse(ent);
++      const vuelta = (t) => ((t % TAU) + TAU) % TAU;
++      const ini = ent.param_ini || 0;
++      const barrido = vuelta((ent.param_fin === undefined ? TAU : ent.param_fin) - ini) || TAU;
++      const completa = Math.abs(barrido - TAU) < 1e-9;
++      const crudos = cruzados
++        .map((x) => vuelta(_afinarElipse(m, _paramElipse(m, x.p), x.corte) - ini))
++        .filter((t) => completa || (t > 1e-9 && t < barrido - 1e-9))
++        .sort((u, v) => u - v);
++      const ts = [];
++      for (const t of crudos) if (!ts.length || t - ts[ts.length - 1] > 1e-7) ts.push(t);
++      if (completa && ts.length > 1 && vuelta(ts[0] - ts[ts.length - 1]) < 1e-7) ts.pop();
++      const tp = vuelta(_paramElipse(m, p) - ini);
++
++      if (completa) {
++        // Cerrada: como el círculo. Se necesitan DOS cruces para abrirla, y lo
++        // que queda es la vuelta que NO tiene el clic dentro.
++        if (ts.length < 2) {
++          return Comandos.eco("Para recortar una elipse cerrada hacen falta dos cruces: ahí sólo toca en uno.", "malo");
++        }
++        let k = ts.findIndex((t) => t > tp);
++        if (k === -1) k = 0;
++        await aplicarOperacion({ accion: "Recortar elipse",
++          cambios: { [id]: { param_ini: ini + ts[k], param_fin: ini + ts[(k - 1 + ts.length) % ts.length] } } });
++      } else {
++        // Ya era un tramo de elipse: como una línea. Si el trozo señalado está
++        // en medio de dos cruces, se parte en dos tramos.
++        const antes = ts.filter((t) => t < tp), despues = ts.filter((t) => t > tp);
++        if (!antes.length && !despues.length) {
++          return Comandos.eco("El trozo que señalaste no está entre dos cruces.", "malo");
++        }
++        if (antes.length && despues.length) {
++          await aplicarOperacion({ accion: "Recortar elipse",
++            cambios: { [id]: { param_fin: ini + Math.max(...antes) } },
++            agregar: [{ ...ent, id: undefined, handle_origen: "",
++                        param_ini: ini + Math.min(...despues), param_fin: ini + barrido }] });
++        } else if (despues.length) {
++          await aplicarOperacion({ accion: "Recortar elipse",
++            cambios: { [id]: { param_ini: ini + Math.min(...despues) } } });
++        } else {
++          await aplicarOperacion({ accion: "Recortar elipse",
++            cambios: { [id]: { param_fin: ini + Math.max(...antes) } } });
++        }
++      }
+     } else {
+       // arco: se recorta el extremo más cercano al clic hasta el cruce vecino
+       const ang = (q) => (deg(Math.atan2(q[1] - ent.centro[1], q[0] - ent.centro[0])) + 360) % 360;
+@@ -660,7 +844,19 @@ async function recortarOExtender(extender) {
+       const tp = rel(ang(p));
+       const antes = dentro.filter((t) => t < tp), despues = dentro.filter((t) => t > tp);
+       if (!antes.length && !despues.length) return Comandos.eco("Nada que recortar ahí.", "malo");
+-      if (despues.length && !antes.length) {
++      if (antes.length && despues.length) {
++        /* El trozo está en MEDIO: el arco se parte en dos, igual que una línea.
++         *
++         * Hasta el 28-sep-2026 aquí se borraba todo lo que seguía al clic —se
++         * movía `ang_fin` al cruce de la izquierda y el pedazo de la derecha
++         * desaparecía sin que nadie lo pidiera—. Es el mismo hueco que Mike
++         * describió para el círculo: «TODAS las líneas se deberían poder
++         * trimear», y trimear es quitar el trozo señalado, no lo de más allá. */
++        await aplicarOperacion({ accion: "Recortar arco",
++          cambios: { [id]: { ang_fin: (ent.ang_ini + Math.max(...antes)) % 360 } },
++          agregar: [{ ...ent, id: undefined, handle_origen: "",
++                      ang_ini: (ent.ang_ini + Math.min(...despues)) % 360, ang_fin: ent.ang_fin }] });
++      } else if (despues.length) {
+         await aplicarOperacion({ accion: "Recortar arco",
+           cambios: { [id]: { ang_ini: (ent.ang_ini + Math.min(...despues)) % 360 } } });
+       } else {
+@@ -672,6 +868,135 @@ async function recortarOExtender(extender) {
+   });
+ }
+ 
++
++/* ---------------------------------------------------------------------- */
++/* Recortar una spline (Mike, 28-sep-2026)                                 */
++/*                                                                        */
++/* Mike escogió, con botones, que al recortarla SIGA SIENDO SPLINE, como    */
++/* AutoCAD, sabiendo el costo: el cruce queda exacto y la curva sigue       */
++/* pasando por todos los puntos que él puso, pero el tramo pegado al corte  */
++/* cambia un poco de forma, porque en una Catmull–Rom la curvatura de cada  */
++/* tramo depende de sus vecinos y al cortar cambian los vecinos.            */
++/*                                                                        */
++/* Dos clases de spline y no se tratan igual, porque no son la misma curva: */
++/*                                                                        */
++/*   · SPLINE (puntos de paso): se parte la lista de puntos y el cruce      */
++/*     entra como punto nuevo. La curva sigue pasando por donde la pusieron. */
++/*                                                                        */
++/*   · SPLINE CV (puntos de control): la forma NO se puede conservar como   */
++/*     curva de control, porque aquí los nudos no se guardan —se deducen de */
++/*     cuántos puntos hay—, así que partirla exacto no es representable. Lo */
++/*     que queda es una spline por puntos de paso que recorre la MISMA curva */
++/*     (se midió: desviación 0). Cambia de clase, y se dice.                */
++/* ---------------------------------------------------------------------- */
++async function recortarSpline(ent, id, p, cruzados, mias) {
++  const segs = mias.filter((pr) => pr.tipo === "seg");
++  if (segs.length < 2) return Comandos.eco("Esa spline es demasiado corta para recortarla.", "malo");
++
++  /* Dónde va cada cosa a lo largo de la curva: `u = trozo + fracción`. Es
++   * creciente de punta a punta, así que ordenar por `u` es ordenar «a lo largo
++   * de la curva», que es lo que hace falta para saber qué trozo quitar. */
++  const sobre = (pr, q) => {
++    const t = Math.max(0, Math.min(1, paramEnSeg(pr, q)));
++    return [t, [pr.a[0] + t * (pr.b[0] - pr.a[0]), pr.a[1] + t * (pr.b[1] - pr.a[1])]];
++  };
++  let cerca = null;
++  for (let i = 0; i < segs.length; i++) {
++    const [t, q] = sobre(segs[i], p);
++    const d = Math.hypot(q[0] - p[0], q[1] - p[1]);
++    if (!cerca || d < cerca.d) cerca = { d, u: i + t };
++  }
++  const up = cerca.u;
++
++  const crudos = cruzados
++    .filter((x) => segs[x.i] !== undefined && mias[x.i] === segs[x.i])
++    .map((x) => ({ u: x.i + sobre(segs[x.i], x.p)[0], p: x.p }))
++    .sort((a, b) => a.u - b.u);
++  const cortes = [];
++  for (const c of crudos) if (!cortes.length || c.u - cortes[cortes.length - 1].u > 1e-9) cortes.push(c);
++  if (!cortes.length) return Comandos.eco("Esa spline no cruza con ninguna otra entidad: no hay dónde recortar.", "malo");
++
++  // Las muestras de la curva dibujada, que es lo que se usa cuando un trozo
++  // queda demasiado corto para conservar su forma con los puntos originales.
++  const muestras = segs.map((pr) => pr.a).concat([segs[segs.length - 1].b]);
++
++  const porPaso = ent.puntos_ajuste && ent.puntos_ajuste.length ? 12 : 1;
++  const conPaso = !!(ent.puntos_ajuste && ent.puntos_ajuste.length);
++  const base = conPaso ? ent.puntos_ajuste.map((q) => [q[0], q[1]]) : muestras;
++  const puntos = conPaso && ent.cerrada ? base.concat([base[0]]) : base;
++  const S = puntos.length - 1;                    // tramos entre puntos
++  const uMax = S * porPaso;
++  const nuevo = (pts) => ({ puntos_ajuste: pts, puntos_control: [], cerrada: false });
++
++  /* Los puntos de paso de un trozo de la curva, de `u0` a `u1`: arranca y
++   * termina donde se le dice —el corte, o la punta original— y en medio lleva
++   * los puntos ORIGINALES que caen dentro. Si quedaran menos de tres, se
++   * rellena con la propia curva: una spline de dos puntos se dibuja RECTA, y
++   * el trozo perdería su curvatura sin que nadie lo pidiera. */
++  const pedazo = (u0, p0, u1, p1) => {
++    /* Un punto pegado al corte se salta. Si el último tramo queda diminuto
++     * junto a vecinos largos, la curva se PASA del corte: se midió 1.1
++     * unidades de más al otro lado de la línea, y en un recorte eso es
++     * justo lo que no debe pasar. Cuando el punto está tan cerca del corte,
++     * saltarlo no quita forma: el corte está casi encima de él. */
++    const pegado = 0.4 * porPaso;
++    const medio = [];
++    for (let j = 0; j <= S; j++) {
++      const u = j * porPaso;
++      if (u > u0 + pegado && u < u1 - pegado) medio.push(puntos[j]);
++    }
++    let out = [p0].concat(medio, [p1]);
++    if (out.length < 3) {
++      const relleno = [];
++      for (let i = Math.ceil(u0 + 1e-9); i <= Math.floor(u1 - 1e-9); i++) {
++        if (muestras[i]) relleno.push(muestras[i]);
++      }
++      if (relleno.length) out = [p0].concat(relleno, [p1]);
++    }
++    return out;
++  };
++
++  if (ent.cerrada) {
++    // Cerrada: hacen falta dos cruces, y lo que queda es UNA curva abierta que
++    // va del cruce que sigue al clic, dando la vuelta, hasta el cruce anterior.
++    if (cortes.length < 2) {
++      return Comandos.eco("Para recortar una spline cerrada hacen falta dos cruces: ahí sólo toca en uno.", "malo");
++    }
++    let k = cortes.findIndex((c) => c.u > up);
++    if (k === -1) k = 0;
++    const der = cortes[k];
++    const izq = cortes[(k - 1 + cortes.length) % cortes.length];
++    const jd = Math.floor(der.u / porPaso), ji = Math.floor(izq.u / porPaso);
++    const out = [der.p];
++    let j = (jd + 1) % S;
++    for (let n = 0; n <= S; n++) { out.push(puntos[j]); if (j === ji) break; j = (j + 1) % S; }
++    out.push(izq.p);
++    await aplicarOperacion({ accion: "Recortar spline", cambios: { [id]: nuevo(out) } });
++  } else {
++    const antes = cortes.filter((c) => c.u < up), despues = cortes.filter((c) => c.u > up);
++    const izq = antes.length ? antes[antes.length - 1] : null;
++    const der = despues.length ? despues[0] : null;
++    if (!izq && !der) return Comandos.eco("Nada que recortar ahí.", "malo");
++    if (izq && der) {
++      // el trozo está en medio: la spline queda en dos
++      await aplicarOperacion({ accion: "Recortar spline",
++        cambios: { [id]: nuevo(pedazo(0, puntos[0], izq.u, izq.p)) },
++        agregar: [Object.assign({}, ent, { id: undefined, handle_origen: "" },
++                                nuevo(pedazo(der.u, der.p, uMax, puntos[S])))] });
++    } else if (der) {
++      await aplicarOperacion({ accion: "Recortar spline",
++        cambios: { [id]: nuevo(pedazo(der.u, der.p, uMax, puntos[S])) } });
++    } else {
++      await aplicarOperacion({ accion: "Recortar spline",
++        cambios: { [id]: nuevo(pedazo(0, puntos[0], izq.u, izq.p)) } });
++    }
++  }
++  if (!conPaso) {
++    Comandos.eco("Era una spline por puntos de control: el trozo que queda recorre la misma curva, " +
++                 "pero ahora por puntos de paso. Es lo único que conserva la forma exacta.");
++  }
++}
++
+ /* ---------------------------------------------------------------------- */
+ /* Recortar una polilínea (Mike, 10-sep-2026; 0.20.4)                      */
+ /*                                                                        */
