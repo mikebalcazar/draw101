@@ -1,0 +1,237 @@
+diff --git a/electron/nube-nucleo.js b/electron/nube-nucleo.js
+new file mode 100644
+index 0000000..a249a54
+--- /dev/null
++++ b/electron/nube-nucleo.js
+@@ -0,0 +1,230 @@
++/* El núcleo de la nube: la llave, el cifrado y el trato con el servidor.
++ *
++ * Va aparte de Electron —como `licencia-nucleo.js`— para poder medirlo con
++ * `node` a secas, sin abrir una ventana. La carpeta y el `traer` (el `fetch`)
++ * entran como parámetros por lo mismo: la prueba le pasa una carpeta temporal
++ * y un `fetch` de mentiras, y no toca ni la del usuario ni la red.
++ *
++ * POR QUÉ EL CIFRADO VIVE AQUÍ Y NO EN PYTHON: el motor de draw101 es Python,
++ * pero su biblioteca estándar no trae AES-GCM, y meter `cryptography` al
++ * instalador son megabytes y una dependencia más que mantener. Node lo trae de
++ * fábrica. Python sigue siendo el dueño del token DENTRO del archivo
++ * (core/nube.py); de la puerta para afuera manda esto.
++ *
++ * ──────────────────────────────────────────────────────────────────
++ * QUÉ PROTEGE ESTE CIFRADO Y QUÉ NO
++ *
++ * Mike escogió el 29-sep, y lo confirmó a propósito después de que se le
++ * dijera que deshacía su decisión anterior: «que el servidor pueda — nadie
++ * pierde nada nunca». La llave la genera y la guarda el servidor, y esta app
++ * se la pide.
++ *
++ * O sea que **quien controle el servidor puede abrir los archivos de
++ * cualquiera**. Eso no es un descuido: es el trato, y a cambio nadie se queda
++ * sin sus planos por perder una clave.
++ *
++ * Lo que sí se gana cifrando igual: lo que sale de esta computadora —el
++ * contenido y también el nombre del archivo— viaja y se guarda ilegible. Un
++ * volcado del bucket no abre un solo plano; hace falta además la llave, que
++ * está en otro lado y envuelta.
++ * ──────────────────────────────────────────────────────────────────
++ */
++
++const path = require("path");
++const fs = require("fs");
++const crypto = require("crypto");
++
++const archivoNube = (carpeta) => path.join(carpeta, "nube.json");
++
++/* ─────────────── lo que se guarda de este lado ─────────────── */
++
++function guardado(carpeta) {
++  try {
++    return JSON.parse(fs.readFileSync(archivoNube(carpeta), "utf8")) || {};
++  } catch { return {}; }
++}
++
++function guardar(carpeta, datos) {
++  try {
++    fs.mkdirSync(carpeta, { recursive: true });
++    fs.writeFileSync(archivoNube(carpeta), JSON.stringify(datos, null, 1), "utf8");
++  } catch { /* sin permiso de escritura: no se cae */ }
++}
++
++/* ─────────────── la llave ─────────────── */
++
++/** La llave de esta cuenta. Se pide una vez y se guarda; después sale de ahí.
++ *
++ *  Se guarda a propósito: sin ella no se abre nada de lo ya bajado, y pedirla
++ *  en cada arranque dejaría la app inútil el día que no haya internet — que es
++ *  justo el día en que uno quiere abrir un plano que ya tenía.
++ *
++ *  `forzar` vuelve a pedirla. Sólo hace falta si algo se corrompió: la llave
++ *  del servidor no cambia nunca.
++ */
++async function llave({ api, carpeta, token, traer = fetch, forzar = false }) {
++  const yo = guardado(carpeta);
++  if (!forzar && typeof yo.llave === "string" && yo.llave.length > 40) return { llave: yo.llave };
++  if (!token) return { sinLicencia: true };
++
++  let r;
++  try {
++    r = await traer(`${api}/nube/llave`, { headers: { Authorization: `Bearer ${token}` } });
++  } catch { return { sinRed: true }; }
++
++  let cuerpo = null;
++  try { cuerpo = await r.json(); } catch { /* no vino JSON */ }
++  if (r.ok && cuerpo?.ok && typeof cuerpo.data?.llave === "string") {
++    guardar(carpeta, { ...yo, llave: cuerpo.data.llave });
++    return { llave: cuerpo.data.llave };
++  }
++  // Un 5xx es del servidor y no dice nada de la licencia: no se borra nada.
++  if (r.status >= 500) return { sinRed: true };
++  return { error: cuerpo?.error || `el servidor contestó ${r.status}` };
++}
++
++/* ─────────────── cifrar y descifrar ─────────────── */
++
++/* El bulto va así, en un solo Buffer:
++ *
++ *     [ 12 bytes de nonce ][ 16 de marca ][ lo cifrado … ]
++ *
++ * El NONCE es distinto en cada cifrado, siempre. Repetirlo con la misma llave
++ * rompe AES-GCM de verdad —no «se debilita»: se puede recuperar el texto—, y
++ * como aquí un mismo archivo se sube muchas veces con la misma llave, es la
++ * regla que más importa de este archivo.
++ *
++ * La MARCA (el tag de GCM) es lo que hace que descifrar FALLE si alguien tocó
++ * un byte por el camino, en vez de devolver basura que luego se abre como si
++ * fuera un plano. Va junto al nonce para no depender de dónde la ponga Node.
++ */
++const NONCE = 12;
++const MARCA = 16;
++
++function cifrar(datos, llaveB64) {
++  const k = Buffer.from(llaveB64, "base64url");
++  if (k.length !== 32) throw new Error("La llave de la nube no mide lo que debe.");
++  const nonce = crypto.randomBytes(NONCE);
++  const c = crypto.createCipheriv("aes-256-gcm", k, nonce);
++  const cuerpo = Buffer.concat([c.update(Buffer.from(datos)), c.final()]);
++  return Buffer.concat([nonce, c.getAuthTag(), cuerpo]);
++}
++
++function descifrar(bulto, llaveB64) {
++  const k = Buffer.from(llaveB64, "base64url");
++  if (k.length !== 32) throw new Error("La llave de la nube no mide lo que debe.");
++  const b = Buffer.from(bulto);
++  if (b.length < NONCE + MARCA) throw new Error("El archivo de la nube llegó incompleto.");
++  const d = crypto.createDecipheriv("aes-256-gcm", k, b.subarray(0, NONCE));
++  d.setAuthTag(b.subarray(NONCE, NONCE + MARCA));
++  return Buffer.concat([d.update(b.subarray(NONCE + MARCA)), d.final()]);
++}
++
++/** El nombre del archivo, cifrado, en algo que quepa en una cabecera HTTP. */
++const cifrarTexto = (txt, llaveB64) => cifrar(Buffer.from(String(txt), "utf8"), llaveB64).toString("base64url");
++const descifrarTexto = (b64, llaveB64) => descifrar(Buffer.from(String(b64), "base64url"), llaveB64).toString("utf8");
++
++/* ─────────────── el trato con el servidor ─────────────── */
++
++/** Lo común de toda llamada a /nube: el token, y traducir el «no» a palabras.
++ *
++ *  Se distingue **no se pudo llegar** de **el servidor dijo que no**, y no es
++ *  un detalle: sin red la app tiene que seguir dibujando y guardando en el
++ *  disco como siempre, y sólo dejar pendiente la subida. Tratar un rato malo
++ *  del servidor como un «tu licencia ya no vale» sería sacar a alguien de su
++ *  propio programa por un problema ajeno. */
++async function _pedir({ api, token, ruta, opciones = {}, traer = fetch }) {
++  if (!token) return { sinLicencia: true };
++  let r;
++  try {
++    r = await traer(`${api}/nube${ruta}`, {
++      ...opciones,
++      headers: { ...(opciones.headers || {}), Authorization: `Bearer ${token}` },
++    });
++  } catch { return { sinRed: true }; }
++  if (r.status >= 500) return { sinRed: true };
++  return { r };
++}
++
++/** El índice: la lista entera, con los nombres ya descifrados.
++ *
++ *  Es lo ÚNICO que se baja al arrancar (Mike: «sólo descarga la lista o
++ *  directorio, no los archivos en sí»). Con eso se busca y se ordena aquí, en
++ *  la máquina, sin volver a preguntarle nada al servidor.
++ *
++ *  Un archivo cuyo nombre no se pueda descifrar NO tumba la lista: se queda
++ *  con su token como nombre y se marca. Perder la lista entera por un renglón
++ *  raro sería cambiar un problema chico por uno grande. */
++async function indice({ api, token, llave: k, traer = fetch }) {
++  const { r, ...mal } = await _pedir({ api, token, ruta: "/indice", traer });
++  if (!r) return mal;
++  let cuerpo = null;
++  try { cuerpo = await r.json(); } catch { /* no vino JSON */ }
++  if (!r.ok || !cuerpo?.ok) return { error: cuerpo?.error || `el servidor contestó ${r.status}` };
++
++  const archivos = (cuerpo.data?.archivos || []).map((a) => {
++    let nombre = null, ilegible = false;
++    try { nombre = descifrarTexto(a.nombre, k); }
++    catch { nombre = a.token; ilegible = true; }
++    return { ...a, nombre, ilegible };
++  });
++  return { archivos, al: cuerpo.data?.al };
++}
++
++/** Sube un archivo. `datos` son los bytes del `.t101d` tal como están en el
++ *  disco; aquí se cifran, y el nombre también. */
++async function subir({ api, token, llave: k, doc, nombre, datos, modificado, traer = fetch }) {
++  const { r, ...mal } = await _pedir({
++    api, token, ruta: `/archivo/${doc}`, traer,
++    opciones: {
++      method: "PUT",
++      headers: {
++        "Content-Type": "application/octet-stream",
++        "X-Nombre": cifrarTexto(nombre, k),
++        ...(modificado ? { "X-Modificado": modificado } : {}),
++      },
++      body: cifrar(datos, k),
++    },
++  });
++  if (!r) return mal;
++  let cuerpo = null;
++  try { cuerpo = await r.json(); } catch { /* no vino JSON */ }
++  if (!r.ok || !cuerpo?.ok) return { error: cuerpo?.error || `el servidor contestó ${r.status}` };
++  return { ok: true, version: cuerpo.data?.version, bytes: cuerpo.data?.bytes };
++}
++
++/** Baja un archivo y lo devuelve descifrado, listo para escribir al disco.
++ *
++ *  Si el descifrado falla, se devuelve error y NO los bytes: escribir un
++ *  `.t101d` con basura dentro encima del archivo de alguien es la peor forma
++ *  posible de fallar aquí. */
++async function bajar({ api, token, llave: k, doc, version, traer = fetch }) {
++  const ruta = `/archivo/${doc}` + (version ? `?version=${encodeURIComponent(version)}` : "");
++  const { r, ...mal } = await _pedir({ api, token, ruta, traer });
++  if (!r) return mal;
++  if (r.status === 404) return { noEsta: true };
++  if (!r.ok) return { error: `el servidor contestó ${r.status}` };
++
++  const bulto = Buffer.from(await r.arrayBuffer());
++  let datos, nombre = null;
++  try {
++    datos = descifrar(bulto, k);
++    const cifrado = r.headers.get("X-Nombre");
++    if (cifrado) { try { nombre = descifrarTexto(cifrado, k); } catch { nombre = null; } }
++  } catch {
++    return { error: "El archivo de la nube no se pudo descifrar con esta llave." };
++  }
++  return { ok: true, datos, nombre, version: Number(r.headers.get("X-Version")) || null,
++           modificado: r.headers.get("X-Modificado") || null };
++}
++
++/** Lo quita del índice. El bulto se queda en el servidor por si fue un error. */
++async function quitar({ api, token, doc, traer = fetch }) {
++  const { r, ...mal } = await _pedir({ api, token, ruta: `/archivo/${doc}`, opciones: { method: "DELETE" }, traer });
++  if (!r) return mal;
++  if (r.status === 404) return { noEsta: true };
++  return r.ok ? { ok: true } : { error: `el servidor contestó ${r.status}` };
++}
++
++module.exports = { archivoNube, guardado, guardar, llave, cifrar, descifrar, cifrarTexto, descifrarTexto,
++                   indice, subir, bajar, quitar, NONCE, MARCA };
+# fin del parche: el renglon de cola absorbe el recorte del conector.
