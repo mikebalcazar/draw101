@@ -1,6 +1,6 @@
 diff --git a/electron/nube-nucleo.js b/electron/nube-nucleo.js
 new file mode 100644
-index 0000000..eaac9c5
+index 0000000..be31fb3
 --- /dev/null
 +++ b/electron/nube-nucleo.js
 @@ -0,0 +1,237 @@
@@ -17,7 +17,7 @@ index 0000000..eaac9c5
 + * fábrica. Python sigue siendo el dueño del token DENTRO del archivo
 + * (core/nube.py); de la puerta para afuera manda esto.
 + *
-+ * ──────────────────────────────────────────────────────────────────
++ * ----------------------------------------------------------
 + * QUÉ PROTEGE ESTE CIFRADO Y QUÉ NO
 + *
 + * Mike escogió el 29-sep, y lo confirmó a propósito después de que se le
@@ -33,7 +33,7 @@ index 0000000..eaac9c5
 + * contenido y también el nombre del archivo— viaja y se guarda ilegible. Un
 + * volcado del bucket no abre un solo plano; hace falta además la llave, que
 + * está en otro lado y envuelta.
-+ * ──────────────────────────────────────────────────────────────────
++ * ----------------------------------------------------------
 + */
 +
 +const path = require("path");
@@ -49,7 +49,7 @@ index 0000000..eaac9c5
 +const TOKEN = /^[0-9A-HJKMNP-TV-Z]{26}$/;
 +const tokenValido = (v) => typeof v === "string" && TOKEN.test(v);
 +
-+/* ─────────────── lo que se guarda de este lado ─────────────── */
++/* --- lo que se guarda de este lado --- */
 +
 +function guardado(carpeta) {
 +  try {
@@ -64,7 +64,7 @@ index 0000000..eaac9c5
 +  } catch { /* sin permiso de escritura: no se cae */ }
 +}
 +
-+/* ─────────────── la llave ─────────────── */
++/* --- la llave --- */
 +
 +/** La llave de esta cuenta. Se pide una vez y se guarda; después sale de ahí.
 + *
@@ -96,7 +96,7 @@ index 0000000..eaac9c5
 +  return { error: cuerpo?.error || `el servidor contestó ${r.status}` };
 +}
 +
-+/* ─────────────── cifrar y descifrar ─────────────── */
++/* --- cifrar y descifrar --- */
 +
 +/* El bulto va así, en un solo Buffer:
 + *
@@ -137,7 +137,7 @@ index 0000000..eaac9c5
 +const cifrarTexto = (txt, llaveB64) => cifrar(Buffer.from(String(txt), "utf8"), llaveB64).toString("base64url");
 +const descifrarTexto = (b64, llaveB64) => descifrar(Buffer.from(String(b64), "base64url"), llaveB64).toString("utf8");
 +
-+/* ─────────────── el trato con el servidor ─────────────── */
++/* --- el trato con el servidor --- */
 +
 +/** Lo común de toda llamada a /nube: el token, y traducir el «no» a palabras.
 + *
