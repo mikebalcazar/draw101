@@ -1,9 +1,9 @@
 diff --git a/electron/nube-nucleo.js b/electron/nube-nucleo.js
 new file mode 100644
-index 0000000..a249a54
+index 0000000..eaac9c5
 --- /dev/null
 +++ b/electron/nube-nucleo.js
-@@ -0,0 +1,230 @@
+@@ -0,0 +1,237 @@
 +/* El núcleo de la nube: la llave, el cifrado y el trato con el servidor.
 + *
 + * Va aparte de Electron —como `licencia-nucleo.js`— para poder medirlo con
@@ -41,6 +41,13 @@ index 0000000..a249a54
 +const crypto = require("crypto");
 +
 +const archivoNube = (carpeta) => path.join(carpeta, "nube.json");
++
++/** Si esto es un token de documento y no cualquier cosa. El mismo alfabeto de
++ *  Crockford que usa core/nube.py y el mismo que valida el servidor: se
++ *  comprueba ANTES de mandar nada, para no pedirle al servidor una ruta que va
++ *  a rechazar y para no subir un plano bajo un nombre que no identifica nada. */
++const TOKEN = /^[0-9A-HJKMNP-TV-Z]{26}$/;
++const tokenValido = (v) => typeof v === "string" && TOKEN.test(v);
 +
 +/* ─────────────── lo que se guarda de este lado ─────────────── */
 +
@@ -232,6 +239,6 @@ index 0000000..a249a54
 +  return r.ok ? { ok: true } : { error: `el servidor contestó ${r.status}` };
 +}
 +
-+module.exports = { archivoNube, guardado, guardar, llave, cifrar, descifrar, cifrarTexto, descifrarTexto,
++module.exports = { archivoNube, tokenValido, guardado, guardar, llave, cifrar, descifrar, cifrarTexto, descifrarTexto,
 +                   indice, subir, bajar, quitar, NONCE, MARCA };
 # fin del parche: el renglon de cola absorbe el recorte del conector.

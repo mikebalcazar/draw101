@@ -1,0 +1,294 @@
+diff --git a/electron/nube.js b/electron/nube.js
+new file mode 100644
+index 0000000..a7c1dd8
+--- /dev/null
++++ b/electron/nube.js
+@@ -0,0 +1,188 @@
++/* La nube de draw101 vista desde el proceso principal: la llave, el índice y
++ * las subidas. Aquí se junta el núcleo (electron/nube-nucleo.js, que no sabe
++ * nada de Electron y por eso se puede medir con `node`) con lo que sí es de
++ * esta app: dónde vive la licencia, cuál es la API, y cómo se le avisa a la
++ * pantalla.
++ *
++ * TRES DECISIONES QUE VALE LA PENA EXPLICAR, porque las tres son sobre lo
++ * mismo: que la nube no pueda estorbarle a alguien que está dibujando.
++ *
++ * 1. EL ÍNDICE SE BAJA DESPUÉS DE ABRIR LA VENTANA, nunca antes. Mike lo pidió
++ *    al arrancar («draw descarga una lista de los archivos en la nube cuando
++ *    arranca para poder buscarlos indizados»), y así es: se pide en cuanto la
++ *    ventana existe, no antes de que exista. Si se pidiera antes, un servidor
++ *    lento o un hotel con mal wifi serían un draw101 que tarda en abrir, y eso
++ *    es peor que un buscador que tarda diez segundos en tener datos.
++ *
++ * 2. EL ÍNDICE SE GUARDA EN LA MÁQUINA, con los nombres YA descifrados. Sin
++ *    internet la pantalla de «Mis archivos en la nube» sigue enseñando la lista
++ *    de la última vez —marcada como de la última vez— en lugar de estar vacía y
++ *    parecer que se perdieron los archivos. Se guarda descifrado porque para
++ *    descifrarlo haría falta la llave, que ya está en la misma carpeta: fingir
++ *    que ahí hay una barrera sería mentirse.
++ *
++ * 3. NADA DE ESTO PUEDE TIRAR LA APP. Cada llamada devuelve por qué no se pudo
++ *    —`sinRed`, `sinLicencia`, `apagada`, `error`— y ninguna avienta. Guardar un
++ *    plano tiene que funcionar igual con la nube caída; subirlo es lo que puede
++ *    esperar.
++ */
++
++const path = require("path");
++const os = require("os");
++const fs = require("fs");
++const licencia = require("./licencia");
++const n = require("./nube-nucleo");
++
++const carpeta = () => path.join(os.homedir(), "Taller 101", "draw101");
++const archivoIndice = () => path.join(carpeta(), "nube-indice.json");
++
++/* ─────────── el interruptor (paso 6) ─────────── */
++
++/* Mike: «Todo sube por default, o desactivas todo. No hay selección de
++ * archivos». Así que está encendida hasta que alguien la apague, y lo apagado
++ * es lo que se guarda. */
++function encendida() {
++  const g = n.guardado(carpeta());
++  return g.nube_apagada !== true;
++}
++
++function prender(si) {
++  const g = n.guardado(carpeta());
++  n.guardar(carpeta(), { ...g, nube_apagada: !si });
++  return encendida();
++}
++
++/* ─────────── la llave ─────────── */
++
++const elToken = () => (licencia.guardada() || {}).token || "";
++
++async function laLlave({ forzar = false } = {}) {
++  return n.llave({ api: licencia.API, carpeta: carpeta(), token: elToken(), forzar });
++}
++
++/* ─────────── el índice ─────────── */
++
++/* Lo último que se bajó. Se lee de la máquina, y si no hay nada, se dice que no
++ * hay nada en vez de inventar una lista vacía: no es lo mismo «no tienes
++ * archivos» que «todavía no he podido preguntar». */
++function indiceGuardado() {
++  try {
++    const d = JSON.parse(fs.readFileSync(archivoIndice(), "utf8"));
++    if (Array.isArray(d.archivos)) return d;
++  } catch { /* no hay, o quedó a medias */ }
++  return null;
++}
++
++function guardarIndice(d) {
++  try {
++    fs.mkdirSync(carpeta(), { recursive: true });
++    // A un temporal y luego encima: un apagón a la mitad no deja un JSON roto
++    // que la próxima vez no se pueda leer.
++    const tmp = archivoIndice() + ".tmp";
++    fs.writeFileSync(tmp, JSON.stringify(d));
++    fs.renameSync(tmp, archivoIndice());
++  } catch { /* si no se puede guardar, se sigue sin caché */ }
++}
++
++let bajando = null;   // para que dos llamadas juntas no pidan dos veces
++
++/** Baja el índice y lo guarda. Si no se puede, devuelve lo guardado marcado
++ *  `de_cache`, que es lo que hace que la pantalla sirva sin internet. */
++async function bajarIndice() {
++  if (!encendida()) return { apagada: true, archivos: [] };
++  if (bajando) return bajando;
++
++  bajando = (async () => {
++    const token = elToken();
++    if (!token) return { sinLicencia: true, ...(indiceGuardado() ? { ...indiceGuardado(), de_cache: true } : { archivos: [] }) };
++
++    const l = await laLlave();
++    if (!l.llave) {
++      const viejo = indiceGuardado();
++      return { ...l, ...(viejo ? { ...viejo, de_cache: true } : { archivos: [] }) };
++    }
++
++    const r = await n.indice({ api: licencia.API, token, llave: l.llave });
++    if (r.archivos) {
++      const d = { archivos: r.archivos, al: r.al || new Date().toISOString() };
++      guardarIndice(d);
++      return d;
++    }
++    const viejo = indiceGuardado();
++    return { ...r, ...(viejo ? { ...viejo, de_cache: true } : { archivos: [] }) };
++  })();
++
++  try { return await bajando; } finally { bajando = null; }
++}
++
++/** Lo que la pantalla pide: lo guardado al instante, sin esperar la red. */
++function indiceYa() {
++  if (!encendida()) return { apagada: true, archivos: [] };
++  const d = indiceGuardado();
++  return d ? { ...d, de_cache: true } : { archivos: [], todavia_no: true };
++}
++
++/* ─────────── subir y bajar un plano ─────────── */
++
++async function subirPlano({ doc, nombre, ruta, modificado }) {
++  if (!encendida()) return { apagada: true };
++  const token = elToken();
++  if (!token) return { sinLicencia: true };
++  // Un token mal formado se rechaza AQUÍ. Antes esta línea llamaba a
++  // `archivoNube(doc)`, que arma una ruta y siempre devuelve algo verdadero: o
++  // sea que no comprobaba nada, y un documento sin token habría subido bajo un
++  // nombre que no identifica a nada.
++  if (!n.tokenValido(doc)) return { error: "ese documento no trae un token válido" };
++
++  const l = await laLlave();
++  if (!l.llave) return l;
++
++  let datos;
++  try { datos = fs.readFileSync(ruta); } catch (e) { return { error: e.message }; }
++
++  const r = await n.subir({
++    api: licencia.API, token, llave: l.llave, doc,
++    nombre: nombre || path.basename(ruta), datos,
++    modificado: modificado || new Date().toISOString(),
++  });
++  // Al subir, el renglón del índice guardado se pone al día sin volver a
++  // pedirlo: si no, la pantalla enseñaría la versión de antes hasta el
++  // siguiente arranque.
++  if (r.ok) alDia({ token: doc, nombre: nombre || path.basename(ruta), bytes: datos.length,
++                     version: r.version, modificado: modificado || new Date().toISOString() });
++  return r;
++}
++
++async function bajarPlano({ doc, version }) {
++  const token = elToken();
++  if (!token) return { sinLicencia: true };
++  const l = await laLlave();
++  if (!l.llave) return l;
++  return n.bajar({ api: licencia.API, token, llave: l.llave, doc, version });
++}
++
++async function quitarPlano({ doc }) {
++  const token = elToken();
++  if (!token) return { sinLicencia: true };
++  const r = await n.quitar({ api: licencia.API, token, doc });
++  if (r.ok) {
++    const d = indiceGuardado();
++    if (d) guardarIndice({ ...d, archivos: d.archivos.filter((a) => a.token !== doc) });
++  }
++  return r;
++}
++
++/** Mete o actualiza un renglón en el índice guardado. */
++function alDia(fila) {
++  const d = indiceGuardado() || { archivos: [], al: new Date().toISOString() };
++  const otros = d.archivos.filter((a) => a.token !== fila.token);
++  const antes = d.archivos.find((a) => a.token === fila.token);
++  guardarIndice({ ...d, archivos: [{ ...antes, ...fila }, ...otros] });
++}
++
++module.exports = {
++  encendida, prender, laLlave,
++  bajarIndice, indiceYa, indiceGuardado,
++  subirPlano, bajarPlano, quitarPlano,
++  carpeta, archivoIndice,
++};
+diff --git a/electron/main.js b/electron/main.js
+index 2425b91..8f9ac87 100644
+--- a/electron/main.js
++++ b/electron/main.js
+@@ -17,6 +17,7 @@ const { app, BrowserWindow, dialog, ipcMain, Menu, shell } = require("electron")
+ const { spawn } = require("child_process");
+ const path = require("path");
+ const licencia = require("./licencia");
++const nube = require("./nube");
+ 
+ const NOMBRE_APP = "draw101";
+ 
+@@ -220,6 +221,20 @@ function crearVentana() {
+   // La principal sale cuando ya tiene qué enseñar, y en ese momento se va la
+   // de carga: nunca hay un hueco vacío entre las dos.
+   ventana.once("ready-to-show", () => { ventana.show(); cerrarCargando(); });
++
++  /* EL ÍNDICE DE LA NUBE SE PIDE AQUÍ, con la ventana ya en pantalla y no antes
++   * (paso 4). Mike lo pidió «cuando arranca», y esto es cuando arranca: lo que
++   * NO puede pasar es que un servidor lento o un wifi de hotel se conviertan en
++   * un draw101 que tarda en abrir. Un buscador que tarda diez segundos en tener
++   * datos se aguanta; una app que no abre, no.
++   *
++   * No se espera el resultado a propósito, y no puede tirar nada: la pantalla
++   * ya funciona con lo guardado de la última vez. */
++  ventana.webContents.once("did-finish-load", () => {
++    nube.bajarIndice().then((r) => {
++      if (ventana && !ventana.isDestroyed()) ventana.webContents.send("nube-indice", r);
++    }).catch(() => { /* la nube nunca estorba */ });
++  });
+   // Por si `ready-to-show` no llega (pasa con algunas gráficas): a los 4 s se
+   // enseña de todos modos.
+   setTimeout(() => { if (ventana && !ventana.isVisible()) { ventana.show(); cerrarCargando(); } }, 4000);
+@@ -472,6 +487,36 @@ ipcMain.handle("imprimir-html", async (_e, html, opciones) => {
+   }
+ });
+ 
++/* ─────────── la nube (draw101 0.22.0) ─────────── */
++
++/* Ninguno de estos avienta: contestan por qué no se pudo. Si la nube falla, se
++ * sigue dibujando y guardando en la máquina, que es lo que importa. */
++ipcMain.handle("nube-indice-ya", () => nube.indiceYa());
++ipcMain.handle("nube-indice-bajar", () => nube.bajarIndice());
++ipcMain.handle("nube-encendida", () => nube.encendida());
++ipcMain.handle("nube-prender", (_e, si) => nube.prender(!!si));
++ipcMain.handle("nube-subir", (_e, datos) => nube.subirPlano(datos || {}));
++ipcMain.handle("nube-quitar", (_e, doc) => nube.quitarPlano({ doc }));
++
++/* Bajar un plano de la nube deja un archivo en la máquina y devuelve su ruta,
++ * porque el motor abre rutas y no bytes. Va a una carpeta aparte para que
++ * nunca escriba encima del archivo que el dibujante tiene abierto: quién gana
++ * entre la copia de la nube y la de aquí lo decide él (paso 7), no esto. */
++ipcMain.handle("nube-bajar", async (_e, doc, version) => {
++  const r = await nube.bajarPlano({ doc, version });
++  if (!r.ok) return r;
++  try {
++    const dir = path.join(nube.carpeta(), "de-la-nube");
++    fs.mkdirSync(dir, { recursive: true });
++    const limpio = String(r.nombre || doc).replace(/[\\/:*?"<>|]/g, "-");
++    const ruta = path.join(dir, limpio.toLowerCase().endsWith(".t101d") ? limpio : limpio + ".t101d");
++    fs.writeFileSync(ruta, r.datos);
++    return { ok: true, ruta, nombre: r.nombre, version: r.version, modificado: r.modificado };
++  } catch (e) {
++    return { error: e.message };
++  }
++});
++
+ ipcMain.handle("archivo-inicial", () => {
+   const r = archivoInicial;
+   archivoInicial = null;
+diff --git a/electron/preload.js b/electron/preload.js
+index a0476c2..7654d4b 100644
+--- a/electron/preload.js
++++ b/electron/preload.js
+@@ -24,5 +24,24 @@ contextBridge.exposeInMainWorld("t101", {
+   alAbrirArchivo: (fn) => ipcRenderer.on("abrir-archivo", (_e, ruta) => fn(ruta)),
+   alGuardarYSalir: (fn) => ipcRenderer.on("guardar-y-salir", fn),
+   cerrar: (sucio) => ipcRenderer.send("cerrar", sucio),
++
++  /* LA NUBE (0.22.0). Nada de esto avienta: cada uno contesta por qué no se
++   * pudo —`sinRed`, `sinLicencia`, `apagada`, `error`— para que la pantalla
++   * pueda decir la verdad en lugar de quedarse en blanco.
++   *
++   * `indiceYa` contesta al instante con lo guardado de la última vez, e
++   * `indiceBajar` va a la red. La pantalla enseña lo primero y se actualiza con
++   * lo segundo: así nunca se queda esperando a que responda un servidor. */
++  nube: {
++    indiceYa: () => ipcRenderer.invoke("nube-indice-ya"),
++    indiceBajar: () => ipcRenderer.invoke("nube-indice-bajar"),
++    encendida: () => ipcRenderer.invoke("nube-encendida"),
++    prender: (si) => ipcRenderer.invoke("nube-prender", si),
++    subir: (datos) => ipcRenderer.invoke("nube-subir", datos),
++    bajar: (doc, version) => ipcRenderer.invoke("nube-bajar", doc, version),
++    quitar: (doc) => ipcRenderer.invoke("nube-quitar", doc),
++    // El principal avisa cuando terminó de bajar el índice del arranque.
++    alLlegarIndice: (fn) => ipcRenderer.on("nube-indice", (_e, r) => fn(r)),
++  },
+   idioma: (cual) => ipcRenderer.send("idioma", cual),
+ });
+# fin del parche: el renglon de cola absorbe el recorte del conector.
