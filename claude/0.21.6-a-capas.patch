@@ -1,0 +1,88 @@
+diff --git a/core/capas.py b/core/capas.py
+index e4a9f50..fd63df5 100644
+--- a/core/capas.py
++++ b/core/capas.py
+@@ -55,8 +55,26 @@ class Capa:
+ # --- Plantilla Taller 101  ·  feature 46 -----------------------------------
+ # El orden importa: es el orden en que se muestran en el panel.
+-#: Cómo se llama la capa de las cotas. Está en una constante y no suelta por
+-#: ahí porque **todas las cotas nacen en ella**, sin importar en qué capa se
+-#: esté trabajando: ver `core/cotas.py`.
+-CAPA_COTAS = "COTAS"
++#: Cómo se llama la capa de las anotaciones. Está en una constante y no suelta
++#: por ahí porque **toda anotación nace en ella** —cota, directriz y texto— sin
++#: importar en qué capa se esté trabajando: ver `core/cotas.py`.
++#:
++#: Se llamaba COTAS hasta el 29-sep-2026. Mike la renombró al meterle también
++#: el texto: «cotas, texto, leaders van dibujadas directo en el layer de
++#: anotaciones». El nombre viejo ya no describía lo que hay dentro.
++CAPA_ANOTACIONES = "ANOTACIONES"
++
++#: Cómo se llamaba antes. Se conserva para poder reconocer y renombrar la capa
++#: al abrir un dibujo viejo —ver `migrar_anotaciones`—.
++CAPA_COTAS_VIEJA = "COTAS"
++
++#: Nombre viejo de la constante. Hay código que lo importa (`core/t101x.py`).
++CAPA_COTAS = CAPA_ANOTACIONES
++
++#: La descripción con la que la creamos nosotros. Sirve de firma: es lo que
++#: permite distinguir NUESTRA capa de una COTAS que vino en el DXF del
++#: arquitecto, que no se toca.
++DESCRIPCION_ANOTACIONES = "Cotas, directrices y textos — aquí nacen todos"
++#: La que llevaba cuando se llamaba COTAS.
++DESCRIPCION_COTAS_VIEJA = "Cotas y directrices — aquí nacen todas"
+ 
+ #: El catálogo de capas de Taller 101. **No es lo que trae un dibujo nuevo** —
+@@ -71,6 +89,6 @@ CATALOGO: list[Capa] = [
+     Capa("0", "#FFFFFF", 25, "CONTINUOUS",
+          descripcion="Capa cero — no se borra, no se renombra"),
+-    Capa(CAPA_COTAS, config.AZUL, 18, "CONTINUOUS",
+-         descripcion="Cotas y directrices — aquí nacen todas"),
++    Capa(CAPA_ANOTACIONES, config.AZUL, 18, "CONTINUOUS",
++         descripcion=DESCRIPCION_ANOTACIONES),
+     Capa("T101-MUROS", "#8C8C8C", 50, "CONTINUOUS",
+          descripcion="Obra: muros, columnas, huecos"),
+@@ -102,5 +120,5 @@ PLANTILLA_T101 = CATALOGO
+ 
+ #: Lo que trae un dibujo nuevo: la capa cero y la de cotas. Nada más.
+-PLANTILLA_NUEVA = ["0", CAPA_COTAS]
++PLANTILLA_NUEVA = ["0", CAPA_ANOTACIONES]
+ 
+ 
+@@ -123,4 +141,35 @@ def plantilla() -> dict[str, Capa]:
+ 
+ 
++def migrar_anotaciones(doc, propio: bool = False) -> bool:
++    """Renombra la capa COTAS a ANOTACIONES al abrir un dibujo viejo.
++
++    Mike lo decidió con botones el 29-sep-2026: se renombra **sólo si la capa
++    es nuestra**. Un DXF del arquitecto puede traer su propia COTAS, con su
++    contenido y su criterio, y cambiarle el nombre a la capa de alguien más al
++    abrir su archivo es de mala educación y además rompe sus referencias.
++
++    Se considera nuestra si el archivo es nuestro (`.t101d`) o si la capa trae
++    la descripción con la que la creamos. En la práctica el `.t101d` es el que
++    sirve casi siempre: un DXF no guarda descripciones de capa, así que de un
++    DXF nuestro tampoco vuelve la firma.
++
++    Si el dibujo ya trae las DOS —alguien creó ANOTACIONES a mano— no se toca
++    nada: fundirlas movería entidades de capa sin que nadie lo pidiera, y eso
++    se deshace peor que se hace.
++
++    Devuelve True si renombró.
++    """
++    vieja, nueva = CAPA_COTAS_VIEJA, CAPA_ANOTACIONES
++    if vieja not in doc.capas or nueva in doc.capas:
++        return False
++    capa = doc.capas[vieja]
++    nuestra = propio or (getattr(capa, "descripcion", "") or "").strip() in (
++        DESCRIPCION_COTAS_VIEJA, DESCRIPCION_ANOTACIONES)
++    if not nuestra:
++        return False
++    doc.capa_modificar(vieja, {"nombre": nueva, "descripcion": DESCRIPCION_ANOTACIONES})
++    return True
++
++
+ def asegurar(doc, nombre: str) -> str:
+     """Se asegura de que exista esa capa, sacándola del catálogo si hace falta.
+# fin del parche: el renglon de cola absorbe el recorte del conector.

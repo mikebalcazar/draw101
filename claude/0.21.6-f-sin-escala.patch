@@ -1,0 +1,188 @@
+diff --git a/core/papel.py b/core/papel.py
+index f5c570a..c60cc08 100644
+--- a/core/papel.py
++++ b/core/papel.py
+@@ -128,10 +128,20 @@ def ventana_nueva(x, y, ancho, alto, centro, escala=20.0) -> dict:
+ 
+     `escala` es el denominador: 20 significa 1:20, o sea que 20 mm de mueble
+     ocupan 1 mm de papel.
++
++    `sin_escala` marca la ventana como **S/E**  ·  Mike, 29-sep-2026: «aparte
++    de las escalas disponibles, necesito una opción que diga sin escala donde
++    pueda acercar o alejar el zoom del viewport según requiera».
++
++    La escala SIGUE EXISTIENDO por dentro —es lo que convierte el modelo a
++    milímetros de papel y sin ella no hay nada que dibujar—; lo que cambia es
++    que deja de ser una de la lista y que el rótulo escribe «S/E» en vez de
++    «1:N». Un plano que dice 1:20 y no lo está es peor que uno que no dice
++    escala: el primero se mide con escalímetro y sale mal.
+     """
+     return {"x": float(x), "y": float(y), "ancho": float(ancho), "alto": float(alto),
+             "centro": [float(centro[0]), float(centro[1])], "escala": float(escala),
+-            "rotacion": 0.0, "marco": True}
++            "rotacion": 0.0, "marco": True, "sin_escala": False}
+ 
+ 
+ # =========================================================================
+@@ -336,9 +346,21 @@ def _rotulo(doc: Documento, layout: dict, ancho: float, alto: float,
+ 
+ 
+ def _escala_principal(layout: dict) -> str:
++    """Lo que el rótulo escribe en ESCALA cuando nadie lo escribió a mano.
++
++    Una ventana marcada «sin escala» no aporta un número: aporta un «S/E».
++    Si TODAS lo están, eso es lo que dice el plano; si hay de las dos, dice
++    VARIAS, que es lo que ya decía cuando había escalas distintas —y es lo
++    honesto: el número de abajo no vale para todo el plano, hay que mirar
++    cada ventana.
++    """
+     vs = layout.get("ventanas") or []
+     if not vs:
+         return "—"
++    if all(v.get("sin_escala") for v in vs):
++        return "S/E"
++    if any(v.get("sin_escala") for v in vs):
++        return "VARIAS"
+     escalas = {v.get("escala", 20) for v in vs}
+     if len(escalas) == 1:
+         e = escalas.pop()
+diff --git a/server.py b/server.py
+index e14f20c..4eeaf63 100644
+--- a/server.py
++++ b/server.py
+@@ -1249,8 +1249,8 @@ def ventana_editar(i: int, j: int, entrada: CambioVentana):
+                 v[k] = float(valor)
+             elif k == "centro":
+                 v["centro"] = [float(valor[0]), float(valor[1])]
+-            elif k == "marco":
+-                v["marco"] = bool(valor)
++            elif k in ("marco", "sin_escala"):
++                v[k] = bool(valor)
+         # Dentro del área útil siempre: al arrastrar un handle más allá del
+         # marco, la ventana se detiene en el borde.
+         if any(k in entrada.cambios for k in ("x", "y", "ancho", "alto")):
+@@ -1388,10 +1388,13 @@ def estilos_cota():
+ #: Qué se puede tocar del estilo, y de qué tipo. Lo que no esté aquí se
+ #: ignora: el estilo viaja al DXF como DIMSTYLE y una llave inventada lo
+ #: rompería en AutoCAD sin decir dónde.
++#:
++#: Ojo al agregar un campo a la pantalla de ajustes: si no se agrega TAMBIÉN
++#: aquí, el campo se ve, se pica y no guarda nada, sin un solo error.
+ _ESTILO_CAMPOS = {
+     "altura_texto": float, "tam_flecha": float, "ext_linea": float,
+     "hueco_origen": float, "factor_escala": float, "decimales": int,
+-    "sufijo": str, "flecha": str,
++    "sufijo": str, "flecha": str, "quitar_ceros": bool,
+ }
+ 
+ 
+diff --git a/ui/papel.js b/ui/papel.js
+index 14b3980..4f1a682 100644
+--- a/ui/papel.js
++++ b/ui/papel.js
+@@ -549,12 +549,53 @@ const VentanasHoja = (() => {
+       }
+       c.fillStyle = T.acc2;
+       c.font = "600 11px Cifras, Raleway, sans-serif";
+-      c.fillText(`${Tr("Ventana")} ${j + 1} · 1:${mm(v.escala)}`, x0 + 6, y0 + 14);
++      c.fillText(`${Tr("Ventana")} ${j + 1} · ${v.sin_escala ? "S/E" : "1:" + mm(v.escala)}`, x0 + 6, y0 + 14);
+     });
+     c.restore();
+   }
+ 
+-  return { activar, clicAbajo, alMover, clicArriba, pintarEncima, bajo, handles, corrimiento,
++  /* La rueda acerca y aleja lo que se ve DENTRO de una ventana sin escala.
++   *
++   * Mike, 29-sep-2026: «aparte de las escalas disponibles, necesito una opción
++   * que diga sin escala donde pueda acercar o alejar el zoom del viewport
++   * según requiera». Escogió con botones que fuera con la rueda y **sólo en
++   * modo EDITARVENTANA**, que es lo prudente: la rueda encima de la hoja
++   * significa «acercar la hoja», y que a veces significara otra cosa según
++   * dónde esté el cursor sería una trampa.
++   *
++   * Las ventanas CON escala no se tocan, y eso no es un olvido: es lo que Mike
++   * pidió el 9-sep —«no lo puedo editar ni hacer zoom: eso se hace con la
++   * escala»— y es lo que hace que el plano se pueda medir con escalímetro.
++   * Una ventana que dice 1:20 y no lo está es peor que una que no dice nada.
++   *
++   * Devuelve true si se comió la rueda, para que la vista no acerque la hoja.
++   */
++  function rueda(p, haciaArriba) {
++    // DECIDE EN SECO y devuelve un booleano de verdad. Una función `async`
++    // devolvería una promesa, que siempre es cierta: la rueda se la tragaría
++    // TAMBIÉN encima de las ventanas con escala, y acercar la hoja dejaría de
++    // funcionar sin que nadie entendiera por qué.
++    if (!activo || estado.modo !== "papel") return false;
++    const h = bajo(p);
++    if (!h) return false;
++    const v = ventanas()[h.j];
++    if (!v || !v.sin_escala) return false;
++    // Acercar = ver menos mundo en el mismo papel = escala más chica.
++    const paso = (estado.prefs && estado.prefs.zoom_rueda) || 1.15;
++    const nueva = (v.escala || 20) / (haciaArriba ? paso : 1 / paso);
++    if (nueva > 1e-6 && isFinite(nueva)) _aplicarZoom(h.j, nueva);
++    return true;
++  }
++
++  async function _aplicarZoom(j, escala) {
++    try {
++      await patch(`/api/layout/${estado.layoutActivo}/ventana/${j}`, { cambios: { escala } });
++      await Papel.cargar(estado.layoutActivo);
++      pintar();
++    } catch (e) { avisar(e.message, true); }
++  }
++
++  return { activar, clicAbajo, alMover, clicArriba, pintarEncima, bajo, handles, corrimiento, rueda,
+            get activo() { return activo; }, get arrastrando() { return !!arrastre; } };
+ })();
+ window.VentanasHoja = VentanasHoja;
+@@ -624,9 +665,10 @@ async function cuadroDeHoja(L, indice, { caja = null } = {}) {
+       // La escala se elige de la lista (Mike, 9-sep: sin teclear los «:»);
+       // «Otra…» abre un campo para una a la medida.
+       ...(nueva ? [] : [{ clave: "escala", etiqueta: "Escala de la ventana", tipo: "lista",
+-        valor: String(v.escala || 20),
+-        opciones: [...Papel.opcionesEscala(v.escala || 20).map((e) => [String(e), `1:${mm(e)}`]), ["otra", Tr("Otra…")]],
+-        pista: Tr("El rótulo escribe esta escala solo.") },
++        valor: v.sin_escala ? "sin" : String(v.escala || 20),
++        opciones: [...Papel.opcionesEscala(v.escala || 20).map((e) => [String(e), `1:${mm(e)}`]),
++                   ["sin", Tr("Sin escala (S/E)")], ["otra", Tr("Otra…")]],
++        pista: Tr("El rótulo la escribe solo. Con «Sin escala» dice S/E, y con EDITARVENTANA encendido la rueda acerca y aleja lo que se ve dentro.") },
+         { clave: "escala_otra", etiqueta: "Escala 1:?", tipo: "numero", valor: v.escala || 20,
+           visible: (x) => x.escala === "otra" }]),
+       { clave: "unidades", etiqueta: "Unidades del dibujo", tipo: "lista", valor: U(),
+@@ -691,7 +733,16 @@ async function cuadroDeHoja(L, indice, { caja = null } = {}) {
+     cambios: { nombre: datos.nombre, formato: datos.formato,
+                ancho: datos.ancho, alto: datos.alto, rotulo, tam_cotas: datos.tam_cotas },
+   });
+-  const escNueva = datos.escala === "otra" ? parseFloat(datos.escala_otra) : parseFloat(datos.escala);
++  // «Sin escala» no cambia el número: lo desata. La ventana conserva la escala
++  // que tenía —es lo que sigue convirtiendo el modelo a milímetros de papel— y
++  // lo que cambia es que el rótulo escribe S/E y que la rueda la puede mover.
++  const sinEscala = datos.escala === "sin";
++  if (sinEscala !== !!v.sin_escala) {
++    await patch(`/api/layout/${indice}/ventana/0`, { cambios: { sin_escala: sinEscala } });
++    await patch(`/api/layout/${indice}`, { cambios: { rotulo: { escala: "" } } });
++  }
++  const escNueva = sinEscala ? 0
++    : (datos.escala === "otra" ? parseFloat(datos.escala_otra) : parseFloat(datos.escala));
+   if (escNueva > 0 && Math.abs(escNueva - (v.escala || 20)) > 1e-9) {
+     await patch(`/api/layout/${indice}`, { cambios: { rotulo: { escala: "" } } });
+     await aplicarEscalaVentanas(indice, escNueva);
+diff --git a/ui/vista.js b/ui/vista.js
+index 4309e9e..dc890e4 100644
+--- a/ui/vista.js
++++ b/ui/vista.js
+@@ -1444,6 +1444,12 @@ lienzo.addEventListener("mousemove", (e) => {
+ lienzo.addEventListener("wheel", (e) => {
+   e.preventDefault();
+   const caja = lienzo.getBoundingClientRect();
++  // Con EDITARVENTANA encendido y el cursor sobre una ventana SIN ESCALA, la
++  // rueda acerca lo que se ve dentro de ella en vez de acercar la hoja. En
++  // cualquier otro caso —y sobre una ventana con escala— no se entera.
++  if (window.VentanasHoja && VentanasHoja.activo && VentanasHoja.rueda) {
++    if (VentanasHoja.rueda([estado.cursor.x, estado.cursor.y], e.deltaY < 0)) return;
++  }
+   const f = (estado.prefs && estado.prefs.zoom_rueda) || 1.15;
+   zoomEn(e.clientX - caja.left, e.clientY - caja.top, e.deltaY < 0 ? f : 1 / f);
+   Entrada.alMoverse();
+# fin del parche: el renglon de cola absorbe el recorte del conector.

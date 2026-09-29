@@ -1,0 +1,45 @@
+diff --git a/core/cotas.py b/core/cotas.py
+index 1208be4..f746b61 100644
+--- a/core/cotas.py
++++ b/core/cotas.py
+@@ -413,12 +413,18 @@ def limpiar_ligas(doc: Documento, ids_borrados) -> None:
+ # =========================================================================
+ 
++#: Qué nace en la capa de anotaciones. La DIRECTRIZ no aparece porque no es un
++#: tipo aparte: por dentro es una cota de clase «directriz», así que ya entra.
++TIPOS_ANOTACION = ("cota", "texto", "textom")
++
++
+ def encapar(doc: Documento, entidad):
+-    """Manda la entidad a la capa de cotas si es una cota. Devuelve la entidad.
++    """Manda la entidad a la capa de anotaciones si lo es. Devuelve la entidad.
+ 
+-    **Toda cota nace en `COTAS`**, dé igual en qué capa se esté trabajando. Es
+-    una decisión de Mike y es la costumbre de cualquier taller: las cotas son
+-    una capa que se apaga entera para ver el dibujo limpio, o se imprime aparte,
+-    y eso deja de funcionar en cuanto una se queda regada en la capa de muros.
+-    Moverla después es un clic; encontrar la que se quedó fuera, no.
++    **Toda anotación nace en `ANOTACIONES`**, dé igual en qué capa se esté
++    trabajando. Es una decisión de Mike y es la costumbre de cualquier taller:
++    las anotaciones son una capa que se apaga entera para ver el dibujo limpio,
++    o se imprime aparte, y eso deja de funcionar en cuanto una se queda regada
++    en la capa de muros. Moverla después es un clic; encontrar la que se quedó
++    fuera, no.
+ 
+     Se impone **aquí, en el motor**, y no en la interfaz: así vale igual para la
+@@ -429,7 +435,12 @@ def encapar(doc: Documento, entidad):
+     Si la capa no existe todavía —un DWG ajeno, por ejemplo— se crea del
+     catálogo, en azul Taller 101.
++
++    Desde el 29-sep-2026 entra también el TEXTO, por petición de Mike: «cotas,
++    texto, leaders van dibujadas directo en el layer de anotaciones». Por eso
++    la capa dejó de llamarse COTAS: el nombre ya no describía lo que hay
++    dentro.
+     """
+-    if getattr(entidad, "tipo", None) != "cota":
++    if getattr(entidad, "tipo", None) not in TIPOS_ANOTACION:
+         return entidad
+-    entidad.capa = mod_capas.asegurar(doc, mod_capas.CAPA_COTAS)
++    entidad.capa = mod_capas.asegurar(doc, mod_capas.CAPA_ANOTACIONES)
+     return entidad
+# fin del parche: el renglon de cola absorbe el recorte del conector.

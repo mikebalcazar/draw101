@@ -1,0 +1,51 @@
+diff --git a/ui/editar.js b/ui/editar.js
+index 2c5cc2a..7b4029c 100644
+--- a/ui/editar.js
++++ b/ui/editar.js
+@@ -471,8 +471,15 @@ Comandos.registrar({
+       mensaje: "Segundo punto del eje", base: a,
+       hule: conFantasma(ids, a, (q) => T.espejo(a, q)),
+     });
+-    const borrar = (await Entrada.pedirTexto({
+-      mensaje: "¿Borrar el original? S/N", valor: "N" })).toUpperCase().startsWith("S");
++    // Con `opciones` el espacio confirma como Enter · Mike, 29-sep-2026: «el
++    // espacio no sirve para nada más que de enter». Sin ellas, `pedirTexto`
++    // supone texto libre —un rótulo, una nota— y el espacio borraba la
++    // respuesta sin aceptarla: se tecleaba N, se daba espacio, y no pasaba nada.
++    // En inglés la pregunta sale «Erase the original? Y/N», así que el sí se
++    // contesta con Y; en español con S. Se aceptan las dos letras.
++    const borrar = /^[SY]/.test((await Entrada.pedirTexto({
++      mensaje: "¿Borrar el original? S/N", valor: "N",
++      opciones: ["S", "N", "Y"] })).toUpperCase());
+     await transformarSeleccion(ids, T.espejo(a, b), `Espejo ${ids.length}`, !borrar);
+     if (borrar) Comandos.eco(`${ids.length} entidad(es) reflejadas.`);
+     else Comandos.eco(`${ids.length} copia(s) reflejadas.`);
+@@ -1282,8 +1289,10 @@ Comandos.registrar({
+   correr: async (args) => {
+     const ids = await Seleccion.pedir({ mensaje: "Selecciona lo que se repite" });
+     if (!ids.length) return;
++    // Con `opciones`, el espacio acepta (ver ESPEJO, arriba).
+     const modo = ((args[0] || await Entrada.pedirTexto({
+-      mensaje: "¿Rectangular o Polar? R/P", valor: "R" })) || "R").toUpperCase();
++      mensaje: "¿Rectangular o Polar? R/P", valor: "R",
++      opciones: ["R", "P"] })) || "R").toUpperCase();
+ 
+     if (modo.startsWith("P")) {
+       /* Previa del arreglo polar (Mike, 16-sep-2026): al elegir el centro se
+diff --git a/ui/suite.js b/ui/suite.js
+index 00e2e6d..5b0e83c 100644
+--- a/ui/suite.js
++++ b/ui/suite.js
+@@ -20,8 +20,10 @@ Comandos.registrar({
+     Comandos.eco(`«${resumen.nombre}» · ${resumen.cliente}`);
+     Comandos.eco(`${resumen.gabinetes} mueble(s): ${resumen.bajos} bajo(s), ` +
+                  `${resumen.aereos} aéreo(s) — ${resumen.nombres.join(", ")}`);
++    // Con `opciones`, el espacio acepta (ver ESPEJO en ui/editar.js).
+     const acotar = !(await Entrada.pedirTexto({
+-      mensaje: "¿Acotar automáticamente? S/N", valor: "S" })).toUpperCase().startsWith("N");
++      mensaje: "¿Acotar automáticamente? S/N", valor: "S",
++      opciones: ["S", "N"] })).toUpperCase().startsWith("N");
+ 
+     try {
+       const r = await post("/api/t101x/importar", { ruta, acotar });
+# fin del parche: el renglon de cola absorbe el recorte del conector.
