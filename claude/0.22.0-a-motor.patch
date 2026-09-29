@@ -1,0 +1,214 @@
+diff --git a/core/nube.py b/core/nube.py
+new file mode 100644
+index 0000000..d9997b3
+--- /dev/null
++++ b/core/nube.py
+@@ -0,0 +1,51 @@
++"""El token del documento, y de ahí para arriba la nube.
++
++Mike, 29-sep-2026: «tener alguna manera de identificar el archivo con un string
++o un token y que cada archivo tenga su token, así cuando se abre aunque sea
++otra compu, si el token y la cuenta de la licencia es la misma, ese archivo se
++sincroniza».
++
++POR QUÉ EL TOKEN VA DENTRO DEL ARCHIVO Y NO EN SU RUTA: porque la ruta es lo
++único que de verdad cambia. El mismo plano vive en `D:\\Proyectos\\Cocina Ruiz`
++en una máquina y en el escritorio en otra; se renombra, se mueve, se copia a
++una memoria. Un identificador que viva en el nombre o en la carpeta se rompe
++la primera vez que alguien ordena sus archivos. Dentro del `.t101d` viaja con
++él a donde vaya.
++
++QUÉ ES: un ULID. Veintiséis letras del alfabeto de Crockford —sin I, L, O ni U,
++que por teléfono y a mano se confunden—, con los primeros diez caracteres
++sacados del reloj. Eso le da dos cosas que hacen falta: se genera sin
++preguntarle a nadie (o sea, sin internet), y ordena por fecha de creación con
++sólo mirarlo.
++"""
++
++from __future__ import annotations
++
++import os
++import time
++
++# El alfabeto de Crockford, el mismo que usa el servidor para validar.
++_ABC = "0123456789ABCDEFGHJKMNPQRSTVWXYZ"
++LARGO = 26
++
++
++def token_nuevo(ms: float | None = None) -> str:
++    """Un ULID. Los primeros 10 caracteres son el reloj; los 16 restantes, azar."""
++    t = int((time.time() if ms is None else ms) * 1000)
++    letras = []
++    for _ in range(10):
++        t, r = divmod(t, 32)
++        letras.append(_ABC[r])
++    tiempo = "".join(reversed(letras))
++    azar = "".join(_ABC[b % 32] for b in os.urandom(16))
++    return tiempo + azar
++
++
++def token_valido(v: object) -> bool:
++    """Si esto es un token de documento y no cualquier cosa.
++
++    Se comprueba ANTES de mandarlo al servidor y al leerlo de un archivo: un
++    `.t101d` editado a mano, o de una versión futura, no debe hacer que la app
++    mande basura ni que se caiga.
++    """
++    return isinstance(v, str) and len(v) == LARGO and all(c in _ABC for c in v)
+diff --git a/core/documento.py b/core/documento.py
+index 09a29b8..9b7f524 100644
+--- a/core/documento.py
++++ b/core/documento.py
+@@ -83,6 +83,17 @@ class Documento:
+         # el .t101d tiene que poder imprimirlo igual.
+         self.layouts: list[dict] = []
+         self.origen_t101x = None            # de qué proyecto de Taller 101 vino
++        # El token del ARCHIVO (core/nube.py), no del dibujo. Vive en memoria
++        # mientras el documento está abierto y se escribe en `meta.json` al
++        # guardar; NO entra en `a_dict()` a propósito, porque entonces viajaría
++        # a un DXF, a un copiar-y-pegar entre pestañas y a cualquier cosa que
++        # serialice el contenido — y dos archivos distintos diciendo ser el
++        # mismo es justo el enredo que el token existe para evitar.
++        self.token = ""
++        # Cuándo se guardó el archivo del que salió, según el reloj de quien lo
++        # guardó. Como `token`, NO va en `a_dict()`: es del archivo, no de lo
++        # dibujado, y en un DXF o en un copiar-y-pegar no significa nada.
++        self.guardado_en = ""
+         # Referencias externas del archivo: nombre del bloque → ruta que dice
+         # el DWG. Es lo que permite ir a buscar el archivo y montar su dibujo
+         # (ver `core/dxf_lector.py`, `_resolver_xrefs`).
+diff --git a/core/proyecto.py b/core/proyecto.py
+index ffa3e90..cc76fc6 100644
+--- a/core/proyecto.py
++++ b/core/proyecto.py
+@@ -21,6 +21,7 @@ import tempfile
+ import zipfile
+ 
+ from . import config
++from . import nube as mod_nube
+ from . import capas as mod_capas
+ from .documento import Documento
+ 
+@@ -47,11 +48,22 @@ def guardar(doc: Documento, ruta: str | pathlib.Path) -> pathlib.Path:
+         ruta = ruta.with_suffix(config.EXT_PROYECTO)
+     ruta.parent.mkdir(parents=True, exist_ok=True)
+ 
++    # El token del documento va en el SOBRE (`meta.json`) y no en el dibujo
++    # (`documento.json`), a propósito: no es parte de lo dibujado. Exportar a
++    # DXF, copiar entidades a otro plano o pegar en otra pestaña no deben
++    # arrastrarlo — son cosas del contenido, y el token identifica al ARCHIVO.
++    #
++    # Nace aquí si no lo traía: un dibujo nuevo, o uno de antes de 0.22.0 que
++    # se guarda por primera vez. Sin preguntar nada.
++    if not mod_nube.token_valido(getattr(doc, "token", None)):
++        doc.token = mod_nube.token_nuevo()
++
+     meta = {
+         "formato": FORMATO,
+         "app": config.APP_NOMBRE,
+         "guardado": dt.datetime.now().isoformat(timespec="seconds"),
+         "unidad": doc.unidad,
++        "token": doc.token,
+     }
+     tmp = tempfile.NamedTemporaryFile(
+         delete=False, dir=str(ruta.parent), suffix=".tmp")
+@@ -80,6 +92,19 @@ def abrir(ruta: str | pathlib.Path) -> Documento:
+                 "Actualiza el programa para abrirlo.")
+         datos = json.loads(z.read("documento.json").decode("utf-8"))
+     doc = Documento.de_dict(datos)
++    # El token del archivo. Un `.t101d` de antes de 0.22.0 no trae ninguno, y
++    # uno editado a mano puede traer cualquier cosa: en los dos casos se deja
++    # vacío y `guardar` le pone uno nuevo. Nunca se confía en lo que venga.
++    token = meta.get("token")
++    doc.token = token if mod_nube.token_valido(token) else ""
++
++    # CUÁNDO SE GUARDÓ ESTE ARCHIVO, según el reloj de la máquina que lo guardó.
++    # Es lo que se compara contra la fecha del renglón de la nube —que también
++    # es el reloj de quien guardó— para saber cuál copia es más nueva. No se usa
++    # la fecha del archivo en el disco a propósito: copiar un archivo con una
++    # memoria USB la cambia, y entonces una copia vieja parecería la más nueva.
++    doc.guardado_en = str(meta.get("guardado") or "")
++
+     # La capa COTAS pasó a llamarse ANOTACIONES el 29-sep-2026. Éste es NUESTRO
+     # archivo, así que la capa es nuestra y se renombra sin preguntar: si no,
+     # cada dibujo viejo seguiría con su COTAS y las anotaciones nuevas nacerían
+diff --git a/server.py b/server.py
+index 4eeaf63..840f0da 100644
+--- a/server.py
++++ b/server.py
+@@ -30,6 +30,7 @@ from core import actualizar as mod_actualizar, avisos as mod_avisos, config, uni
+ from core import unir as mod_unir
+ from core import agrupar as mod_agrupar
+ from core import oda as mod_oda
++from core import nube as mod_nube
+ from core import version as mod_version
+ from core import licencia as mod_licencia
+ from core import progreso as mod_progreso
+@@ -68,6 +69,12 @@ class Sesion:
+             "nombre": d.nombre,
+             "cliente": d.cliente,
+             "ruta": str(self.ruta) if self.ruta else None,
++            # El token del ARCHIVO, para que la interfaz pueda reconocerlo en la
++            # nube (0.22.0). Va aquí y NO en `a_dict()` del documento: en el
++            # `a_dict()` se arrastraría a los DXF y a lo que se copia entre
++            # pestañas, y el token identifica al archivo, no a lo dibujado.
++            "token": getattr(d, "token", "") or "",
++            "guardado_en": getattr(d, "guardado_en", "") or "",
+             "sucio": d.sucio,
+             "unidad": d.unidad,
+             "capa_activa": d.capa_activa,
+@@ -1510,11 +1517,53 @@ def abrir(entrada: Abrir):
+     return r
+ 
+ 
++@app.post("/api/token-nuevo")
++def token_nuevo():
++    """Le estrena token al documento abierto, para «abrir como documento nuevo».
++
++    Es una de las tres salidas que Mike pidió cuando la copia de la nube es más
++    nueva que la de esta computadora: usar la de la nube, quedarse con ésta, o
++    abrir ésta como un documento aparte que no le haga nada a la otra. Esta
++    última es la que necesita un token nuevo, porque es lo único que distingue
++    un archivo de otro allá.
++
++    Y es la que se usa —sin preguntar— cuando el archivo llegó de otra cuenta:
++    «si llega a compartir ese archivo (por mail o por memoria) y lo abre otra
++    cuenta, esa otra cuenta genera un nuevo archivo con su propio token».
++
++    Marca el documento como sucio a propósito: el token vive en el archivo, así
++    que hasta que no se guarde, en el disco sigue el de antes. Que la app diga
++    que hay cambios sin guardar es verdad, y no un efecto raro.
++    """
++    with S.candado:
++        S.doc.token = mod_nube.token_nuevo()
++        S.doc.sucio = True
++        return {"token": S.doc.token, "resumen": S.resumen()}
++
++
+ @app.post("/api/guardar")
+ def guardar(entrada: RutaEntrada):
+     _exige_licencia()
+     try:
+         with S.candado:
++            # GUARDAR COMO estrena token  ·  0.22.0
++            #
++            # Guardar y «guardar como» llegan por la misma puerta: lo único
++            # que los distingue es que la ruta sea otra. Y sí importa cuál es:
++            # el token identifica al archivo en la nube, así que si una copia
++            # se llevara el del original, guardarla PISARÍA al original allá
++            # —sin error y sin aviso—. Partir de un plano para otro cliente es
++            # de las cosas más normales que se hacen aquí.
++            #
++            # `S.ruta` en None es un dibujo que nunca se ha guardado: ése no es
++            # una copia de nada, y se queda con el token que ya trae.
++            if S.ruta is not None:
++                try:
++                    otra = pathlib.Path(entrada.ruta).resolve() != pathlib.Path(S.ruta).resolve()
++                except Exception:
++                    otra = str(entrada.ruta) != str(S.ruta)
++                if otra:
++                    S.doc.token = ""
+             S.ruta = proyecto.guardar(S.doc, entrada.ruta)
+     except Exception as exc:
+         _error(exc)
+# fin del parche: el renglon de cola absorbe el recorte del conector.
