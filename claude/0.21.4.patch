@@ -1,0 +1,166 @@
+diff --git a/core/version.py b/core/version.py
+index 53bc653..2367b8e 100644
+--- a/core/version.py
++++ b/core/version.py
+@@ -21,13 +21,29 @@ Numeración: `mayor.menor.parche`.
+ 
+ from __future__ import annotations
+ 
+-VERSION = "0.21.3"
+-FECHA = "2026-09-24"
++VERSION = "0.21.4"
++FECHA = "2026-09-28"
+ 
+ # Qué trae cada entrega, en el idioma del taller y no en el del código.
+ # La más nueva arriba. Lo que se lista aquí es lo que el comando VERSION
+ # enseña en la consola.
+ BITACORA: list[dict] = [
++    {
++        "version": "0.21.4",
++        "fecha": "2026-09-28",
++        "cambios": [
++            "Cuando la licencia ya no tiene lugar libre, la pantalla de "
++            "activación enseña la lista de tus equipos —con su nombre, su "
++            "ícono y cuándo se usó cada uno— y puedes dar de baja el que ya "
++            "no uses. Al darlo de baja, esta computadora entra sola: no hay "
++            "que volver a empezar. Antes, desde una computadora nueva no "
++            "había forma de liberar la vieja.",
++            "Para que esa lista se pueda leer, draw101 manda el nombre de tu "
++            "computadora (el de Windows) y el sistema. Va aparte de la huella "
++            "del equipo, que sigue siendo un azar y sigue sin identificar a "
++            "nadie. Sólo lo ve el dueño de la licencia, en su propia lista.",
++        ],
++    },
+     {
+         "version": "0.21.3",
+         "fecha": "2026-09-24",
+diff --git a/electron/licencia-nucleo.js b/electron/licencia-nucleo.js
+index 9847a3f..68c3cf4 100644
+--- a/electron/licencia-nucleo.js
++++ b/electron/licencia-nucleo.js
+@@ -32,6 +32,34 @@ const porque = (nombre) => ({
+  *  porque para la suite es un equipo nuevo. El nombre del equipo entra sólo
+  *  como sal: no se manda ni se puede sacar del resultado.
+  */
++/* Cómo se llama esta computadora, y en qué sistema va  ·  0.21.4.
++ *
++ * Mike (28-sep-2026) pidió una lista de equipos para dar de baja uno, como la
++ * de Adobe, «que ponga el nombre del equipo como lo tiene en su windows. Cada
++ * quien sabrá qué computadora es».
++ *
++ * Esto NO deshace lo de la 0.21.1. La HUELLA sigue siendo un azar guardado y
++ * sigue sin salir de aquí el nombre de nadie: el nombre viaja **aparte**, como
++ * etiqueta, y sólo lo ve el dueño de la licencia en su propia lista. La
++ * diferencia importa: de la huella no se puede sacar quién eres; la etiqueta
++ * es para que tú te reconozcas.
++ */
++function nombreDelEquipo() {
++  try {
++    const n = String(os.hostname() || "").trim();
++    // Sin el sufijo de red («TALLER-PC.local», «pc.casa.lan»), que no ayuda a
++    // distinguir y sí alarga el renglón.
++    return n.split(".")[0].slice(0, 60) || null;
++  } catch { return null; }
++}
++
++function sistemaDelEquipo() {
++  try {
++    const p = os.platform();
++    return p === "win32" ? "windows" : p === "darwin" ? "mac" : "linux";
++  } catch { return null; }
++}
++
+ function huella(carpeta) {
+   const archivo = path.join(carpeta, "equipo.json");
+   try {
+@@ -85,7 +113,8 @@ async function latido({ api, carpeta, nombre, d, version, traer = fetch }) {
+     r = await traer(`${api}/licencias/latido`, {
+       method: "POST",
+       headers: { "Content-Type": "application/json" },
+-      body: JSON.stringify({ token: d.token, huella: huella(carpeta), version }),
++      body: JSON.stringify({ token: d.token, huella: huella(carpeta), version,
++                             nombre: nombreDelEquipo(), sistema: sistemaDelEquipo() }),
+     });
+   } catch { return { sinRed: true }; }
+   let cuerpo = null;
+@@ -106,8 +135,14 @@ function direccionDeLaPantalla({ api, programa, nombre, huella: h, version, avis
+   u.searchParams.set("huella", h);
+   u.searchParams.set("app", nombre);
+   if (version) u.searchParams.set("version", version);
++  // Para que la pantalla los mande al activar, y la lista de equipos se pueda
++  // leer desde el primer día de esta máquina.
++  const equipo = nombreDelEquipo();
++  if (equipo) u.searchParams.set("equipo", equipo);
++  const sistema = sistemaDelEquipo();
++  if (sistema) u.searchParams.set("sistema", sistema);
+   if (aviso) u.searchParams.set("aviso", aviso);
+   return u.toString();
+ }
+ 
+-module.exports = { API_POR_OMISION, huella, guardada, guardar, olvidar, alCorriente, latido, porque, direccionDeLaPantalla, archivoLicencia };
++module.exports = { API_POR_OMISION, huella, nombreDelEquipo, sistemaDelEquipo, guardada, guardar, olvidar, alCorriente, latido, porque, direccionDeLaPantalla, archivoLicencia };
+diff --git a/package.json b/package.json
+index e53992c..7d8a929 100644
+--- a/package.json
++++ b/package.json
+@@ -1,8 +1,8 @@
+ {
+   "name": "draw101",
+   "productName": "draw101",
+-  "version": "0.21.3",
+-  "_versionApp": "0.21.3 — la que enseña la app viene de core/version.py; ésta sólo existe porque electron-builder exige semver",
++  "version": "0.21.4",
++  "_versionApp": "0.21.4 — la que enseña la app viene de core/version.py; ésta sólo existe porque electron-builder exige semver",
+   "_notaAsociaciones": "draw101 aparece en «Abrir con» de los DXF y DWG y en Aplicaciones predeterminadas, pero NO se roba la asociación: quién los abre por omisión lo sigue decidiendo el usuario (regla de Mike, 0.11.2). electron-builder registra el ProgID; Windows decide. El .t101d sí es nuestro. Ojo: dentro de «build» electron-builder rechaza cualquier clave que no conozca, aunque empiece con guión bajo (se cazó armando la 0.20.16).",
+   "_notaEmpaque": "asar apagado a propósito: main.js busca server.py junto a electron/, y el motor de Python no puede vivir dentro de un asar. Y electron-builder saca cualquier node_modules de los globs de `files`, así que los dos motores de DWG (dwgjs/node_modules) se copian por extraResources o la app se queda sin leer DWG.",
+   "description": "CAD 2D de Taller 101 — leer, trazar, acotar e imprimir planos",
+@@ -21,7 +21,7 @@
+   "build": {
+     "appId": "mx.taller101.dibujador",
+     "productName": "draw101",
+-    "artifactName": "draw101-0.21.3-setup.${ext}",
++    "artifactName": "draw101-0.21.4-setup.${ext}",
+     "directories": {
+       "output": "dist",
+       "buildResources": "build"
+diff --git a/pruebas/licencia.mjs b/pruebas/licencia.mjs
+index f287f0b..d9efc02 100644
+--- a/pruebas/licencia.mjs
++++ b/pruebas/licencia.mjs
+@@ -88,6 +88,36 @@ console.log('\n· la pantalla que se abre');
+   rev(u.pathname === '/licencias/entrar', 'es la pantalla de la suite, no una propia');
+   rev(u.searchParams.get('programa') === 'draw101' && u.searchParams.get('huella') === 'equipo-0123456789abcdef', 'y le dice qué programa y qué equipo');
+   rev(!u.toString().includes('token'), 'la dirección no lleva ningún token: una dirección se copia y se queda en registros');
++  rev(u.searchParams.get('equipo') === n.nombreDelEquipo(), 'y cómo se llama este equipo, para la lista de equipos de la suite');
++  rev(['windows', 'mac', 'linux'].includes(u.searchParams.get('sistema')), 'y en qué sistema va, que es el ícono de esa lista', u.searchParams.get('sistema'));
++}
++
++/* El nombre del equipo  ·  0.21.4. Mike pidió la lista estilo Adobe para dar
++ * de baja un equipo, «que ponga el nombre del equipo como lo tiene en su
++ * windows». Esto es lo que lo manda.
++ *
++ * La línea que no se puede cruzar: el nombre va APARTE, como etiqueta. La
++ * huella sigue siendo el azar guardado de la 0.21.1 y de ella no se saca el
++ * nombre de nadie. Si algún día alguien vuelve a meter el hostname en la
++ * huella, esta prueba lo caza. */
++console.log('\n· cómo se llama este equipo');
++{
++  const nombre = n.nombreDelEquipo();
++  rev(typeof nombre === 'string' && nombre.length > 0 && nombre.length <= 60, 'la app sabe cómo se llama esta computadora', nombre);
++  rev(!nombre.includes('.'), 'sin el sufijo de red, que alarga y no distingue');
++  rev(['windows', 'mac', 'linux'].includes(n.sistemaDelEquipo()), 'y en qué sistema va');
++
++  const carpeta = dir();
++  const h = n.huella(carpeta);
++  rev(!h.includes(nombre), 'la HUELLA no lleva el nombre dentro: sigue sin identificar a nadie');
++  rev(n.huella(carpeta) === h, 'y es la misma en el siguiente arranque, como desde la 0.21.1');
++
++  const mandado = [];
++  const espia = { api: 'https://x', carpeta, nombre: 'draw101', d: { token: 'v1.x', hasta: enDias(5) },
++    traer: async (_u, o) => { mandado.push(JSON.parse(o.body)); return { ok: true, status: 200, json: async () => ({ ok: true, data: { token: 'v1.y', hasta: enDias(20), licencia: {} } }) }; } };
++  await n.latido(espia);
++  rev(mandado[0].nombre === nombre, 'el latido diario lo manda, así que la lista se llena sola sin reactivar nada');
++  rev(mandado[0].huella === h, 'junto a la huella de siempre');
+ }
+ 
+ console.log(`\n${fallas ? `${fallas} FALLA${fallas > 1 ? 'S' : ''}` : 'todo bien'} · ${revisadas - fallas} de ${revisadas} pasaron\n`);
