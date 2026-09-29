@@ -1,0 +1,218 @@
+diff --git a/pruebas/t047_token_del_documento.py b/pruebas/t047_token_del_documento.py
+new file mode 100644
+index 0000000..4c625d2
+--- /dev/null
++++ b/pruebas/t047_token_del_documento.py
+@@ -0,0 +1,211 @@
++"""t047 · Cada archivo lleva su token dentro (la nube, paso 1).
++
++Mike, 29-sep-2026: «tener alguna manera de identificar el archivo con un string
++o un token y que cada archivo tenga su token, así cuando se abre aunque sea
++otra compu (...) ese archivo se sincroniza».
++
++POR QUÉ DENTRO DEL ARCHIVO Y NO EN SU RUTA: porque la ruta es lo único que de
++verdad cambia. El mismo plano vive en una carpeta aquí y en otra allá, se
++renombra, se mueve, se copia a una memoria. Dentro del `.t101d` viaja con él.
++
++LO QUE DE VERDAD APORTAN ESTAS PRUEBAS:
++
++  · QUE «GUARDAR COMO» ESTRENE TOKEN. Es lo único que no se ve venir y lo que
++    más caro sale: partir de un plano para otro cliente es de las cosas más
++    normales que se hacen aquí, y si la copia se llevara el token del
++    original, guardarla PISARÍA al original en la nube. Sin error y sin aviso.
++
++  · QUE GUARDAR ENCIMA NO LO CAMBIE. Es la otra mitad: un token que cambiara
++    en cada guardado dejaría un archivo nuevo en la nube cada vez, y el de
++    ayer huérfano.
++
++  · QUE NO VIAJE EN EL CONTENIDO. Si entrara en `a_dict()` se colaría a un
++    DXF, a un copiar-y-pegar entre pestañas y a cualquier cosa que serialice
++    el dibujo — y dos archivos distintos diciendo ser el mismo es justo el
++    enredo que el token existe para evitar.
++
++  · QUE UN ARCHIVO VIEJO O EDITADO A MANO NO ROMPA NADA. Un `.t101d` de antes
++    de 0.22.0 no trae token; uno manipulado puede traer cualquier cosa. En los
++    dos casos se le pone uno nuevo al guardar, en silencio.
++"""
++
++from __future__ import annotations
++
++import json
++import pathlib
++import sys
++import tempfile
++import zipfile
++
++from pruebas import comun
++
++
++DESCRIPCION = "cada .t101d lleva su token dentro, y «guardar como» estrena uno"
++
++
++def correr(r: comun.Reporte) -> None:
++    _el_token(r)
++    _el_archivo(r)
++    _guardar_como(r)
++
++
++def _el_token(r: comun.Reporte) -> None:
++    from core import nube
++
++    t = nube.token_nuevo()
++    r.igual(len(t), 26, "un token son 26 letras, como el ULID que espera el servidor")
++    r.cierto(nube.token_valido(t), "y se valida a sí mismo")
++
++    # Sin I, L, O ni U: por teléfono y a mano se confunden con 1, 0 y V.
++    r.igual([c for c in t if c in "ILOU"], [],
++            "sin las letras que se confunden al dictarlas")
++
++    # Ordena por fecha de creación con sólo mirarlo: es de donde va a salir
++    # «ordenar por fecha de creación» sin preguntarle nada al servidor.
++    r.cierto(nube.token_nuevo(1000)[:10] < nube.token_nuevo(2_000_000)[:10],
++             "y ordena por fecha de creación con sólo mirarlo")
++
++    # Únicos. Diez mil seguidos, que es más de lo que el taller hará en años.
++    muchos = {nube.token_nuevo() for _ in range(10_000)}
++    r.igual(len(muchos), 10_000, "diez mil seguidos y ninguno se repite")
++
++    for basura in ("", "no-es-un-token", "I" * 26, "A" * 25, "a" * 26, None, 123, ["x"]):
++        r.cierto(not nube.token_valido(basura),
++                 "basura rechazada: %r" % (basura,))
++
++
++def _el_archivo(r: comun.Reporte) -> None:
++    from core.documento import Documento
++    from core import nube, proyecto
++
++    carpeta = pathlib.Path(tempfile.mkdtemp())
++    doc = Documento()
++    r.igual(doc.token, "", "un documento nace sin token: se lo gana al guardarse")
++    r.cierto("token" not in doc.a_dict(),
++             "y el token NO viaja en el contenido (a_dict), sólo en el sobre")
++
++    ruta = carpeta / "plano.t101d"
++    proyecto.guardar(doc, ruta)
++    primero = doc.token
++    r.cierto(nube.token_valido(primero), "al guardar se le pone uno", primero)
++
++    with zipfile.ZipFile(ruta) as z:
++        meta = json.loads(z.read("meta.json").decode("utf-8"))
++    r.igual(meta.get("token"), primero, "y queda escrito en meta.json, no en documento.json")
++    with zipfile.ZipFile(ruta) as z:
++        r.cierto("token" not in z.read("documento.json").decode("utf-8"),
++                 "documento.json no lo menciona")
++
++    # Guardar encima NO lo cambia. Si cambiara, cada guardado dejaría un
++    # archivo nuevo en la nube y el de antes huérfano.
++    proyecto.guardar(doc, ruta)
++    r.igual(doc.token, primero, "guardar encima NO cambia el token")
++
++    # Y sobrevive al viaje de ida y vuelta, que es para lo que existe.
++    otro = proyecto.abrir(ruta)
++    r.igual(otro.token, primero, "abrirlo lo recupera: es el mismo plano")
++
++    # Renombrado y movido sigue siendo el mismo: eso es el encargo entero.
++    mudado = carpeta / "otra carpeta" / "con otro nombre.t101d"
++    mudado.parent.mkdir(parents=True, exist_ok=True)
++    ruta.rename(mudado)
++    r.igual(proyecto.abrir(mudado).token, primero,
++            "renombrado y en otra carpeta, sigue siendo el mismo archivo")
++
++    # Un .t101d de antes de 0.22.0: sin token. No truena, y se le pone uno.
++    viejo = carpeta / "de-antes.t101d"
++    proyecto.guardar(Documento(), viejo)
++    with zipfile.ZipFile(viejo) as z:
++        m = json.loads(z.read("meta.json").decode("utf-8"))
++        d = z.read("documento.json")
++    del m["token"]
++    with zipfile.ZipFile(viejo, "w", zipfile.ZIP_DEFLATED) as z:
++        z.writestr("meta.json", json.dumps(m, ensure_ascii=False))
++        z.writestr("documento.json", d.decode("utf-8"))
++    sin = proyecto.abrir(viejo)
++    r.igual(sin.token, "", "un archivo de antes de 0.22.0 se abre sin token, sin quejarse")
++    proyecto.guardar(sin, viejo)
++    r.cierto(nube.token_valido(sin.token), "y al guardarlo se le pone uno, en silencio")
++
++    # Uno editado a mano con basura dentro: tampoco se confía.
++    with zipfile.ZipFile(viejo) as z:
++        m = json.loads(z.read("meta.json").decode("utf-8"))
++        d = z.read("documento.json")
++    m["token"] = "<script>lo que sea</script>"
++    with zipfile.ZipFile(viejo, "w", zipfile.ZIP_DEFLATED) as z:
++        z.writestr("meta.json", json.dumps(m, ensure_ascii=False))
++        z.writestr("documento.json", d.decode("utf-8"))
++    manipulado = proyecto.abrir(viejo)
++    r.igual(manipulado.token, "",
++            "y un token inventado a mano se tira: nunca se manda basura al servidor")
++
++
++def _guardar_como(r: comun.Reporte) -> None:
++    """LA PRUEBA QUE IMPORTA. Se mide contra el servidor de verdad, no contra
++    `proyecto.guardar`: la regla de «guardar como» vive en el endpoint, que es
++    el único que sabe si la ruta cambió."""
++    # La puerta de la licencia se apaga con el interruptor que el programa ya
++    # tiene (`core/licencia.CORTA`). Que la puerta muerda se mide en t033, t035
++    # y t036; no es lo que esta prueba viene a ver.
++    #
++    # OJO CON EL TRUCO DE sys.modules (cazado el 29-sep-2026): sacar
++    # "core.licencia" de sys.modules NO alcanza para que se relea la variable de
++    # entorno. El paquete `core` se queda con el atributo `licencia` apuntando
++    # al módulo viejo, así que el `from core import licencia` de server.py lo
++    # encuentra ahí y nunca vuelve a importar nada. Corriendo esta prueba sola
++    # no se notaba —nadie había importado core.licencia todavía—, pero después
++    # de cualquier prueba de licencia el corte seguía encendido y el guardado
++    # contestaba 402: el archivo no se escribía y lo que reventaba, tres líneas
++    # después, era un FileNotFoundError que no decía nada de licencias.
++    #
++    # Se apaga el interruptor en el módulo que de verdad está cargado, y se deja
++    # como estaba al salir, para no contaminar a la prueba siguiente.
++    import os
++    os.environ["DRAW101_CORTA"] = "0"
++    sys.modules.pop("server", None)
++
++    from core import licencia as mod_lic
++    antes_corta = mod_lic.CORTA
++    mod_lic.CORTA = False
++    try:
++        _guardar_como_medir(r)
++    finally:
++        mod_lic.CORTA = antes_corta
++
++
++def _guardar_como_medir(r: comun.Reporte) -> None:
++    from fastapi.testclient import TestClient
++    import server as srv
++
++    carpeta = pathlib.Path(tempfile.mkdtemp())
++    original = carpeta / "cocina-ruiz.t101d"
++    copia = carpeta / "cocina-perez.t101d"
++
++    with TestClient(srv.app) as cliente:
++        # Se revisa el 200. Sin esto, una puerta encendida dejaba la prueba
++        # reventando más adelante por un archivo que nunca se escribió, y el
++        # mensaje no apuntaba a la causa.
++        resp = cliente.post("/api/guardar", json={"ruta": str(original)})
++        r.igual(resp.status_code, 200,
++                "el guardado pasa, o sea que la puerta de licencia está apagada"
++                + ("" if resp.status_code == 200 else f"  ·  contestó {str(resp.json())[:90]}"))
++        uno = srv.S.doc.token
++        r.cierto(uno, "el primer guardado deja token", uno)
++
++        # Guardar OTRA VEZ en el mismo sitio: el mismo token.
++        cliente.post("/api/guardar", json={"ruta": str(original)})
++        r.igual(srv.S.doc.token, uno, "guardar en el mismo sitio no lo cambia")
++
++        # GUARDAR COMO: token nuevo. Si no, esta copia pisaría al original en
++        # la nube la próxima vez que se guarde.
++        cliente.post("/api/guardar", json={"ruta": str(copia)})
++        dos = srv.S.doc.token
++        r.cierto(dos and dos != uno,
++                 "«guardar como» ESTRENA token: la copia no pisa al original en la nube",
++                 f"{uno[:10]}… → {dos[:10]}…")
++
++        # Y el original, en su archivo, conserva el suyo.
++        from core import proyecto
++        r.igual(proyecto.abrir(original).token, uno,
++                "y el archivo original conserva el suyo, intacto")
++        r.igual(proyecto.abrir(copia).token, dos, "la copia se queda con el nuevo")
+# fin del parche: el renglon de cola absorbe el recorte del conector.
