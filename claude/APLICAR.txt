@@ -33,3 +33,6 @@ B19-t035-al-dia.patch
 0.21.2-mas.patch
 0.21.3.patch
 0.21.4.patch
+0.21.5-spline-geometria.patch
+0.21.5-recortar.patch
+0.21.5-version.patch
