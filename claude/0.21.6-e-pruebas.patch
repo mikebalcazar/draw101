@@ -1,0 +1,83 @@
+diff --git a/pruebas/t003_capas.py b/pruebas/t003_capas.py
+index 40eb40f..cc6e1bc 100644
+--- a/pruebas/t003_capas.py
++++ b/pruebas/t003_capas.py
+@@ -34,11 +34,11 @@ def correr(r: comun.Reporte) -> None:
+ def _plantilla(r: comun.Reporte) -> None:
+     doc = Documento.nuevo()
+-    r.igual(sorted(doc.capas), ["0", "COTAS"],
++    r.igual(sorted(doc.capas), ["0", "ANOTACIONES"],
+             "un dibujo nuevo nace con dos capas y no con trece")
+ 
+-    cotas = doc.capas["COTAS"]
++    cotas = doc.capas["ANOTACIONES"]
+     r.igual(cotas.color.upper(), config.AZUL.upper(),
+-            "COTAS nace en el azul de Taller 101")
+-    r.igual(cotas.grosor, 18, "COTAS nace con grosor 0.18")
++            "ANOTACIONES nace en el azul de Taller 101")
++    r.igual(cotas.grosor, 18, "ANOTACIONES nace con grosor 0.18")
+ 
+     # El catálogo sigue completo: lo que cambia es cuándo se crea.
+diff --git a/pruebas/t004_proyecto.py b/pruebas/t004_proyecto.py
+index b7cd784..c31b123 100644
+--- a/pruebas/t004_proyecto.py
++++ b/pruebas/t004_proyecto.py
+@@ -45,6 +45,7 @@ def _dibujo() -> Documento:
+         doc.agregar(ent.Linea(p1=[0, 0], p2=[600, 0], capa="CUERPO"))
+         doc.agregar(ent.Circulo(centro=[300, 200], radio=35))
+-        # `encapar` es la regla de la casa —toda cota nace en COTAS— y hoy la
+-        # aplica quien crea la entidad, no `Documento.agregar`. Ver t008.
++        # `encapar` es la regla de la casa —toda anotación nace en
++        # ANOTACIONES— y hoy la aplica quien crea la entidad, no
++        # `Documento.agregar`. Ver t008.
+         doc.agregar(mod_cotas.encapar(
+             doc, ent.Cota(clase="lineal", puntos=[[0, 0], [600, 0], [0, -60]])))
+@@ -79,5 +80,5 @@ def _ida_y_vuelta(r: comun.Reporte, tmp) -> None:
+     cota = next((e for e in vuelto.lista() if e.tipo == "cota"), None)
+     if r.cierto(cota is not None, "la cota vuelve como cota"):
+-        r.igual(cota.capa, "COTAS", "y sigue en la capa COTAS")
++        r.igual(cota.capa, "ANOTACIONES", "y sigue en la capa ANOTACIONES")
+ 
+     r.cierto(not vuelto.historial.puede_deshacer,
+diff --git a/pruebas/t005_interfaz.py b/pruebas/t005_interfaz.py
+index 5d6e0c4..d2f455b 100644
+--- a/pruebas/t005_interfaz.py
++++ b/pruebas/t005_interfaz.py
+@@ -148,13 +148,13 @@ def _texto_libre(r: comun.Reporte, pagina, base) -> None:
+     pagina.evaluate("""() => {
+         window.__resultado = null;
+-        Entrada.pedirTexto({mensaje: 'Capa', opciones: ['0', 'COTAS'], libre: false})
++        Entrada.pedirTexto({mensaje: 'Capa', opciones: ['0', 'ANOTACIONES'], libre: false})
+                .then(t => { window.__resultado = t; });
+     }""")
+     pagina.wait_for_timeout(150)
+     pagina.click("#cmd")
+-    pagina.type("#cmd", "COTAS", delay=15)
++    pagina.type("#cmd", "ANOTACIONES", delay=15)
+     pagina.keyboard.press("Space")
+     pagina.wait_for_timeout(250)
+-    r.igual(pagina.evaluate("window.__resultado"), "COTAS",
++    r.igual(pagina.evaluate("window.__resultado"), "ANOTACIONES",
+             "y cuando NO es texto libre, el espacio confirma como el Enter")
+ 
+diff --git a/pruebas/t008_cotas.py b/pruebas/t008_cotas.py
+index 7204317..4982600 100644
+--- a/pruebas/t008_cotas.py
++++ b/pruebas/t008_cotas.py
+@@ -8,6 +8,6 @@ se comprueban aquí, y las tres son de taller antes que de programa:
+ - **La cota está pegada a la pieza** (`liga`): se mueve el mueble y la cota se
+   mueve y se recalcula sola.
+-- **Toda cota nace en `COTAS`**, dé igual en qué capa se esté trabajando: esa
+-  capa se apaga entera para ver el dibujo limpio.
++- **Toda anotación nace en `ANOTACIONES`**, dé igual en qué capa se esté
++  trabajando: esa capa se apaga entera para ver el dibujo limpio.
+ 
+ Y al final, que salga al DXF como `DIMENSION` de verdad y no como cuatro rayas
+@@ -129,5 +129,5 @@ def _capa(r: comun.Reporte) -> None:
+             clase="lineal", puntos=[[0, 0], [100, 0], [0, -20]], capa="MUROS")))
+     r.igual(cota.capa, mod_capas.CAPA_COTAS,
+-            "una cota trazada trabajando en MUROS nace igual en COTAS")
++            "una cota trazada trabajando en MUROS nace igual en ANOTACIONES")
+ 
+     # Y si la capa no existe —un plano ajeno, por ejemplo— se crea del catálogo.
+# fin del parche: el renglon de cola absorbe el recorte del conector.

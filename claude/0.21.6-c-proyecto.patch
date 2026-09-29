@@ -1,0 +1,21 @@
+diff --git a/core/proyecto.py b/core/proyecto.py
+index 4eb1fe7..ffa3e90 100644
+--- a/core/proyecto.py
++++ b/core/proyecto.py
+@@ -22,4 +22,5 @@ import zipfile
+ 
+ from . import config
++from . import capas as mod_capas
+ from .documento import Documento
+ 
+@@ -80,4 +81,9 @@ def abrir(ruta: str | pathlib.Path) -> Documento:
+         datos = json.loads(z.read("documento.json").decode("utf-8"))
+     doc = Documento.de_dict(datos)
++    # La capa COTAS pasó a llamarse ANOTACIONES el 29-sep-2026. Éste es NUESTRO
++    # archivo, así que la capa es nuestra y se renombra sin preguntar: si no,
++    # cada dibujo viejo seguiría con su COTAS y las anotaciones nuevas nacerían
++    # en otra capa, que es justo el reguero que la capa existe para evitar.
++    mod_capas.migrar_anotaciones(doc, propio=True)
+     if not doc.nombre or doc.nombre == "Sin título":
+         doc.nombre = ruta.stem
+# fin del parche: el renglon de cola absorbe el recorte del conector.
