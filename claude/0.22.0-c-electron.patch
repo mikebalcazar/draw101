@@ -70,10 +70,10 @@ index 2425b91..97623ce 100644
    archivoInicial = null;
 diff --git a/electron/nube.js b/electron/nube.js
 new file mode 100644
-index 0000000..89e7d42
+index 0000000..baa68c3
 --- /dev/null
 +++ b/electron/nube.js
-@@ -0,0 +1,192 @@
+@@ -0,0 +1,188 @@
 +/* La nube de draw101 vista desde el proceso principal: la llave, el índice y
 + * las subidas. Aquí se junta el núcleo (electron/nube-nucleo.js, que no sabe
 + * nada de Electron y por eso se puede medir con `node`) con lo que sí es de
