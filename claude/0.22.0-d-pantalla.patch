@@ -1,9 +1,9 @@
 diff --git a/ui/nube.js b/ui/nube.js
 new file mode 100644
-index 0000000..86aa14d
+index 0000000..378de39
 --- /dev/null
 +++ b/ui/nube.js
-@@ -0,0 +1,556 @@
+@@ -0,0 +1,564 @@
 +/* Mis archivos en la nube  ·  0.22.0
 + *
 + * La pantalla desde la que se busca y se abre lo que está en la nube. Mike la
@@ -77,9 +77,17 @@ index 0000000..86aa14d
 +  /* --- buscar y ordenar, aquí ------------------------------------------ */
 +
 +  /** Sin acentos y en minúsculas: quien escribe «ramirez» tiene que encontrar
-+   *  «Ramírez». Es el detalle que hace que un buscador se sienta roto. */
++   *  «Ramírez». Es el detalle que hace que un buscador se sienta roto.
++   *
++   *  Se usa la propiedad Unicode `Diacritic` y no un rango de códigos escrito a
++   *  mano, por dos razones: se lee —dice «los acentos» en vez de cuatro números
++   *  en hexadecimal— y, sobre todo, porque el chat que mantiene esto no puede
++   *  empujar por git y transcribe cada parche a mano. Los caracteres
++   *  combinantes son invisibles en el fuente, y una secuencia de escape se
++   *  convierte en ellos por el camino: las dos formas se perdieron en el
++   *  transporte antes de dar con ésta. */
 +  const plano = (s) => String(s || "").toLowerCase()
-+    .normalize("NFD").replace(/[̀-ͯ]/g, "");   // los acentos, por su codigo
++    .normalize("NFD").replace(/\p{Diacritic}/gu, "");
 +
 +  function filtradas() {
 +    const q = plano(busca).trim();
