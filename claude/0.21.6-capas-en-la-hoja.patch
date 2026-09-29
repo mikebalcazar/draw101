@@ -1,0 +1,58 @@
+diff --git a/ui/app.js b/ui/app.js
+index 257faaa..f8af750 100644
+--- a/ui/app.js
++++ b/ui/app.js
+@@ -160,11 +160,46 @@ async function activarCapa(nombre) {
+  * pruebas, y ahí «seleccionar una capa» sí quiere decir activarla. */
+ const seleccionarCapa = activarCapa;
+ 
++/* Estando en una HOJA, lo que se ve tiene dos orígenes y sólo uno se refrescaba
++ * solo  ·  Mike, 29-sep-2026: «cuando apago o prendo layers, en el layout de
++ * plano no se apagan o prenden. Sólo las cotas».
++ *
++ * Lo que se dibuja SOBRE la hoja —sus cotas, sus notas— viene de `/api/trazos`,
++ * que es del espacio actual, y `recargarTrazos` lo vuelve a pedir: por eso las
++ * cotas sí respondían. Lo que se ve POR LAS VENTANAS es el modelo, y viene de
++ * `/api/papel/<i>`, que se pedía UNA sola vez al entrar a la hoja. Apagar una
++ * capa no lo volvía a pedir, así que la hoja seguía enseñando la foto vieja.
++ *
++ * El motor nunca estuvo mal: `papel.trazos_papel` filtra por capa desde
++ * siempre (se midió). Lo que faltaba era volver a preguntarle.
++ *
++ * Se llama sólo cuando cambia algo de una CAPA, no en cada operación: lo que
++ * se dibuja estando en la hoja es de la hoja y ya viaja por el parche; el
++ * modelo visto por la ventana sólo cambia por las capas o al volver al modelo,
++ * y entrar y salir ya recarga por su cuenta.
++ */
++async function refrescarHoja() {
++  // `Papel` es un `const` de nivel superior, NO una propiedad de `window`:
++  // preguntar por `window.Papel` dice que no existe y se sale sin hacer nada.
++  // Se cazó con la prueba puesta, que es la única razón por la que se cazó.
++  if (estado.modo !== "papel" || typeof Papel === "undefined") return;
++  try {
++    await Papel.cargar(estado.layoutActivo);
++    pintar();
++  } catch (e) {
++    // Si la hoja ya no está —se borró mientras— entrar a ella la volverá a
++    // pedir. Se avisa en la consola: un fallo mudo aquí es una hoja que
++    // enseña algo que ya no es, y eso no se nota hasta que se imprime.
++    console.warn("no se pudo refrescar la hoja:", e && e.message);
++  }
++}
++
+ async function cambiarCapa(nombre, cambios) {
+   try {
+     const r = await patch(`/api/capa/${encodeURIComponent(nombre)}`, { cambios });
+     aplicar(r);
+     if (!aplicarParche(r)) await recargarTrazos();
++    await refrescarHoja();
+   } catch (e) { avisar(e.message, true); }
+ }
+ 
+@@ -598,6 +633,7 @@ $("#b-capa-borrar").onclick = async () => {
+   try {
+     aplicar(await api(`/api/capa/${encodeURIComponent(c.nombre)}`, { method: "DELETE" }));
+     await recargarTrazos();
++    await refrescarHoja();          // borrar una capa también cambia lo que se ve por las ventanas
+   } catch (e) { avisar(e.message, true, 8000); }
+ };
