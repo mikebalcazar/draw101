@@ -1,0 +1,31 @@
+diff --git a/core/geometria.py b/core/geometria.py
+index 57b5a5b..dab9eb1 100644
+--- a/core/geometria.py
++++ b/core/geometria.py
+@@ -87,7 +87,25 @@ def primitivas_de(doc: Documento, e, transf=None) -> list[dict]:
+         prim.append({"tipo": "punto", "p": [e.centro[0], e.centro[1]], "clase": "centro"})
+         return prim
+     if t == "spline":
+-        pts = e.puntos_ajuste or e.puntos_control
++        # La MISMA curva que se dibuja, no las rectas entre los puntos.
++        #
++        # Hasta el 28-sep-2026 aquí salía el zigzag —un segmento por cada par de
++        # puntos seguidos— mientras `dibujo.py` trazaba la curva suave. O sea
++        # que el osnap y los cruces de una spline caían donde la curva NO está:
++        # en una spline de cuatro puntos el error medido fue de 15 unidades. Se
++        # vio al querer recortar splines, que es lo que lo destapa.
++        #
++        # Con puntos de ajuste la curva pasa por ellos (Catmull–Rom) y con sólo
++        # los de control se deja jalar por ellos (B-spline): son dos curvas
++        # distintas a propósito, y aquí se respeta la misma decisión que al
++        # dibujar, porque si no volverían a ser dos curvas diferentes.
++        from . import dibujo
++        if e.puntos_ajuste:
++            pts = dibujo._spline(e.puntos_ajuste, e.cerrada)
++        else:
++            pts = dibujo._bspline(e.puntos_control, e.grado or 3, e.cerrada)
++        if len(pts) < 2:
++            return [{"tipo": "punto", "p": [pts[0][0], pts[0][1]], "clase": "nodo"}] if pts else []
+         return [_seg(pts[i], pts[i + 1]) for i in range(len(pts) - 1)]
+     if t == "punto":
+         return [{"tipo": "punto", "p": [e.p[0], e.p[1]], "clase": "nodo"}]
