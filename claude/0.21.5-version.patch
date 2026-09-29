@@ -1,0 +1,66 @@
+diff --git a/core/version.py b/core/version.py
+index 2367b8e..c5c6d0a 100644
+--- a/core/version.py
++++ b/core/version.py
+@@ -21,7 +21,7 @@ Numeración: `mayor.menor.parche`.
+ 
+ from __future__ import annotations
+ 
+-VERSION = "0.21.4"
++VERSION = "0.21.5"
+ FECHA = "2026-09-28"
+ 
+ # Qué trae cada entrega, en el idioma del taller y no en el del código.
+@@ -29,9 +29,27 @@ FECHA = "2026-09-28"
+ # enseña en la consola.
+ BITACORA: list[dict] = [
+     {
+-        "version": "0.21.4",
++        "version": "0.21.5",
+         "fecha": "2026-09-28",
+         "cambios": [
++            "RECORTAR ya corta TODO lo que el programa sabe qué es: además de "
++            "líneas, arcos y polilíneas, ahora también círculos, elipses y "
++            "splines. Se va el trozo donde picas, y con varios cruces se quita "
++            "sólo ese trozo y no de más.",
++            "Un círculo recortado queda como arco, y una elipse recortada sigue "
++            "siendo elipse. Lo cerrado —círculo, elipse— necesita cruzarse en "
++            "dos puntos para poder abrirse: si algo apenas lo toca de lado, se "
++            "dice en vez de no hacer nada.",
++            "Una spline recortada sigue siendo spline, y sigue pasando por los "
++            "puntos que le pusiste. El corte cae exacto sobre la línea que "
++            "cortó.",
++            "Arreglado de paso: los cruces y el osnap de una spline caían donde "
++            "la curva no está. La spline se dibujaba curva pero por dentro se "
++            "medía como las rectas entre sus puntos —en una spline de cuatro "
++            "puntos, quince unidades de error—. Ahora se mide la curva misma.",
++            "Arreglado también: al recortar un arco por en medio se borraba "
++            "todo lo que seguía al clic. Ahora queda partido en dos, como una "
++            "línea.",
+             "Cuando la licencia ya no tiene lugar libre, la pantalla de "
+             "activación enseña la lista de tus equipos —con su nombre, su "
+             "ícono y cuándo se usó cada uno— y puedes dar de baja el que ya "
+diff --git a/package.json b/package.json
+index 7d8a929..557d784 100644
+--- a/package.json
++++ b/package.json
+@@ -1,8 +1,8 @@
+ {
+   "name": "draw101",
+   "productName": "draw101",
+-  "version": "0.21.4",
+-  "_versionApp": "0.21.4 — la que enseña la app viene de core/version.py; ésta sólo existe porque electron-builder exige semver",
++  "version": "0.21.5",
++  "_versionApp": "0.21.5 — la que enseña la app viene de core/version.py; ésta sólo existe porque electron-builder exige semver",
+   "_notaAsociaciones": "draw101 aparece en «Abrir con» de los DXF y DWG y en Aplicaciones predeterminadas, pero NO se roba la asociación: quién los abre por omisión lo sigue decidiendo el usuario (regla de Mike, 0.11.2). electron-builder registra el ProgID; Windows decide. El .t101d sí es nuestro. Ojo: dentro de «build» electron-builder rechaza cualquier clave que no conozca, aunque empiece con guión bajo (se cazó armando la 0.20.16).",
+   "_notaEmpaque": "asar apagado a propósito: main.js busca server.py junto a electron/, y el motor de Python no puede vivir dentro de un asar. Y electron-builder saca cualquier node_modules de los globs de `files`, así que los dos motores de DWG (dwgjs/node_modules) se copian por extraResources o la app se queda sin leer DWG.",
+   "description": "CAD 2D de Taller 101 — leer, trazar, acotar e imprimir planos",
+@@ -21,7 +21,7 @@
+   "build": {
+     "appId": "mx.taller101.dibujador",
+     "productName": "draw101",
+-    "artifactName": "draw101-0.21.4-setup.${ext}",
++    "artifactName": "draw101-0.21.5-setup.${ext}",
+     "directories": {
+       "output": "dist",
+       "buildResources": "build"
