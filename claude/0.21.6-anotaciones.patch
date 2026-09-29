@@ -1,0 +1,301 @@
+diff --git a/core/capas.py b/core/capas.py
+index e4a9f50..fd63df5 100644
+--- a/core/capas.py
++++ b/core/capas.py
+@@ -54,10 +54,28 @@ class Capa:
+ 
+ # --- Plantilla Taller 101  ·  feature 46 -----------------------------------
+ # El orden importa: es el orden en que se muestran en el panel.
+-#: Cómo se llama la capa de las cotas. Está en una constante y no suelta por
+-#: ahí porque **todas las cotas nacen en ella**, sin importar en qué capa se
+-#: esté trabajando: ver `core/cotas.py`.
+-CAPA_COTAS = "COTAS"
++#: Cómo se llama la capa de las anotaciones. Está en una constante y no suelta
++#: por ahí porque **toda anotación nace en ella** —cota, directriz y texto— sin
++#: importar en qué capa se esté trabajando: ver `core/cotas.py`.
++#:
++#: Se llamaba COTAS hasta el 29-sep-2026. Mike la renombró al meterle también
++#: el texto: «cotas, texto, leaders van dibujadas directo en el layer de
++#: anotaciones». El nombre viejo ya no describía lo que hay dentro.
++CAPA_ANOTACIONES = "ANOTACIONES"
++
++#: Cómo se llamaba antes. Se conserva para poder reconocer y renombrar la capa
++#: al abrir un dibujo viejo —ver `migrar_anotaciones`—.
++CAPA_COTAS_VIEJA = "COTAS"
++
++#: Nombre viejo de la constante. Hay código que lo importa (`core/t101x.py`).
++CAPA_COTAS = CAPA_ANOTACIONES
++
++#: La descripción con la que la creamos nosotros. Sirve de firma: es lo que
++#: permite distinguir NUESTRA capa de una COTAS que vino en el DXF del
++#: arquitecto, que no se toca.
++DESCRIPCION_ANOTACIONES = "Cotas, directrices y textos — aquí nacen todos"
++#: La que llevaba cuando se llamaba COTAS.
++DESCRIPCION_COTAS_VIEJA = "Cotas y directrices — aquí nacen todas"
+ 
+ #: El catálogo de capas de Taller 101. **No es lo que trae un dibujo nuevo** —
+ #: eso es `plantilla()`, dos capas y ya. Éste es el vestuario: cuando una
+@@ -70,8 +88,8 @@ CAPA_COTAS = "COTAS"
+ CATALOGO: list[Capa] = [
+     Capa("0", "#FFFFFF", 25, "CONTINUOUS",
+          descripcion="Capa cero — no se borra, no se renombra"),
+-    Capa(CAPA_COTAS, config.AZUL, 18, "CONTINUOUS",
+-         descripcion="Cotas y directrices — aquí nacen todas"),
++    Capa(CAPA_ANOTACIONES, config.AZUL, 18, "CONTINUOUS",
++         descripcion=DESCRIPCION_ANOTACIONES),
+     Capa("T101-MUROS", "#8C8C8C", 50, "CONTINUOUS",
+          descripcion="Obra: muros, columnas, huecos"),
+     Capa("T101-CUERPO", config.AZUL, 35, "CONTINUOUS",
+@@ -101,7 +119,7 @@ CATALOGO: list[Capa] = [
+ PLANTILLA_T101 = CATALOGO
+ 
+ #: Lo que trae un dibujo nuevo: la capa cero y la de cotas. Nada más.
+-PLANTILLA_NUEVA = ["0", CAPA_COTAS]
++PLANTILLA_NUEVA = ["0", CAPA_ANOTACIONES]
+ 
+ 
+ def del_catalogo(nombre: str) -> Capa | None:
+@@ -122,6 +140,37 @@ def plantilla() -> dict[str, Capa]:
+     return {n: c for n in PLANTILLA_NUEVA if (c := del_catalogo(n)) is not None}
+ 
+ 
++def migrar_anotaciones(doc, propio: bool = False) -> bool:
++    """Renombra la capa COTAS a ANOTACIONES al abrir un dibujo viejo.
++
++    Mike lo decidió con botones el 29-sep-2026: se renombra **sólo si la capa
++    es nuestra**. Un DXF del arquitecto puede traer su propia COTAS, con su
++    contenido y su criterio, y cambiarle el nombre a la capa de alguien más al
++    abrir su archivo es de mala educación y además rompe sus referencias.
++
++    Se considera nuestra si el archivo es nuestro (`.t101d`) o si la capa trae
++    la descripción con la que la creamos. En la práctica el `.t101d` es el que
++    sirve casi siempre: un DXF no guarda descripciones de capa, así que de un
++    DXF nuestro tampoco vuelve la firma.
++
++    Si el dibujo ya trae las DOS —alguien creó ANOTACIONES a mano— no se toca
++    nada: fundirlas movería entidades de capa sin que nadie lo pidiera, y eso
++    se deshace peor que se hace.
++
++    Devuelve True si renombró.
++    """
++    vieja, nueva = CAPA_COTAS_VIEJA, CAPA_ANOTACIONES
++    if vieja not in doc.capas or nueva in doc.capas:
++        return False
++    capa = doc.capas[vieja]
++    nuestra = propio or (getattr(capa, "descripcion", "") or "").strip() in (
++        DESCRIPCION_COTAS_VIEJA, DESCRIPCION_ANOTACIONES)
++    if not nuestra:
++        return False
++    doc.capa_modificar(vieja, {"nombre": nueva, "descripcion": DESCRIPCION_ANOTACIONES})
++    return True
++
++
+ def asegurar(doc, nombre: str) -> str:
+     """Se asegura de que exista esa capa, sacándola del catálogo si hace falta.
+diff --git a/core/cotas.py b/core/cotas.py
+index 1208be4..d0a7a0e 100644
+--- a/core/cotas.py
++++ b/core/cotas.py
+@@ -412,13 +412,19 @@ def limpiar_ligas(doc: Documento, ids_borrados) -> None:
+ # En qué capa vive una cota
+ # =========================================================================
+ 
++#: Qué nace en la capa de anotaciones. La DIRECTRIZ no aparece porque no es un
++#: tipo aparte: por dentro es una cota de clase «directriz», así que ya entra.
++TIPOS_ANOTACION = ("cota", "texto", "textom")
++
++
+ def encapar(doc: Documento, entidad):
+-    """Manda la entidad a la capa de cotas si es una cota. Devuelve la entidad.
++    """Manda la entidad a la capa de anotaciones si lo es. Devuelve la entidad.
+ 
+-    **Toda cota nace en `COTAS`**, dé igual en qué capa se esté trabajando. Es
+-    una decisión de Mike y es la costumbre de cualquier taller: las cotas son
+-    una capa que se apaga entera para ver el dibujo limpio, o se imprime aparte,
+-    y eso deja de funcionar en cuanto una se queda regada en la capa de muros.
+-    Moverla después es un clic; encontrar la que se quedó fuera, no.
++    **Toda anotación nace en `ANOTACIONES`**, dé igual en qué capa se esté
++    trabajando. Es una decisión de Mike y es la costumbre de cualquier taller:
++    las anotaciones son una capa que se apaga entera para ver el dibujo limpio,
++    o se imprime aparte, y eso deja de funcionar en cuanto una se queda regada
++    en la capa de muros. Moverla después es un clic; encontrar la que se quedó
++    fuera, no.
+ 
+     Se impone **aquí, en el motor**, y no en la interfaz: así vale igual para la
+     cota que dibuja alguien, la que llega importada de Taller 101 y la que entre
+@@ -428,8 +434,13 @@ def encapar(doc: Documento, entidad):
+ 
+     Si la capa no existe todavía —un DWG ajeno, por ejemplo— se crea del
+     catálogo, en azul Taller 101.
++
++    Desde el 29-sep-2026 entra también el TEXTO, por petición de Mike: «cotas,
++    texto, leaders van dibujadas directo en el layer de anotaciones». Por eso
++    la capa dejó de llamarse COTAS: el nombre ya no describía lo que hay
++    dentro.
+     """
+-    if getattr(entidad, "tipo", None) != "cota":
++    if getattr(entidad, "tipo", None) not in TIPOS_ANOTACION:
+         return entidad
+-    entidad.capa = mod_capas.asegurar(doc, mod_capas.CAPA_COTAS)
++    entidad.capa = mod_capas.asegurar(doc, mod_capas.CAPA_ANOTACIONES)
+     return entidad
+diff --git a/core/proyecto.py b/core/proyecto.py
+index 4eb1fe7..ffa3e90 100644
+--- a/core/proyecto.py
++++ b/core/proyecto.py
+@@ -21,6 +21,7 @@ import tempfile
+ import zipfile
+ 
+ from . import config
++from . import capas as mod_capas
+ from .documento import Documento
+ 
+ FORMATO = 1
+@@ -79,6 +80,11 @@ def abrir(ruta: str | pathlib.Path) -> Documento:
+                 "Actualiza el programa para abrirlo.")
+         datos = json.loads(z.read("documento.json").decode("utf-8"))
+     doc = Documento.de_dict(datos)
++    # La capa COTAS pasó a llamarse ANOTACIONES el 29-sep-2026. Éste es NUESTRO
++    # archivo, así que la capa es nuestra y se renombra sin preguntar: si no,
++    # cada dibujo viejo seguiría con su COTAS y las anotaciones nuevas nacerían
++    # en otra capa, que es justo el reguero que la capa existe para evitar.
++    mod_capas.migrar_anotaciones(doc, propio=True)
+     if not doc.nombre or doc.nombre == "Sin título":
+         doc.nombre = ruta.stem
+     return doc
+diff --git a/pruebas/t003_capas.py b/pruebas/t003_capas.py
+index 40eb40f..cc6e1bc 100644
+--- a/pruebas/t003_capas.py
++++ b/pruebas/t003_capas.py
+@@ -33,13 +33,13 @@ def correr(r: comun.Reporte) -> None:
+ 
+ def _plantilla(r: comun.Reporte) -> None:
+     doc = Documento.nuevo()
+-    r.igual(sorted(doc.capas), ["0", "COTAS"],
++    r.igual(sorted(doc.capas), ["0", "ANOTACIONES"],
+             "un dibujo nuevo nace con dos capas y no con trece")
+ 
+-    cotas = doc.capas["COTAS"]
++    cotas = doc.capas["ANOTACIONES"]
+     r.igual(cotas.color.upper(), config.AZUL.upper(),
+-            "COTAS nace en el azul de Taller 101")
+-    r.igual(cotas.grosor, 18, "COTAS nace con grosor 0.18")
++            "ANOTACIONES nace en el azul de Taller 101")
++    r.igual(cotas.grosor, 18, "ANOTACIONES nace con grosor 0.18")
+ 
+     # El catálogo sigue completo: lo que cambia es cuándo se crea.
+     r.cierto(len(mod_capas.CATALOGO) > 2,
+diff --git a/pruebas/t004_proyecto.py b/pruebas/t004_proyecto.py
+index b7cd784..d0d3f1b 100644
+--- a/pruebas/t004_proyecto.py
++++ b/pruebas/t004_proyecto.py
+@@ -44,8 +44,9 @@ def _dibujo() -> Documento:
+     with doc.transaccion("Dibujar"):
+         doc.agregar(ent.Linea(p1=[0, 0], p2=[600, 0], capa="CUERPO"))
+         doc.agregar(ent.Circulo(centro=[300, 200], radio=35))
+-        # `encapar` es la regla de la casa —toda cota nace en COTAS— y hoy la
+-        # aplica quien crea la entidad, no `Documento.agregar`. Ver t008.
++        # `encapar` es la regla de la casa —toda anotación nace en
++        # ANOTACIONES— y hoy la aplica quien crea la entidad, no
++        # `Documento.agregar`. Ver t008.
+         doc.agregar(mod_cotas.encapar(
+             doc, ent.Cota(clase="lineal", puntos=[[0, 0], [600, 0], [0, -60]])))
+         doc.agregar(ent.Texto(p=[10, 220], texto="Mueble bajo", altura=12))
+@@ -78,7 +79,7 @@ def _ida_y_vuelta(r: comun.Reporte, tmp) -> None:
+ 
+     cota = next((e for e in vuelto.lista() if e.tipo == "cota"), None)
+     if r.cierto(cota is not None, "la cota vuelve como cota"):
+-        r.igual(cota.capa, "COTAS", "y sigue en la capa COTAS")
++        r.igual(cota.capa, "ANOTACIONES", "y sigue en la capa ANOTACIONES")
+ 
+     r.cierto(not vuelto.historial.puede_deshacer,
+diff --git a/pruebas/t005_interfaz.py b/pruebas/t005_interfaz.py
+index 5d6e0c4..d2f455b 100644
+--- a/pruebas/t005_interfaz.py
++++ b/pruebas/t005_interfaz.py
+@@ -147,15 +147,15 @@ def _texto_libre(r: comun.Reporte, pagina, base) -> None:
+     # 2) Un dato que no es texto libre: el espacio confirma, como el Enter.
+     pagina.evaluate("""() => {
+         window.__resultado = null;
+-        Entrada.pedirTexto({mensaje: 'Capa', opciones: ['0', 'COTAS'], libre: false})
++        Entrada.pedirTexto({mensaje: 'Capa', opciones: ['0', 'ANOTACIONES'], libre: false})
+                .then(t => { window.__resultado = t; });
+     }""")
+     pagina.wait_for_timeout(150)
+     pagina.click("#cmd")
+-    pagina.type("#cmd", "COTAS", delay=15)
++    pagina.type("#cmd", "ANOTACIONES", delay=15)
+     pagina.keyboard.press("Space")
+     pagina.wait_for_timeout(250)
+-    r.igual(pagina.evaluate("window.__resultado"), "COTAS",
++    r.igual(pagina.evaluate("window.__resultado"), "ANOTACIONES",
+             "y cuando NO es texto libre, el espacio confirma como el Enter")
+ 
+ 
+diff --git a/pruebas/t008_cotas.py b/pruebas/t008_cotas.py
+index 7204317..4982600 100644
+--- a/pruebas/t008_cotas.py
++++ b/pruebas/t008_cotas.py
+@@ -7,8 +7,8 @@ se comprueban aquí, y las tres son de taller antes que de programa:
+   que después se edita es una pieza mal cortada esperando su turno.
+ - **La cota está pegada a la pieza** (`liga`): se mueve el mueble y la cota se
+   mueve y se recalcula sola.
+-- **Toda cota nace en `COTAS`**, dé igual en qué capa se esté trabajando: esa
+-  capa se apaga entera para ver el dibujo limpio.
++- **Toda anotación nace en `ANOTACIONES`**, dé igual en qué capa se esté
++  trabajando: esa capa se apaga entera para ver el dibujo limpio.
+ 
+ Y al final, que salga al DXF como `DIMENSION` de verdad y no como cuatro rayas
+ y un texto: un plano cuyas cotas no son cotas se ve igual y no sirve para nada
+@@ -128,7 +128,7 @@ def _capa(r: comun.Reporte) -> None:
+         cota = doc.agregar(mod_cotas.encapar(doc, ent.Cota(
+             clase="lineal", puntos=[[0, 0], [100, 0], [0, -20]], capa="MUROS")))
+     r.igual(cota.capa, mod_capas.CAPA_COTAS,
+-            "una cota trazada trabajando en MUROS nace igual en COTAS")
++            "una cota trazada trabajando en MUROS nace igual en ANOTACIONES")
+ 
+     # Y si la capa no existe —un plano ajeno, por ejemplo— se crea del catálogo.
+     ajeno = Documento(con_plantilla=False)
+diff --git a/ui/cotas.js b/ui/cotas.js
+index 6460d0e..59c452a 100644
+--- a/ui/cotas.js
++++ b/ui/cotas.js
+@@ -45,7 +45,8 @@ async function puntoConLiga(opciones) {
+ }
+ 
+ /* En qué capa cae una cota **no lo decide la interfaz**: lo decide el motor,
+- * que las manda todas a la capa COTAS sin importar en cuál se esté trabajando.
++ * que las manda todas a la capa ANOTACIONES —junto con el texto— sin importar
++ * en cuál se esté trabajando.
+  * Ver `core/cotas.py`. Aquí no se pone `capa` a propósito — si se pusiera,
+  * habría dos sitios donde se decide lo mismo y tarde o temprano dirían cosas
+  * distintas. */
+diff --git a/ui/idioma-en.js b/ui/idioma-en.js
+index ad807ee..8c46c22 100644
+--- a/ui/idioma-en.js
++++ b/ui/idioma-en.js
+@@ -29,7 +29,7 @@ const IDIOMA_EN = {
+   "Exportar DXF…": "Export DXF…", "Encuadrar": "Extents", "Medir": "Measure",
+   "Sin título": "Untitled",
+   "Dibujo nuevo": "New drawing",
+-  "Hoja en blanco, capas 0 y COTAS": "Blank sheet, layers 0 and COTAS",
++  "Hoja en blanco, capas 0 y ANOTACIONES": "Blank sheet, layers 0 and ANOTACIONES",
+   "Abrir un plano…": "Open a drawing…",
+   "DWG, DXF o .t101d": "DWG, DXF or .t101d",
+   "Traer de Taller 101…": "Import from Taller 101…",
+diff --git a/ui/index.html b/ui/index.html
+index ef97e7a..9f2b662 100644
+--- a/ui/index.html
++++ b/ui/index.html
+@@ -27,7 +27,7 @@
+         <button class="tarj nueva" id="iNuevo">
+           <span class="ic">+</span>
+           <span class="txt"><b>Dibujo nuevo</b>
+-            <small>Hoja en blanco, capas 0 y COTAS</small></span>
++            <small>Hoja en blanco, capas 0 y ANOTACIONES</small></span>
+         </button>
+         <button class="tarj" id="iAbrir">
+           <span class="ic">↥</span>
+# fin del parche. Este renglon existe a proposito: el conector que sube
+# los archivos recorta el espacio final, y sin el, git se queda sin el salto
+# de linea de la ultima linea de contexto y dice «corrupt patch».
