@@ -48,3 +48,15 @@ B19-t035-al-dia.patch
 0.21.6-g-el-espacio.patch
 0.21.6-h-captura.patch
 0.21.6-i-version.patch
+0.22.0-a-motor.patch
+0.22.0-b-cifrado.patch
+0.22.0-c-electron.patch
+0.22.0-d-pantalla.patch
+0.22.0-e-interfaz.patch
+0.22.0-f-pruebas-cifrado.patch
+0.22.0-g-pruebas-indice.patch
+0.22.0-h-pruebas-token.patch
+0.22.0-i-pruebas-pantalla.patch
+0.22.0-j-pruebas-interruptor.patch
+0.22.0-k-pruebas-al-abrir.patch
+0.22.0-l-version.patch
