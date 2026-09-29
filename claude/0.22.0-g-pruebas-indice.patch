@@ -1,0 +1,364 @@
+diff --git a/pruebas/nube-indice.mjs b/pruebas/nube-indice.mjs
+new file mode 100644
+index 0000000..fe6d4b2
+--- /dev/null
++++ b/pruebas/nube-indice.mjs
+@@ -0,0 +1,240 @@
++/* El índice de la nube en el proceso principal  ·  node pruebas/nube-indice.mjs
++ *
++ * `electron/nube.js` es lo que junta el núcleo con esta app: dónde vive la
++ * licencia, cuál es la API, y qué se guarda en la máquina.
++ *
++ * LO QUE DE VERDAD MIDE, que es lo que se rompería sin que nadie lo note:
++ *
++ *   · QUE SIN INTERNET LA PANTALLA SIGA ENSEÑANDO LA LISTA de la última vez,
++ *     marcada como de la última vez. Lo fácil es devolver una lista vacía
++ *     cuando falla la red, y eso se lee como «se perdieron mis archivos». Es la
++ *     diferencia entre una app sin internet y una app que asusta.
++ *
++ *   · QUE «TODAVÍA NO HE PODIDO PREGUNTAR» NO SE CONFUNDA CON «NO TIENES
++ *     ARCHIVOS». Son dos cosas distintas y la pantalla tiene que poder decir
++ *     cuál es.
++ *
++ *   · QUE EL ÍNDICE GUARDADO NO SE PISE CON BASURA cuando la bajada falla. Si
++ *     un 500 borrara la caché, el segundo arranque sin internet ya no tendría
++ *     nada que enseñar.
++ *
++ *   · QUE APAGADA SIGNIFIQUE APAGADA: ni se pide el índice, ni se sube nada, y
++ *     no se toca la red para averiguarlo.
++ */
++
++import { mkdtempSync, writeFileSync, readFileSync, existsSync, mkdirSync } from 'node:fs';
++import { tmpdir, homedir } from 'node:os';
++import path from 'node:path';
++import crypto from 'node:crypto';
++import { createRequire } from 'node:module';
++
++let fallas = 0, revisadas = 0;
++const rev = (ok, texto, extra = '') => {
++  revisadas++; if (!ok) fallas++;
++  console.log(`  ${ok ? 'ok   ' : 'FALLA'} ${texto}${extra ? '  →  ' + extra : ''}`);
++};
++
++/* Se le cambia el HOME al proceso para que `carpeta()` —que es
++ * ~/Taller 101/draw101— caiga en un temporal. Así la prueba no toca la carpeta
++ * de verdad de quien la corre, ni su licencia. */
++const casa = mkdtempSync(path.join(tmpdir(), 'draw101-casa-'));
++process.env.HOME = casa;
++process.env.USERPROFILE = casa;
++const carpeta = path.join(casa, 'Taller 101', 'draw101');
++mkdirSync(carpeta, { recursive: true });
++
++const require_ = createRequire(import.meta.url);
++
++/* Electron no existe corriendo con `node` a secas, y `electron/licencia.js` lo
++ * pide. Se le da lo mínimo que usa, igual que hace pruebas/licencia.mjs. */
++const Module = require_('node:module');
++const cargarDeVerdad = Module._load;
++Module._load = function (pedido, padre, esPrincipal) {
++  if (pedido === 'electron') return { app: { getPath: () => casa }, net: {}, dialog: {} };
++  return cargarDeVerdad.call(this, pedido, padre, esPrincipal);
++};
++
++const llaveB64 = crypto.randomBytes(32).toString('base64url');
++const nucleo = require_('../electron/nube-nucleo.js');
++const nube = require_('../electron/nube.js');
++
++/* Una licencia y una llave ya guardadas: lo que tendría una máquina activada. */
++writeFileSync(path.join(carpeta, 'licencia.json'), JSON.stringify({ token: 'v1.token.de.prueba', licencia: 'L-1' }));
++writeFileSync(path.join(carpeta, 'nube.json'), JSON.stringify({ llave: llaveB64 }));
++
++const elArchivo = () => path.join(carpeta, 'nube-indice.json');
++const leerGuardado = () => JSON.parse(readFileSync(elArchivo(), 'utf8'));
++
++/* Un servidor de mentiras, puesto en el `fetch` global porque electron/nube.js
++ * no recibe `traer`: usa el de siempre, como en la app de verdad. */
++const original = globalThis.fetch;
++const poner = (fn) => { globalThis.fetch = fn; };
++const json = (cuerpo, status = 200) => ({ ok: status < 300, status, json: async () => cuerpo, headers: { get: () => null } });
++
++const unaLista = (nombre) => [{
++  token: '01ARCHVSENANBE9876543210AB',
++  nombre: nucleo.cifrarTexto(nombre, llaveB64),
++  bytes: 44, version: 1,
++  creado: '2026-09-01T10:00:00Z', modificado: '2026-09-28T10:00:00Z',
++  subido: '2026-09-28T10:00:01Z', equipo: 'la-de-mike', aperturas: 3, abierto: null,
++}];
++
++console.log('\n· el arranque, con internet');
++{
++  let pedidas = 0;
++  poner(async (url) => { pedidas++; return json({ ok: true, data: { archivos: unaLista('Cocina Ruiz.t101d'), al: 'hoy' } }); });
++  const r = await nube.bajarIndice();
++  rev(r.archivos?.length === 1, 'baja el índice');
++  rev(r.archivos?.[0].nombre === 'Cocina Ruiz.t101d', 'y el nombre llega descifrado, listo para buscar aquí');
++  rev(!r.de_cache, 'y viene de la red, no de lo guardado');
++  rev(pedidas === 1, 'se pidió una sola vez', `${pedidas}`);
++  rev(existsSync(elArchivo()), 'queda guardado en la máquina');
++  rev(leerGuardado().archivos[0].nombre === 'Cocina Ruiz.t101d',
++    'y guardado con el nombre YA descifrado: para descifrarlo haría falta la llave, que está en la misma carpeta');
++}
++
++console.log('\n· el arranque siguiente, sin internet');
++{
++  poner(async () => { throw new Error('sin red'); });
++  const r = await nube.bajarIndice();
++  // ÉSTA es la comprobación que importa de todo el archivo.
++  rev(r.archivos?.length === 1 && r.archivos[0].nombre === 'Cocina Ruiz.t101d',
++    'SIN INTERNET sigue saliendo la lista de la última vez (una lista vacía se leería como «se perdieron mis archivos»)');
++  rev(r.de_cache === true, 'y marcada como de la última vez, para que la pantalla lo pueda decir');
++  rev(r.sinRed === true, 'diciendo que fue la red y no otra cosa');
++  rev(leerGuardado().archivos.length === 1, 'y lo guardado NO se pisó con una lista vacía');
++}
++
++console.log('\n· un 500 del servidor tampoco borra lo guardado');
++{
++  poner(async () => json({ ok: false, error: 'lo que sea' }, 500));
++  const r = await nube.bajarIndice();
++  rev(r.archivos?.length === 1, 'sigue habiendo lista');
++  rev(r.sinRed === true, 'y un 500 se lee como «no se pudo llegar», no como «tu licencia no vale»');
++  rev(leerGuardado().archivos.length === 1, 'lo guardado, intacto');
++}
++
++console.log('\n· lo que la pantalla pide al abrirse, sin esperar la red');
++{
++  let pedidas = 0;
++  poner(async () => { pedidas++; return json({ ok: true, data: { archivos: [], al: 'hoy' } }); });
++  const r = nube.indiceYa();
++  rev(r.archivos?.length === 1, 'contesta al instante con lo guardado');
++  rev(pedidas === 0, 'sin tocar la red: la pantalla nunca se queda esperando un servidor', `${pedidas} peticiones`);
++  rev(r.de_cache === true, 'marcado como de la última vez');
++}
++
++console.log('\n· «todavía no pregunto» NO es «no tienes archivos»');
++{
++  const otraCasa = mkdtempSync(path.join(tmpdir(), 'draw101-casa2-'));
++  process.env.HOME = otraCasa; process.env.USERPROFILE = otraCasa;
++  const r = nube.indiceYa();
++  rev(r.todavia_no === true && r.archivos.length === 0,
++    'una máquina que nunca ha bajado el índice lo dice, en vez de decir que no hay archivos');
++  process.env.HOME = casa; process.env.USERPROFILE = casa;
++}
++
++console.log('\n· apagada es apagada (paso 6)');
++{
++  rev(nube.encendida() === true, 'de fábrica está encendida: «todo sube por default»');
++  nube.prender(false);
++  rev(nube.encendida() === false, 'se puede apagar');
++
++  let pedidas = 0;
++  poner(async () => { pedidas++; return json({ ok: true, data: { archivos: [], al: 'hoy' } }); });
++  const r = await nube.bajarIndice();
++  rev(r.apagada === true && pedidas === 0, 'apagada NO pide el índice, ni toca la red', `${pedidas} peticiones`);
++
++  const s = await nube.subirPlano({ doc: '01ARCHVSENANBE9876543210AB', nombre: 'x.t101d', ruta: elArchivo() });
++  rev(s.apagada === true && pedidas === 0, 'ni sube nada');
++
++  /* Y AL VOLVER A PRENDERLA NO SE RASTREA EL DISCO. Mike fue explícito: «si lo
++   * tenías desactivado y lo activas, sólo se irá subiendo conforme vayas
++   * abriendo archivos, no se suben los que ya existen en tu compu si nunca los
++   * abres». Un rastreo del disco al prender sería justo lo contrario, y en una
++   * máquina con años de planos serían miles de subidas que nadie pidió.
++   *
++   * Esto se mide de verdad, espiando `fs`: contar peticiones de red no
++   * serviría, porque un rastreo del disco empieza SIN tocar la red y la primera
++   * versión de esta prueba pasaba con un `readdirSync` metido a propósito. */
++  const fs = require_('node:fs');
++  const dirsLeidos = [];
++  const archivosLeidos = [];
++  const readdirDeVerdad = fs.readdirSync;
++  const readFileDeVerdad = fs.readFileSync;
++  fs.readdirSync = function (d, ...resto) { dirsLeidos.push(String(d)); return readdirDeVerdad.call(this, d, ...resto); };
++  fs.readFileSync = function (f, ...resto) { archivosLeidos.push(String(f)); return readFileDeVerdad.call(this, f, ...resto); };
++
++  nube.prender(true);
++  const r2 = await nube.bajarIndice();
++
++  fs.readdirSync = readdirDeVerdad;
++  fs.readFileSync = readFileDeVerdad;
++
++  rev(nube.encendida() === true && !r2.apagada, 'se puede volver a prender');
++  rev(dirsLeidos.length === 0,
++    'y al prenderla NO se lista ni una carpeta: nada de rastrear el disco',
++    dirsLeidos.length ? dirsLeidos.join(', ') : 'cero carpetas');
++  // Lo único que tiene derecho a leer son SUS propios archivos de la carpeta de
++  // draw101 (la licencia, la llave, el índice guardado). Ningún .t101d.
++  const ajenos = archivosLeidos.filter((f) => !f.startsWith(carpeta));
++  rev(ajenos.length === 0, 'ni se lee un solo archivo fuera de su carpeta', ajenos.join(', ') || 'ninguno');
++  const planos = archivosLeidos.filter((f) => f.toLowerCase().endsWith('.t101d'));
++  rev(planos.length === 0, 'y ni un solo plano: no se sube lo que no se ha abierto', planos.join(', ') || 'ninguno');
++  rev(pedidas === 1, 'lo único que hace es pedir el índice', `${pedidas} petición(es)`);
++}
++
++console.log('\n· subir pone al día lo guardado, sin volver a pedir el índice');
++{
++  const plano = path.join(carpeta, 'un-plano.t101d');
++  writeFileSync(plano, Buffer.from('esto es un plano'));
++  let subidas = 0, indices = 0;
++  poner(async (url, o) => {
++    if (String(url).includes('/nube/archivo/')) { subidas++; return json({ ok: true, data: { version: 7, bytes: 44 } }); }
++    indices++; return json({ ok: true, data: { archivos: [], al: 'hoy' } });
++  });
++  const r = await nube.subirPlano({ doc: '01ARCHVSENANBE9876543210AB', nombre: 'Cocina Ruiz.t101d', ruta: plano, modificado: '2026-09-29T23:00:00Z' });
++  rev(r.ok === true && r.version === 7, 'sube y devuelve la versión');
++  rev(indices === 0, 'y no vuelve a pedir el índice entero para una subida', `${indices}`);
++  const g = leerGuardado().archivos.find((a) => a.token === '01ARCHVSENANBE9876543210AB');
++  rev(g?.version === 7 && g?.modificado === '2026-09-29T23:00:00Z',
++    'pero el renglón queda al día: si no, la pantalla enseñaría la versión de antes hasta el siguiente arranque');
++}
++
++console.log('\n· un token mal formado no llega al servidor');
++{
++  /* Cazado el 29-sep-2026 escribiendo el parche: esta comprobación la hacía
++   * `archivoNube(doc)`, que arma una ruta y SIEMPRE devuelve algo verdadero. O
++   * sea que no comprobaba nada, y un documento sin token habría subido bajo un
++   * nombre que no identifica a nada. Con el arreglo se rechaza aquí, antes de
++   * tocar la red. */
++  const plano = path.join(carpeta, 'un-plano.t101d');
++  let pedidas = 0;
++  poner(async () => { pedidas++; return json({ ok: true, data: { version: 1 } }); });
++
++  for (const malo of ['', 'ABC', '01ARCHIVOSENLANUBE98765432', 'a'.repeat(26), null]) {
++    const r = await nube.subirPlano({ doc: malo, nombre: 'x.t101d', ruta: plano });
++    rev(!!r.error && !r.ok, `un token «${String(malo).slice(0, 14)}» se rechaza`, r.error || '(subió)');
++  }
++  rev(pedidas === 0, 'y NO se tocó la red ni una vez con un token malo', `${pedidas} peticiones`);
++
++  // CONTROL: con un token bueno sí sube. Sin esto, la prueba pasaría igual si
++  // `subirPlano` rechazara todo.
++  const bueno = await nube.subirPlano({ doc: '01ARCHVSENANBE9876543210AB', nombre: 'x.t101d', ruta: plano });
++  rev(bueno.ok === true, '(control: con un token bueno sí sube, o lo de arriba no mediría nada)');
++}
++
++console.log('\n· sin licencia no se molesta al servidor');
++{
++  writeFileSync(path.join(carpeta, 'licencia.json'), JSON.stringify({}));
++  let pedidas = 0;
++  poner(async () => { pedidas++; return json({ ok: true, data: { archivos: [] } }); });
++  const r = await nube.bajarIndice();
++  rev(r.sinLicencia === true, 'se dice que falta la licencia');
++  rev(pedidas === 0, 'y no se pide nada', `${pedidas}`);
++  rev(r.archivos?.length === 1, 'pero lo ya bajado sigue ahí: quien perdió la licencia no pierde la lista');
++}
++
++globalThis.fetch = original;
++console.log(`\n${fallas ? `${fallas} FALLA${fallas > 1 ? 'S' : ''}` : 'todo bien'} · ${revisadas - fallas} de ${revisadas} pasaron\n`);
++process.exit(fallas ? 1 : 0);
+diff --git a/pruebas/t049_nube_indice.py b/pruebas/t049_nube_indice.py
+new file mode 100644
+index 0000000..77a063f
+--- /dev/null
++++ b/pruebas/t049_nube_indice.py
+@@ -0,0 +1,111 @@
++"""t049 · El índice de la nube: bajarlo al arrancar sin estorbarle a nadie.
++
++Mike pidió que draw101 baje al arrancar la lista de lo que hay en la nube, «sólo
++la lista o directorio, no los archivos en sí», para poder buscar entre ellos sin
++bajar nada. Eso es `electron/nube.js`, que junta el cifrado (medido en t048) con
++lo de esta app: dónde vive la licencia, cuál es la API y qué se guarda aquí.
++
++Vive en JavaScript porque el cifrado vive ahí (Node trae AES-256-GCM y la
++biblioteca estándar de Python no), así que se mide corriendo node desde aquí,
++igual que t036 con la puerta de licencia y t048 con el cifrado.
++
++LO QUE SE VIGILA, y por qué eso:
++
++  · **Que el índice se pida DESPUÉS de que la ventana ya se ve, nunca antes.**
++    Es la trampa de todo esto: pedirlo en el arranque es lo natural de escribir
++    y convierte un servidor lento o un wifi de hotel en un draw101 que tarda en
++    abrir. Un buscador que tarda diez segundos en tener datos se aguanta; una
++    app que no abre, no. Se revisa leyendo main.js, porque es ahí donde alguien
++    lo movería «para que esté listo antes».
++
++  · **Que sin internet siga saliendo la lista de la última vez**, marcada como
++    de la última vez. Lo fácil es devolver una lista vacía cuando falla la red,
++    y una lista vacía se lee como «se perdieron mis archivos».
++
++  · **Que «todavía no he podido preguntar» no se confunda con «no tienes
++    archivos»**, que son dos cosas distintas y la pantalla tiene que poder decir
++    cuál es.
++
++  · **Que al prender la nube NO se rastree el disco.** Mike fue explícito: «si
++    lo tenías desactivado y lo activas, sólo se irá subiendo conforme vayas
++    abriendo archivos, no se suben los que ya existen en tu compu si nunca los
++    abres». En una máquina con años de planos, lo contrario son miles de
++    subidas que nadie pidió. Se mide espiando `fs`, no contando peticiones de
++    red: la primera versión de esa comprobación contaba red y pasaba igual con
++    un rastreo del disco metido a propósito.
++
++Las comprobaciones de nube-indice.mjs se verificaron rompiendo el código: al
++devolver lista vacía cuando falla la red fallan tres; al confundir «todavía no»
++con «no hay», una; y al listar una carpeta al prender, la del disco.
++"""
++
++from __future__ import annotations
++
++import pathlib
++import re
++import shutil
++import subprocess
++
++from pruebas import comun
++
++DESCRIPCION = "el índice de la nube: se baja al arrancar, y sin internet sigue habiendo lista"
++
++RAIZ = pathlib.Path(__file__).resolve().parent.parent
++
++MINIMO = 39
++
++
++def correr(r: comun.Reporte) -> None:
++    _donde_se_pide(r)
++    _corre_node(r)
++
++
++def _donde_se_pide(r: comun.Reporte) -> None:
++    """El índice se pide con la ventana ya en pantalla, no antes.
++
++    Esto se lee del código porque es una decisión que se deshace sola: mover la
++    llamada al arranque «para que esté listo antes» se ve como una mejora y es
++    lo que hace que la app tarde en abrir.
++    """
++    main = (RAIZ / "electron" / "main.js").read_text(encoding="utf-8")
++
++    r.cierto("bajarIndice()" in main, "main.js pide el índice de la nube")
++
++    # Tiene que estar dentro de un gancho de la ventana ya cargada, y NO en el
++    # whenReady de arranque.
++    tras_la_ventana = re.search(
++        r'did-finish-load[^\n]*\n(?:.*\n){0,12}?.*nube\.bajarIndice\(\)', main)
++    r.cierto(tras_la_ventana is not None,
++             "y lo pide cuando la ventana ya cargó (did-finish-load), no antes")
++
++    # Y sin `await`: esperarla sería frenar el arranque aunque se pida tarde.
++    r.cierto("await nube.bajarIndice" not in main,
++             "sin esperarla: la app no se detiene a que conteste el servidor")
++
++    arranque = main[main.find("app.whenReady"):]
++    r.cierto("bajarIndice" not in arranque,
++             "y NO está en el arranque, que es donde alguien la movería «para que esté lista antes»")
++
++    # El .catch es lo que impide que un error de red se vuelva un error de la
++    # app en una promesa que nadie atrapó.
++    r.cierto(re.search(r'bajarIndice\(\)[\s\S]{0,400}?\.catch\(', main) is not None,
++             "y si falla, se calla: la nube nunca tira la app")
++
++
++def _corre_node(r: comun.Reporte) -> None:
++    prueba = RAIZ / "pruebas" / "nube-indice.mjs"
++    if not prueba.exists():
++        r.cierto(False, "pruebas/nube-indice.mjs debería existir: es lo que mide el índice")
++        return
++    node = shutil.which("node")
++    if not node:
++        r.cierto(True, "sin node no se puede medir el índice: se salta")
++        return
++
++    salida = subprocess.run([node, str(prueba)], cwd=str(RAIZ),
++                            capture_output=True, text=True, timeout=180)
++    cuantas = salida.stdout.count("  ok   ")
++    r.cierto(salida.returncode == 0,
++             f"el índice de la nube pasa sus {MINIMO} comprobaciones",
++             (salida.stdout + salida.stderr)[-600:])
++    r.cierto(cuantas >= MINIMO, f"y se corrieron todas ({cuantas} comprobaciones)")
+# fin del parche: el renglon de cola absorbe el recorte del conector.
