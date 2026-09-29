@@ -1,0 +1,289 @@
+diff --git a/pruebas/t050_nube_pantalla.py b/pruebas/t050_nube_pantalla.py
+new file mode 100644
+index 0000000..a7fe7e2
+--- /dev/null
++++ b/pruebas/t050_nube_pantalla.py
+@@ -0,0 +1,282 @@
++"""t050 · «Mis archivos en la nube»: buscar y ordenar, sin carpetas.
++
++Mike, 29-sep-2026, con sus palabras: «En la nube se guardan todos juntos, no hay
++carpetas ni nada. Si acaso búsqueda/orden por fecha creación, nombre, fecha
++modificación, frecuencia de uso».
++
++La pantalla NO se reimplementa aquí: se arranca el programa de verdad, se le
++mete una lista como la que bajaría del servidor, y se aprieta lo que apretaría
++un dibujante. Una prueba de interfaz que reimplementa la interfaz sólo comprueba
++que la reimplementación coincide consigo misma.
++
++LO QUE SE MIDE, y por qué eso y no otra cosa:
++
++  · **Que buscar encuentre lo que se busca de verdad.** Dos detalles hacen que
++    un buscador se sienta roto y ninguno de los dos da error: escribir «ramirez»
++    sin acento no encuentra «Ramírez», y escribir las palabras al revés («ruiz
++    cocina») no encuentra «Cocina Ruiz». Los dos se miden.
++
++  · **Que los cuatro órdenes ordenen**, y que picar el mismo dos veces invierta,
++    que es lo que espera cualquiera que haya usado una tabla.
++
++  · **Que buscar y ordenar NO toquen el servidor.** La lista ya viene con los
++    nombres descifrados, así que filtrar es filtrar un arreglo. Si cada letra
++    pidiera al servidor, el servidor sabría qué se busca —y la pantalla se
++    sentiría pegajosa—. Se cuenta con un espía en el puente.
++
++  · **Que sin internet se diga que la lista es de la última vez** en lugar de
++    salir vacía, que se leería como «se perdieron mis archivos». Y que «todavía
++    no pude preguntar» no se confunda con «no tienes archivos»: son distintos, y
++    la pantalla tiene que decir cuál es.
++
++  · **Que un nombre ilegible no borre su renglón.** Se puede bajar y quitar
++    igual; perder la lista entera por un archivo raro sería cambiar un problema
++    chico por uno grande.
++"""
++
++from __future__ import annotations
++
++from pruebas import comun, navegador
++
++DESCRIPCION = "«Mis archivos en la nube»: buscar sin acentos, cuatro órdenes, y sin pedirle nada al servidor"
++
++
++# Una lista como la que bajaría del servidor, ya con los nombres descifrados.
++# Las fechas y los nombres están escogidos para que los cuatro órdenes den
++# resultados DISTINTOS entre sí: si todos dieran lo mismo, la prueba pasaría sin
++# medir cuál orden se aplicó.
++LISTA = """[
++  { token: 'AAA0000000000000000000000A', nombre: 'Cocina Ramírez.t101d', bytes: 4096,
++    version: 2, creado: '2026-01-10T10:00:00Z', modificado: '2026-09-28T10:00:00Z',
++    subido: '2026-09-28T10:00:05Z', equipo: 'la-de-mike', aperturas: 2, abierto: null },
++  { token: 'BBB0000000000000000000000B', nombre: 'Closet Ruiz.t101d', bytes: 900000,
++    version: 1, creado: '2026-08-01T10:00:00Z', modificado: '2026-02-02T10:00:00Z',
++    subido: '2026-02-02T10:00:05Z', equipo: 'la-de-mike', aperturas: 40, abierto: null },
++  { token: 'CCC0000000000000000000000C', nombre: 'Baño Ruiz etapa 2.t101d', bytes: 2048,
++    version: 5, creado: '2026-05-05T10:00:00Z', modificado: '2026-07-07T10:00:00Z',
++    subido: '2026-07-07T10:00:05Z', equipo: 'la-de-fer', aperturas: 0, abierto: null },
++  { token: 'DDD0000000000000000000000D', nombre: 'no-se-pudo', bytes: 10,
++    version: 1, creado: '2026-03-03T10:00:00Z', modificado: '2026-03-03T10:00:00Z',
++    subido: '2026-03-03T10:00:05Z', equipo: null, aperturas: 1, abierto: null,
++    ilegible: true }
++]"""
++
++
++POR = "() => { const a = document.querySelector('.nube-aviso'); return a.hidden ? null : (a.dataset.por || ''); }"
++TEXTO_AVISO = "() => { const a = document.querySelector('.nube-aviso'); return a.hidden ? '' : a.textContent; }"
++
++
++def correr(r: comun.Reporte) -> None:
++    if not navegador.hay_navegador():
++        r.cierto(True, "(sin Playwright en esta máquina: se salta)")
++        return
++
++    with navegador.programa() as (pagina, base):
++        navegador.cerrar_inicio(pagina)
++
++        # El puente de mentiras, con la misma lista por las dos puertas.
++        pagina.evaluate("""(lista) => {
++            window.espia = { indiceYa: 0, indiceBajar: 0, bajar: [], quitar: [] };
++            window.t101 = window.t101 || {};
++            window.laLista = lista;
++            window.respuestaRed = { archivos: lista, al: '2026-09-29T20:00:00Z' };
++            window.t101.nube = {
++              indiceYa: async () => { window.espia.indiceYa++; return { archivos: lista, de_cache: true }; },
++              indiceBajar: async () => { window.espia.indiceBajar++; return window.respuestaRed; },
++              bajar: async (doc) => { window.espia.bajar.push(doc);
++                                      return window.respuestaBajar || { ok: true, ruta: 'C:/de-la-nube/' + doc + '.t101d' }; },
++              quitar: async (doc) => { window.espia.quitar.push(doc); return { ok: true }; },
++              encendida: async () => true, prender: async () => true, alLlegarIndice: () => {},
++            };
++            window.abiertos = [];
++            Archivo.abrir = async (ruta) => { window.abiertos.push(ruta); return true; };
++        }""", pagina.evaluate("() => " + LISTA))
++
++        # 1 · El comando existe y abre la pantalla.
++        r.cierto(pagina.evaluate("() => !!(Comandos.buscar && Comandos.buscar('NUBE'))")
++                 or pagina.evaluate("() => typeof Nube === 'object'"),
++                 "el comando NUBE existe")
++        navegador.comando(pagina, "NUBE")
++        pagina.wait_for_selector(".dlg.nube", timeout=4000)
++        r.cierto(pagina.evaluate("() => Nube.abierta()"), "y abre la pantalla de la nube")
++
++        # Sale llena de inmediato con lo guardado, sin esperar la red.
++        r.igual(pagina.evaluate("() => window.espia.indiceYa"), 1,
++                "pide primero lo guardado, que contesta al instante")
++        pagina.wait_for_timeout(250)
++        r.igual(pagina.evaluate("() => window.espia.indiceBajar"), 1,
++                "y la red una sola vez, después")
++
++        filas = "() => [...document.querySelectorAll('.nube-fila .nube-nom')].map(n => n.textContent)"
++        r.igual(pagina.evaluate("() => [...document.querySelectorAll('.nube-ordenes .gh')].map(b => b.dataset.orden)"),
++                ["modificado", "creado", "nombre", "aperturas"],
++                "están los cuatro órdenes que pidió Mike: modificación, creación, nombre y frecuencia de uso")
++        r.igual(len(pagina.evaluate(filas)), 4, "salen los cuatro renglones")
++
++        # 2 · BUSCAR. Los dos detalles que hacen que un buscador se sienta roto.
++        antes = pagina.evaluate("() => window.espia.indiceBajar + window.espia.indiceYa")
++
++        pagina.fill(".nube-busca", "ramirez")
++        pagina.wait_for_timeout(120)
++        hay = pagina.evaluate(filas)
++        r.igual(hay, ["Cocina Ramírez"],
++                "escribir «ramirez» SIN ACENTO encuentra «Ramírez»")
++
++        pagina.fill(".nube-busca", "ruiz cocina")
++        pagina.wait_for_timeout(120)
++        r.igual(pagina.evaluate(filas), [],
++                "«ruiz cocina» no encuentra nada, porque no hay ningún plano con las dos")
++
++        pagina.fill(".nube-busca", "ruiz baño")
++        pagina.wait_for_timeout(120)
++        r.igual(pagina.evaluate(filas), ["Baño Ruiz etapa 2"],
++                "y las palabras EN CUALQUIER ORDEN sí: «ruiz baño» encuentra «Baño Ruiz etapa 2»")
++
++        pagina.fill(".nube-busca", "ruiz")
++        pagina.wait_for_timeout(120)
++        r.igual(len(pagina.evaluate(filas)), 2, "«ruiz» encuentra los dos de Ruiz")
++
++        pagina.fill(".nube-busca", "zzzz")
++        pagina.wait_for_timeout(120)
++        r.igual(pagina.evaluate(filas), [], "y algo que no está no encuentra nada")
++        r.cierto(pagina.evaluate("() => !!document.querySelector('.nube-vacio')"),
++                 "con un renglón que lo dice, en vez de quedarse en blanco")
++
++        # LA COMPROBACIÓN QUE IMPORTA de esta parte: nada de eso tocó el servidor.
++        r.igual(pagina.evaluate("() => window.espia.indiceBajar + window.espia.indiceYa"), antes,
++                "y BUSCAR NO LE PIDIÓ NADA AL SERVIDOR: se filtra aquí, con los nombres ya descifrados")
++
++        pagina.fill(".nube-busca", "")
++        pagina.wait_for_timeout(120)
++        r.igual(len(pagina.evaluate(filas)), 4, "al borrar la búsqueda vuelven los cuatro")
++
++        # 3 · ORDENAR. Los cuatro dan resultados distintos a propósito.
++        # Por su CLAVE, no por su etiqueta: el idioma de la app lo decide el
++        # motor (no el navegador), así que una prueba que buscara «Nombre»
++        # fallaría con la interfaz en inglés sin que nada esté mal. Ya pasó.
++        def picar(clave: str) -> None:
++            pagina.evaluate("""(clave) => {
++                const b = document.querySelector('.nube-ordenes .gh[data-orden="' + clave + '"]');
++                if (!b) throw new Error('no hay botón de orden ' + clave);
++                b.click();
++            }""", clave)
++            pagina.wait_for_timeout(120)
++
++        # Al abrir, lo último modificado primero.
++        r.igual(pagina.evaluate(filas)[0], "Cocina Ramírez",
++                "de entrada, lo último modificado va primero")
++
++        # El renglón ilegible se identifica por su clase y no por su etiqueta,
++        # que está traducida.
++        clases = "() => [...document.querySelectorAll('.nube-fila')].map(f => f.classList.contains('ilegible'))"
++
++        picar("nombre")
++        r.igual(pagina.evaluate(filas)[:3], ["Baño Ruiz etapa 2", "Closet Ruiz", "Cocina Ramírez"],
++                "por NOMBRE, alfabético y sin que los acentos lo desordenen")
++        r.igual(pagina.evaluate(clases), [False, False, False, True],
++                "y el ilegible queda al final, ordenado por lo único que se sabe de él")
++
++        picar("nombre")   # el mismo otra vez: se invierte
++        r.igual(pagina.evaluate(clases), [True, False, False, False],
++                "y picar el mismo orden otra vez lo invierte, como en cualquier tabla")
++        r.igual(pagina.evaluate(filas)[1:], ["Cocina Ramírez", "Closet Ruiz", "Baño Ruiz etapa 2"],
++                "con los demás al revés, de la Z a la A")
++
++        picar("creado")
++        r.igual(pagina.evaluate(filas)[0], "Closet Ruiz",
++                "por CREADO, el más nuevo primero (agosto)")
++
++        picar("aperturas")
++        r.igual(pagina.evaluate(filas)[0], "Closet Ruiz",
++                "por MÁS USADOS, el de 40 aperturas primero")
++        r.igual(pagina.evaluate(filas)[-1], "Baño Ruiz etapa 2",
++                "y el de cero aperturas al final")
++
++        picar("modificado")
++        r.igual(pagina.evaluate(filas)[0], "Cocina Ramírez",
++                "por MODIFICADO, septiembre primero")
++
++        # Y ordenar tampoco tocó el servidor.
++        r.igual(pagina.evaluate("() => window.espia.indiceBajar + window.espia.indiceYa"), antes,
++                "ordenar tampoco le pidió nada al servidor")
++
++        # 4 · NO HAY CARPETAS. Es la decisión, no un pendiente.
++        r.cierto(pagina.evaluate("""() => {
++            const t = document.querySelector('.dlg.nube').textContent.toLowerCase();
++            return !t.includes('carpeta') && !t.includes('folder');
++        }"""), "no hay carpetas en la pantalla: todos los planos juntos, como se pidió")
++
++        # 5 · Abrir uno baja ese archivo y lo abre por la puerta de siempre.
++        pagina.evaluate("""() => { [...document.querySelectorAll('.nube-fila')]
++            .find((f) => f.querySelector('.nube-nom').textContent === 'Closet Ruiz')
++            .querySelector('button').click(); }""")
++        pagina.wait_for_timeout(300)
++        r.igual(pagina.evaluate("() => window.espia.bajar"), ["BBB0000000000000000000000B"],
++                "abrir uno baja ESE archivo, por su token")
++        r.igual(pagina.evaluate("() => window.abiertos.length"), 1,
++                "y se abre por la puerta de siempre (Archivo.abrir), no por un camino aparte")
++        r.cierto(not pagina.evaluate("() => Nube.abierta()"),
++                 "y la pantalla se cierra al abrirlo")
++
++        # 6 · Un renglón ilegible sigue siendo usable.
++        navegador.comando(pagina, "NUBE")
++        pagina.wait_for_selector(".dlg.nube", timeout=4000)
++        pagina.wait_for_timeout(250)
++        r.cierto(pagina.evaluate("""() => !!document.querySelector('.nube-fila.ilegible button')"""),
++                 "el renglón con nombre ilegible sigue ahí, con su botón: se puede bajar igual")
++
++        # 7 · SIN INTERNET: se dice que la lista es de la última vez.
++        pagina.evaluate("() => { window.respuestaRed = { sinRed: true, archivos: window.laLista, de_cache: true }; }")
++        pagina.evaluate("() => Nube.cerrar()")
++        navegador.comando(pagina, "NUBE")
++        pagina.wait_for_selector(".dlg.nube", timeout=4000)
++        pagina.wait_for_timeout(300)
++        r.igual(pagina.evaluate(POR), "sin_red",
++                "sin internet se dice que fue la red, y que la lista es de la última vez")
++        r.igual(len(pagina.evaluate(filas)), 4,
++                "Y SIGUEN SALIENDO LOS CUATRO: una lista vacía se leería como «se perdieron mis archivos»")
++
++        # 8 · «todavía no pregunto» NO es «no tienes archivos».
++        pagina.evaluate("""() => {
++            window.t101.nube.indiceYa = async () => ({ archivos: [], todavia_no: true });
++            window.respuestaRed = { todavia_no: true, archivos: [] };
++        }""")
++        pagina.evaluate("() => Nube.cerrar()")
++        navegador.comando(pagina, "NUBE")
++        pagina.wait_for_selector(".dlg.nube", timeout=4000)
++        pagina.wait_for_timeout(300)
++        r.igual(pagina.evaluate(POR), "todavia_no",
++                "«todavía no pude preguntar» se dice así, y NO como «no tienes archivos»")
++
++        # 9 · La nube apagada lo dice, y dice dónde se prende.
++        pagina.evaluate("""() => {
++            window.t101.nube.indiceYa = async () => ({ apagada: true, archivos: [] });
++            window.respuestaRed = { apagada: true, archivos: [] };
++        }""")
++        pagina.evaluate("() => Nube.cerrar()")
++        navegador.comando(pagina, "NUBE")
++        pagina.wait_for_selector(".dlg.nube", timeout=4000)
++        pagina.wait_for_timeout(300)
++        r.igual(pagina.evaluate(POR), "apagada",
++                "y si la nube está apagada, se dice")
++        r.cierto(pagina.evaluate(TEXTO_AVISO) not in ("", None)
++                 and ("Ajustes" in pagina.evaluate(TEXTO_AVISO) or "Settings" in pagina.evaluate(TEXTO_AVISO)),
++                 "diciendo además dónde se prende, que es lo que alguien necesita saber",
++                 pagina.evaluate(TEXTO_AVISO))
++
++        # 10 · Un error al bajar dice QUÉ pasó, no «no se pudo».
++        pagina.evaluate("""() => {
++            window.t101.nube.indiceYa = async () => ({ archivos: window.laLista, de_cache: true });
++            window.respuestaRed = { archivos: window.laLista, al: 'hoy' };
++            window.respuestaBajar = { noEsta: true };
++        }""")
++        pagina.evaluate("() => Nube.cerrar()")
++        navegador.comando(pagina, "NUBE")
++        pagina.wait_for_selector(".dlg.nube", timeout=4000)
++        pagina.wait_for_timeout(250)
++        pagina.evaluate("""() => { document.querySelector('.nube-fila button').click(); }""")
++        pagina.wait_for_timeout(300)
++        r.igual(pagina.evaluate("() => Nube.ultimoFallo"), "no_esta",
++                "si el archivo ya no está en la nube, se distingue ESE motivo y no un «no se pudo» a secas")
++        r.igual(pagina.evaluate("() => window.abiertos.length"), 1,
++                "y no se abre nada: sigue en 1, el de antes")
+# fin del parche: el renglon de cola absorbe el recorte del conector.
