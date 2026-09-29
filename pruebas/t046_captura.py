@@ -163,4 +163,3 @@ def correr(r: comun.Reporte) -> None:
                 "(control: la marca estaba puesta cuando se armó la imagen)")
 
         r.igual(pagina.errores, [], "y no hubo un solo error de JavaScript")
-"""
