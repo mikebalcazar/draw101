@@ -53,3 +53,6 @@ index 257faaa..f8af750 100644
 +    await refrescarHoja();          // borrar una capa también cambia lo que se ve por las ventanas
    } catch (e) { avisar(e.message, true, 8000); }
  };
+# fin del parche. Este renglon existe a proposito: el conector que sube
+# los archivos recorta el espacio final, y sin el, git se queda sin el salto
+# de linea de la ultima linea de contexto y dice «corrupt patch».

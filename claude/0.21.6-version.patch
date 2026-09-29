@@ -1,0 +1,65 @@
+diff --git a/core/version.py b/core/version.py
+index c5c6d0a..db2b68d 100644
+--- a/core/version.py
++++ b/core/version.py
+@@ -21,13 +21,31 @@ Numeración: `mayor.menor.parche`.
+ 
+ from __future__ import annotations
+ 
+-VERSION = "0.21.5"
+-FECHA = "2026-09-28"
++VERSION = "0.21.6"
++FECHA = "2026-09-29"
+ 
+ # Qué trae cada entrega, en el idioma del taller y no en el del código.
+ # La más nueva arriba. Lo que se lista aquí es lo que el comando VERSION
+ # enseña en la consola.
+ BITACORA: list[dict] = [
++    {
++        "version": "0.21.6",
++        "fecha": "2026-09-29",
++        "cambios": [
++            "Apagar o prender una capa ya se nota en la HOJA, no sólo en el "
++            "modelo. Antes lo que se veía por las ventanas de la hoja se pedía "
++            "una sola vez al entrar, así que apagar una capa no cambiaba nada "
++            "—salvo lo que estuviera dibujado sobre la hoja misma, que sí "
++            "respondía, y por eso parecía que «sólo las cotas» hacían caso—. "
++            "Vale igual para el color, el grosor y para borrar una capa.",
++            "La capa COTAS ahora se llama ANOTACIONES, y el TEXTO también nace "
++            "en ella, como ya nacían las cotas y las directrices. El nombre "
++            "viejo dejó de describir lo que hay dentro.",
++            "Al abrir un dibujo tuyo de antes, su capa COTAS se renombra sola "
++            "y todo lo que vivía en ella se va con ella. Un DXF de alguien más "
++            "que traiga su propia COTAS no se toca: es suya, no nuestra.",
++        ],
++    },
+     {
+         "version": "0.21.5",
+         "fecha": "2026-09-28",
+diff --git a/package.json b/package.json
+index 557d784..2ff249d 100644
+--- a/package.json
++++ b/package.json
+@@ -1,8 +1,8 @@
+ {
+   "name": "draw101",
+   "productName": "draw101",
+-  "version": "0.21.5",
+-  "_versionApp": "0.21.5 — la que enseña la app viene de core/version.py; ésta sólo existe porque electron-builder exige semver",
++  "version": "0.21.6",
++  "_versionApp": "0.21.6 — la que enseña la app viene de core/version.py; ésta sólo existe porque electron-builder exige semver",
+   "_notaAsociaciones": "draw101 aparece en «Abrir con» de los DXF y DWG y en Aplicaciones predeterminadas, pero NO se roba la asociación: quién los abre por omisión lo sigue decidiendo el usuario (regla de Mike, 0.11.2). electron-builder registra el ProgID; Windows decide. El .t101d sí es nuestro. Ojo: dentro de «build» electron-builder rechaza cualquier clave que no conozca, aunque empiece con guión bajo (se cazó armando la 0.20.16).",
+   "_notaEmpaque": "asar apagado a propósito: main.js busca server.py junto a electron/, y el motor de Python no puede vivir dentro de un asar. Y electron-builder saca cualquier node_modules de los globs de `files`, así que los dos motores de DWG (dwgjs/node_modules) se copian por extraResources o la app se queda sin leer DWG.",
+   "description": "CAD 2D de Taller 101 — leer, trazar, acotar e imprimir planos",
+@@ -21,7 +21,7 @@
+   "build": {
+     "appId": "mx.taller101.dibujador",
+     "productName": "draw101",
+-    "artifactName": "draw101-0.21.5-setup.${ext}",
++    "artifactName": "draw101-0.21.6-setup.${ext}",
+     "directories": {
+       "output": "dist",
+       "buildResources": "build"
+# fin del parche. Este renglon existe a proposito: el conector que sube
+# los archivos recorta el espacio final, y sin el, git se queda sin el salto
+# de linea de la ultima linea de contexto y dice «corrupt patch».
