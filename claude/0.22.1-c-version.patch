@@ -1,0 +1,65 @@
+diff --git a/core/version.py b/core/version.py
+index f494d3d..a2f9b4f 100644
+--- a/core/version.py
++++ b/core/version.py
+@@ -21,13 +21,34 @@ Numeración: `mayor.menor.parche`.
+ 
+ from __future__ import annotations
+ 
+-VERSION = "0.22.0"
+-FECHA = "2026-09-29"
++VERSION = "0.22.1"
++FECHA = "2026-09-30"
+ 
+ # Qué trae cada entrega, en el idioma del taller y no en el del código.
+ # La más nueva arriba. Lo que se lista aquí es lo que el comando VERSION
+ # enseña en la consola.
+ BITACORA: list[dict] = [
++    {
++        "version": "0.22.1",
++        "fecha": "2026-09-30",
++        "cambios": [
++            "ARREGLADO, y es lo único que trae esta entrega: al guardar, la "
++            "copia que subía a la nube iba fechada con el día en que ABRISTE "
++            "el plano, no con el día en que lo guardaste. El archivo subía "
++            "bien y la pantalla NUBE lo enseñaba bien; lo que se rompía estaba "
++            "en la otra computadora, que compara esa fecha con la suya para "
++            "saber cuál copia es más nueva. Con la fecha vieja las veía "
++            "iguales y NUNCA ofrecía la copia nueva: la nube parecía "
++            "sincronizar y no lo estaba haciendo.",
++            "Se cazó con el primer plano de verdad que subió a la nube, que "
++            "llegó al servidor fechado seis días antes de cuando se guardó.",
++            "Prueba t053 (10 comprobaciones, tres de ellas de control). Sigue "
++            "el camino completo —guardar, el archivo en el disco, y lo que la "
++            "interfaz le entrega a la nube— porque medir sólo el dato en "
++            "memoria habría dejado pasar el error si la entrega fallara "
++            "aparte.",
++        ],
++    },
+     {
+         "version": "0.22.0",
+         "fecha": "2026-09-29",
+diff --git a/package.json b/package.json
+index b3132fe..50a0d6d 100644
+--- a/package.json
++++ b/package.json
+@@ -1,8 +1,8 @@
+ {
+   "name": "draw101",
+   "productName": "draw101",
+-  "version": "0.22.0",
+-  "_versionApp": "0.22.0 — la que enseña la app viene de core/version.py; ésta sólo existe porque electron-builder exige semver",
++  "version": "0.22.1",
++  "_versionApp": "0.22.1 — la que enseña la app viene de core/version.py; ésta sólo existe porque electron-builder exige semver",
+   "_notaAsociaciones": "draw101 aparece en «Abrir con» de los DXF y DWG y en Aplicaciones predeterminadas, pero NO se roba la asociación: quién los abre por omisión lo sigue decidiendo el usuario (regla de Mike, 0.11.2). electron-builder registra el ProgID; Windows decide. El .t101d sí es nuestro. Ojo: dentro de «build» electron-builder rechaza cualquier clave que no conozca, aunque empiece con guión bajo (se cazó armando la 0.20.16).",
+   "_notaEmpaque": "asar apagado a propósito: main.js busca server.py junto a electron/, y el motor de Python no puede vivir dentro de un asar. Y electron-builder saca cualquier node_modules de los globs de `files`, así que los dos motores de DWG (dwgjs/node_modules) se copian por extraResources o la app se queda sin leer DWG.",
+   "description": "CAD 2D de Taller 101 — leer, trazar, acotar e imprimir planos",
+@@ -21,7 +21,7 @@
+   "build": {
+     "appId": "mx.taller101.dibujador",
+     "productName": "draw101",
+-    "artifactName": "draw101-0.22.0-setup.${ext}",
++    "artifactName": "draw101-0.22.1-setup.${ext}",
+     "directories": {
+       "output": "dist",
+       "buildResources": "build"

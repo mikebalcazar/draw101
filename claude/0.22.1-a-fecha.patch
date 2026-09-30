@@ -1,0 +1,29 @@
+diff --git a/core/proyecto.py b/core/proyecto.py
+index cc76fc6..40110d5 100644
+--- a/core/proyecto.py
++++ b/core/proyecto.py
+@@ -75,12 +75,24 @@ def guardar(doc: Documento, ruta: str | pathlib.Path) -> pathlib.Path:
+                        json.dumps(doc.a_dict(), ensure_ascii=False))
+         os.replace(tmp.name, ruta)
+     finally:
+         if os.path.exists(tmp.name):
+             os.unlink(tmp.name)
+ 
++    # LA FECHA QUE ACABA DE QUEDAR EN EL ARCHIVO, también en memoria.
++    #
++    # Sin este renglón, `guardar` escribía la fecha nueva en `meta.json` y
++    # dejaba `doc.guardado_en` con la que traía de cuando se ABRIÓ el archivo.
++    # `resumen()` la entrega tal cual y la nube la recibe como «modificado»,
++    # así que un plano abierto el lunes y guardado el viernes subía fechado el
++    # lunes. Eso rompe justo lo que la nube existe para hacer: la otra
++    # computadora compara esa fecha contra la suya, las ve iguales, y NUNCA
++    # ofrece la copia nueva. Falla en silencio, que es la peor manera.
++    # Medido el 30-sep-2026 con el primer plano real que subió Mike: llegó
++    # fechado seis días antes de cuando lo guardó.
++    doc.guardado_en = meta["guardado"]
+     doc.sucio = False
+     return ruta
+ 
+ 
+ def abrir(ruta: str | pathlib.Path) -> Documento:
+     ruta = pathlib.Path(ruta)
