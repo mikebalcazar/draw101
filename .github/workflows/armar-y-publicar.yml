@@ -147,8 +147,14 @@ jobs:
         if: ${{ !inputs.saltar_pruebas }}
         run: |
           set -euo pipefail
-          pip install -q ezdxf fastapi uvicorn numpy pillow reportlab pymupdf pypdfium2 playwright
-          python -m playwright install chromium
+          # httpx2: el TestClient de FastAPI (starlette 1.x) lo exige; sin él la
+          # prueba t047 revienta al importarlo (corrida 36647787024).
+          pip install -q ezdxf fastapi httpx2 uvicorn numpy pillow reportlab pymupdf pypdfium2 playwright
+          # Chromium sólo si las pruebas de navegador van a correr de verdad:
+          # en el corredor se saltan solas (pruebas/navegador.py, hay_navegador)
+          # salvo que T101_PRUEBAS_COMPLETAS esté puesta. Bajarlo cada armado
+          # eran minutos de Windows (al doble) por pruebas que no corrían.
+          if [ -n "${T101_PRUEBAS_COMPLETAS:-}" ]; then python -m playwright install chromium; fi
           python verificar.py
 
       - name: Armar el instalador
