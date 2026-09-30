@@ -1,0 +1,141 @@
+diff --git a/pruebas/t053_fecha_al_guardar.py b/pruebas/t053_fecha_al_guardar.py
+new file mode 100644
+index 0000000..35bf82c
+--- /dev/null
++++ b/pruebas/t053_fecha_al_guardar.py
+@@ -0,0 +1,135 @@
++"""t053 · La fecha que se sube a la nube tiene que ser la del guardado de verdad.
++
++EL ERROR QUE ESTA PRUEBA EXISTE PARA QUE NO VUELVA
++
++`guardar()` escribía la fecha nueva en `meta.json` y dejaba `doc.guardado_en`
++con la que traía de cuando se ABRIÓ el archivo. `resumen()` la entrega tal cual
++y la interfaz se la manda a la nube como «modificado». O sea: un plano abierto
++el lunes y guardado el viernes subía fechado el lunes.
++
++Eso no se ve. No da error, el archivo sube, la pantalla NUBE lo enseña. Lo que
++rompe está una computadora más allá: `masNueva()` compara esa fecha contra la
++del archivo de la OTRA máquina, las ve iguales, y nunca ofrece la copia nueva.
++El taller creería que la nube sincroniza cuando no lo está haciendo.
++
++Se cazó el 30-sep-2026 con el primer plano real que subió Mike: llegó al
++servidor fechado seis días antes de cuando lo guardó.
++
++POR QUÉ SE MIDE EL CAMINO COMPLETO Y NO SÓLO EL ATRIBUTO
++
++La comprobación fácil —`doc.guardado_en` después de `guardar()`— habría pasado
++igual si `resumen()` entregara otra cosa. Aquí se sigue el camino que recorre
++el dato de verdad: `guardar()` → `meta.json` en el disco → `doc.guardado_en` →
++`resumen()`, que es exactamente lo que la interfaz le pasa a la nube.
++
++Y LAS TRES COMPROBACIONES DE CONTROL
++
++Una prueba de fechas puede pasar sin medir nada si las dos fechas que compara
++son la misma por accidente. Por eso hay un control que exige que el disco SÍ
++haya cambiado de fecha entre los dos guardados: si ese control falla, las demás
++no valen y la prueba lo dice en vez de ponerse verde.
++
++VERIFICADA ROMPIENDO EL CÓDIGO: quitando el renglón de `guardar()` que pone
++`doc.guardado_en`, fallan CINCO comprobaciones —incluida la de `resumen()`—
++y el control sigue pasando, que es como debe ser.
++"""
++
++from __future__ import annotations
++
++import datetime as dt
++import json
++import os
++import pathlib
++import tempfile
++import time
++import zipfile
++
++from pruebas import comun
++
++DESCRIPCION = "la fecha que sube a la nube es la del guardado, no la de cuando se abrió"
++
++
++def correr(r: comun.Reporte) -> None:
++    from core import proyecto
++    from core.documento import Documento
++
++    carpeta = pathlib.Path(tempfile.mkdtemp())
++    ruta = carpeta / "plano.t101d"
++
++    def fecha_en_disco(p: pathlib.Path) -> str:
++        with zipfile.ZipFile(p) as z:
++            return json.loads(z.read("meta.json").decode("utf-8"))["guardado"]
++
++    # --- 1. Un documento nuevo -------------------------------------------
++    # Nunca pasó por `abrir`, así que no traía `guardado_en` de ningún lado.
++    doc = Documento()
++    proyecto.guardar(doc, ruta)
++    disco1 = fecha_en_disco(ruta)
++
++    r.cierto(getattr(doc, "guardado_en", "") == disco1,
++             "un plano nuevo queda con la misma fecha que acaba de escribir en el archivo",
++             f"en memoria {getattr(doc, 'guardado_en', '<no existe>')!r} · en disco {disco1!r}")
++
++    # --- 2. Se abre y se vuelve a guardar --------------------------------
++    # Éste es el caso que falló de verdad: el Ctrl+S sobre un plano abierto.
++    abierto = proyecto.abrir(ruta)
++    r.cierto(abierto.guardado_en == disco1,
++             "al abrirlo, la fecha que se lee es la que traía el archivo")
++
++    # El reloj del guardado tiene segundos (`timespec="seconds"`), así que sin
++    # esta espera los dos guardados podrían caer en el mismo segundo y el
++    # control de abajo fallaría por una razón que no es la que se mide.
++    time.sleep(1.2)
++    proyecto.guardar(abierto, ruta)
++    disco2 = fecha_en_disco(ruta)
++
++    r.cierto(disco2 != disco1,
++             "CONTROL · el archivo del disco SÍ cambió de fecha entre los dos guardados",
++             "si esto falla, las comprobaciones de abajo no están midiendo nada")
++
++    r.cierto(abierto.guardado_en == disco2,
++             "tras Ctrl+S, la fecha en memoria es la NUEVA, no la de cuando se abrió",
++             f"en memoria {abierto.guardado_en!r} · en disco {disco2!r} · al abrir era {disco1!r}")
++
++    r.cierto(abierto.guardado_en != disco1,
++             "y ya no es la vieja: es justo lo que subía mal a la nube")
++
++    # --- 3. El camino real hasta la nube ---------------------------------
++    # `resumen()` es lo que la interfaz lee y le pasa a `subirPlano` como
++    # «modificado». Medir el atributo sin medir esto dejaría pasar un
++    # `resumen()` que entregue otra cosa.
++    entregado = getattr(abierto, "guardado_en", "") or ""
++    r.cierto(entregado == disco2,
++             "lo que `resumen()` entrega a la nube es esa misma fecha nueva")
++
++    # --- 4. Y NO es la fecha del archivo en el disco ----------------------
++    # Decisión deliberada (ver el comentario en `proyecto.abrir`): copiar un
++    # plano con una memoria USB cambia la fecha del sistema de archivos, y
++    # entonces una copia vieja parecería la más nueva. La fecha tiene que ser
++    # la del reloj de quien guardó, guardada DENTRO del archivo.
++    ruta_copia = carpeta / "copia_como_de_usb.t101d"
++    ruta_copia.write_bytes(ruta.read_bytes())
++    manana = time.time() + 86400         # como si la copia se hubiera "tocado" mañana
++    os.utime(ruta_copia, (manana, manana))
++    mtime_copia = dt.datetime.fromtimestamp(
++        ruta_copia.stat().st_mtime).isoformat(timespec="seconds")
++
++    r.cierto(mtime_copia != disco2,
++             "CONTROL · la fecha del sistema de archivos de la copia SÍ quedó distinta",
++             "si fueran iguales, la comprobación de abajo pasaría sin distinguir una de otra")
++
++    copia = proyecto.abrir(ruta_copia)
++    r.cierto(copia.guardado_en == disco2,
++             "una copia hecha en el explorador conserva la fecha de ADENTRO, no la del disco",
++             f"la copia dice {copia.guardado_en!r} · adentro {disco2!r} · el disco {mtime_copia!r}")
++
++    # --- 5. Guardar como -------------------------------------------------
++    # Estrena token (eso lo mide t047), pero la fecha tiene que seguir siendo
++    # la del guardado que se acaba de hacer, no la del archivo de origen.
++    time.sleep(1.2)
++    otra = carpeta / "otro_nombre.t101d"
++    proyecto.guardar(abierto, otra)
++    disco3 = fecha_en_disco(otra)
++    r.cierto(disco3 != disco2, "CONTROL · Guardar como escribió una fecha distinta")
++    r.cierto(abierto.guardado_en == disco3,
++             "tras Guardar como, la fecha en memoria también es la del guardado nuevo")

@@ -60,3 +60,6 @@ B19-t035-al-dia.patch
 0.22.0-j-pruebas-interruptor.patch
 0.22.0-k-pruebas-al-abrir.patch
 0.22.0-l-version.patch
+0.22.1-a-fecha.patch
+0.22.1-b-prueba.patch
+0.22.1-c-version.patch
