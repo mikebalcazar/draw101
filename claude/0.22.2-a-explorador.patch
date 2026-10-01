@@ -1,0 +1,461 @@
+diff --git a/ui/nube.js b/ui/nube.js
+index 378de39..47652bb 100644
+--- a/ui/nube.js
++++ b/ui/nube.js
+@@ -22,12 +22,8 @@
+  */
+ 
+ const Nube = (() => {
+-  let caja = null;
+-  let archivos = [];
+-  let orden = "modificado";      // lo último tocado primero: es lo que se busca
+-  let alReves = false;
+-  let busca = "";
+-  let estado = null;             // por qué la lista está como está
++  let caja = null;               // el cuadro NUBE, cuando está abierto
++  let delCuadro = null;          // su lista
+   let ultimoFallo = null;        // por qué no se pudo abrir el último, sin depender del idioma
+ 
+   const T = () => (typeof Idioma !== "undefined" && Idioma.ingles);
+@@ -83,33 +79,222 @@ const Nube = (() => {
+   const plano = (s) => String(s || "").toLowerCase()
+     .normalize("NFD").replace(/\p{Diacritic}/gu, "");
+ 
+-  function filtradas() {
+-    const q = plano(busca).trim();
+-    let lista = archivos;
+-    if (q) {
+-      const partes = q.split(/\s+/);
+-      // Todas las palabras, en cualquier orden: «ruiz cocina» encuentra
+-      // «Cocina Ruiz». Buscar la frase entera no lo encontraría.
+-      lista = lista.filter((a) => {
+-        const n = plano(a.nombre);
+-        return partes.every((p) => n.includes(p));
+-      });
++  /* ===================================================================== */
++  /* UNA LISTA DE LA NUBE, MONTADA DONDE SE LE DIGA                        */
++  /* ===================================================================== */
++  /* Esto era el cuerpo del cuadro NUBE y nada más. Se sacó aparte el 1-oct-2026
++   * porque Mike pidió ver la nube TAMBIÉN en la pantalla de inicio: «quiero
++   * poder explorar los archivos de la nube cuando abro, por si quiero trabajar
++   * en alguno».
++   *
++   * SE SACÓ EN VEZ DE COPIARSE, que es la decisión: el buscador sin acentos,
++   * las palabras en cualquier orden, los cuatro órdenes y los cinco avisos son
++   * el trabajo medido de t050. Una segunda copia en la pantalla de inicio
++   * habría nacido sin nada de eso y habría que arreglarla dos veces para
++   * siempre.
++   *
++   * CADA MONTAJE TIENE SU PROPIO ESTADO (lo que se busca, cómo se ordena). Si
++   * lo compartieran, teclear en el buscador de la pantalla de inicio movería
++   * la lista del cuadro NUBE a espaldas de uno. */
++  function explorador(host) {
++    let archivos = [];
++    let estado = null;           // por qué la lista está como está
++    let orden = "modificado";    // lo último tocado primero: es lo que se busca
++    let alReves = false;
++    let busca = "";
++    let vivo = true;
++
++    host.innerHTML = `
++      <div class="nube-barra">
++        <input class="nube-busca" type="search" autocomplete="off">
++        <div class="nube-ordenes"></div>
++      </div>
++      <div class="nube-aviso" hidden></div>
++      <div class="cuerpo nube-lista"></div>`;
++
++    const campo = host.querySelector(".nube-busca");
++    campo.addEventListener("input", () => { busca = campo.value; pintarLista(); });
++
++    function filtradas() {
++      const q = plano(busca).trim();
++      let lista = archivos;
++      if (q) {
++        const partes = q.split(/\s+/);
++        // Todas las palabras, en cualquier orden: «ruiz cocina» encuentra
++        // «Cocina Ruiz». Buscar la frase entera no lo encontraría.
++        lista = lista.filter((a) => {
++          const n = plano(a.nombre);
++          return partes.every((p) => n.includes(p));
++        });
++      }
++      const mas = alReves ? -1 : 1;
++      const cmp = {
++        nombre: (a, b) => plano(a.nombre).localeCompare(plano(b.nombre)) * mas,
++        // En las fechas y el uso, lo más reciente y lo más usado va primero sin
++        // tener que invertir nada: es lo que alguien espera al escogerlo.
++        modificado: (a, b) => String(b.modificado || "").localeCompare(String(a.modificado || "")) * mas,
++        creado: (a, b) => String(b.creado || "").localeCompare(String(a.creado || "")) * mas,
++        aperturas: (a, b) => ((b.aperturas || 0) - (a.aperturas || 0)) * mas,
++      }[orden];
++      return [...lista].sort(cmp);
++    }
++
++    /** Qué decir cuando la lista no es lo que debería ser. Cada caso dice algo
++     *  distinto a propósito: «no tienes archivos» y «no pude preguntar» se ven
++     *  igual en pantalla si nadie los distingue, y no son lo mismo. */
++    function elAviso() {
++      const en = T();
++      if (!estado) return null;
++      if (estado.sinApp) return { por: "sin_app", texto: en
++        ? "The cloud only works from the installed app."
++        : "La nube sólo funciona desde la aplicación instalada." };
++      if (estado.apagada) return { por: "apagada", texto: en
++        ? "The cloud is off for this computer. Turn it on in Settings."
++        : "La nube está apagada en esta computadora. Se prende en Ajustes." };
++      if (estado.sinLicencia) return { por: "sin_licencia", texto: en
++        ? "No licence on this computer, so the cloud can't be reached."
++        : "Esta computadora no tiene licencia, así que no se puede llegar a la nube." };
++      if (estado.todavia_no) return { por: "todavia_no", texto: en
++        ? "Haven't been able to ask the server yet."
++        : "Todavía no se ha podido preguntar al servidor." };
++      if (estado.sinRed) return { por: "sin_red", texto: en
++        ? "Couldn't reach the server. This is the list from last time."
++        : "No se pudo llegar al servidor. Ésta es la lista de la última vez." };
++      if (estado.error) return { por: "error",
++        texto: (en ? "The server said: " : "El servidor contestó: ") + estado.error };
++      return null;
++    }
++
++    function pintar() {
++      if (!vivo) return;
++      const en = T();
++      campo.placeholder = en ? "Search by name…" : "Buscar por nombre…";
++
++      const bo = host.querySelector(".nube-ordenes");
++      bo.innerHTML = "";
++      for (const [clave, es, ing] of ORDENES) {
++        const b = document.createElement("button");
++        b.className = "gh" + (orden === clave ? " puesto" : "");
++        // La clave va en un dato y no sólo en la etiqueta: el idioma de la app
++        // lo decide el motor, así que un botón se busca por lo que hace y no
++        // por cómo se llama hoy.
++        b.dataset.orden = clave;
++        b.textContent = (en ? ing : es) + (orden === clave && alReves ? " ↑" : "");
++        b.onclick = () => {
++          // Volver a picar el mismo orden lo invierte, que es lo que espera
++          // cualquiera que haya usado una tabla.
++          if (orden === clave) alReves = !alReves; else { orden = clave; alReves = false; }
++          pintar();
++        };
++        bo.appendChild(b);
++      }
++
++      const av = host.querySelector(".nube-aviso");
++      const por = elAviso();
++      av.hidden = !por;
++      av.textContent = por ? por.texto : "";
++      // La razón, aparte de las palabras: es lo que se puede medir sin depender
++      // del idioma, y lo que sirve para saber POR QUÉ la lista está así.
++      if (por) av.dataset.por = por.por; else delete av.dataset.por;
++
++      pintarLista();
++    }
++
++    function pintarLista() {
++      if (!vivo) return;
++      const en = T();
++      const lista = host.querySelector(".nube-lista");
++      lista.innerHTML = "";
++      const filas = filtradas();
++
++      if (!filas.length) {
++        const v = document.createElement("div");
++        v.className = "nube-vacio";
++        v.textContent = busca
++          ? (en ? `Nothing matches “${busca}”.` : `Nada coincide con «${busca}».`)
++          : (en ? "No files in the cloud yet." : "Todavía no hay archivos en la nube.");
++        lista.appendChild(v);
++        return;
++      }
++
++      for (const a of filas) {
++        const f = document.createElement("div");
++        f.className = "nube-fila" + (a.ilegible ? " ilegible" : "");
++        const nom = document.createElement("div");
++        nom.className = "nube-nom";
++        // Un nombre que no se pudo descifrar se dice, y el renglón sigue ahí: se
++        // puede bajar y quitar igual. Perder la lista entera por un archivo raro
++        // sería cambiar un problema chico por uno grande.
++        nom.textContent = a.ilegible
++          ? (en ? "(unreadable name)" : "(nombre ilegible)")
++          : sinExt(a.nombre);
++        nom.title = a.ilegible ? a.token : a.nombre;
++
++        const dat = document.createElement("div");
++        dat.className = "nube-dat";
++        const cuantas = a.aperturas
++          ? ` · ${a.aperturas} ${en ? (a.aperturas === 1 ? "open" : "opens") : (a.aperturas === 1 ? "apertura" : "aperturas")}`
++          : "";
++        dat.textContent = `${cuando(a.modificado)} · ${pesa(a.bytes)}${cuantas}`;
++        dat.title = `${en ? "Modified" : "Modificado"}: ${a.modificado || "—"}\n`
++          + `${en ? "Created" : "Creado"}: ${a.creado || "—"}\n`
++          + `${en ? "Version" : "Versión"}: ${a.version ?? "—"}`;
++
++        const abrirB = document.createElement("button");
++        abrirB.className = "gh";
++        abrirB.textContent = en ? "Open" : "Abrir";
++        abrirB.onclick = () => bajarYAbrir(a);
++
++        f.append(nom, dat, abrirB);
++        // Doble clic en el renglón hace lo mismo que el botón.
++        f.ondblclick = () => bajarYAbrir(a);
++        lista.appendChild(f);
++      }
+     }
+-    const mas = alReves ? -1 : 1;
+-    const cmp = {
+-      nombre: (a, b) => plano(a.nombre).localeCompare(plano(b.nombre)) * mas,
+-      // En las fechas y el uso, lo más reciente y lo más usado va primero sin
+-      // tener que invertir nada: es lo que alguien espera al escogerlo.
+-      modificado: (a, b) => String(b.modificado || "").localeCompare(String(a.modificado || "")) * mas,
+-      creado: (a, b) => String(b.creado || "").localeCompare(String(a.creado || "")) * mas,
+-      aperturas: (a, b) => ((b.aperturas || 0) - (a.aperturas || 0)) * mas,
+-    }[orden];
+-    return [...lista].sort(cmp);
++
++    /** Lo guardado primero —para que salga llena de inmediato— y la red
++     *  después. Nunca se espera a un servidor con la pantalla en blanco. */
++    async function cargar() {
++      if (!window.t101 || !window.t101.nube) {
++        archivos = []; estado = { sinApp: true }; pintar(); return;
++      }
++      try {
++        const ya = await window.t101.nube.indiceYa();
++        if (!vivo) return;
++        archivos = ya.archivos || [];
++        estado = ya;
++      } catch (_) { estado = estado || { todavia_no: true }; }
++      pintar();
++
++      try {
++        const r = await window.t101.nube.indiceBajar();
++        if (!vivo) return;
++        archivos = r.archivos || archivos;
++        estado = r;
++        pintar();
++      } catch (_) { /* lo guardado ya está en pantalla */ }
++    }
++
++    const api = {
++      host, pintar, cargar, filtradas,
++      enfocar: () => campo.focus(),
++      vacia: () => !archivos.length,
++      soltar() { vivo = false; },
++      _poner(l, o, b, rev) {
++        archivos = l; orden = o || orden;
++        if (b !== undefined && b !== null) { busca = b; campo.value = b; }
++        alReves = !!rev; pintar();
++      },
++    };
++    return api;
+   }
+ 
+-  /* --- la pantalla ----------------------------------------------------- */
++  /* ===================================================================== */
++  /* EL CUADRO «MIS ARCHIVOS EN LA NUBE» (comando NUBE)                    */
++  /* ===================================================================== */
+ 
+   function cerrar() {
++    if (delCuadro) { delCuadro.soltar(); delCuadro = null; }
+     if (caja) { caja.remove(); caja = null; }
+     document.removeEventListener("keydown", alTeclear, true);
+   }
+@@ -126,159 +311,29 @@ const Nube = (() => {
+       return;
+     }
+     cerrar();
+-    busca = "";
+-
+-    // Lo guardado primero, para que la pantalla salga llena de inmediato, y la
+-    // red después: nunca se espera a un servidor con la pantalla en blanco.
+-    const ya = await window.t101.nube.indiceYa();
+-    archivos = ya.archivos || [];
+-    estado = ya;
+-    pintar();
+-
+-    window.t101.nube.indiceBajar().then((r) => {
+-      if (!caja) return;
+-      archivos = r.archivos || archivos;
+-      estado = r;
+-      pintar();
+-    }).catch(() => { /* lo guardado ya está en pantalla */ });
+-  }
+ 
+-  /** Qué decir cuando la lista no es lo que debería ser. Cada caso dice algo
+-   *  distinto a propósito: «no tienes archivos» y «no pude preguntar» se ven
+-   *  igual en pantalla si nadie los distingue, y no son lo mismo. */
+-  function elAviso() {
+     const en = T();
+-    if (!estado) return null;
+-    if (estado.apagada) return { por: "apagada", texto: en
+-      ? "The cloud is off for this computer. Turn it on in Settings."
+-      : "La nube está apagada en esta computadora. Se prende en Ajustes." };
+-    if (estado.sinLicencia) return { por: "sin_licencia", texto: en
+-      ? "No licence on this computer, so the cloud can't be reached."
+-      : "Esta computadora no tiene licencia, así que no se puede llegar a la nube." };
+-    if (estado.todavia_no) return { por: "todavia_no", texto: en
+-      ? "Haven't been able to ask the server yet."
+-      : "Todavía no se ha podido preguntar al servidor." };
+-    if (estado.sinRed) return { por: "sin_red", texto: en
+-      ? "Couldn't reach the server. This is the list from last time."
+-      : "No se pudo llegar al servidor. Ésta es la lista de la última vez." };
+-    if (estado.error) return { por: "error",
+-      texto: (en ? "The server said: " : "El servidor contestó: ") + estado.error };
+-    return null;
+-  }
+-
+-  function pintar() {
+-    const en = T();
+-    const primeraVez = !caja;
+-    if (primeraVez) {
+-      caja = document.createElement("div");
+-      caja.className = "dlg nube";
+-      caja.innerHTML = `
+-        <div class="panel">
+-          <div class="cab"><b></b></div>
+-          <div class="nube-barra">
+-            <input class="nube-busca" type="search" autocomplete="off">
+-            <div class="nube-ordenes"></div>
+-          </div>
+-          <div class="nube-aviso" hidden></div>
+-          <div class="cuerpo nube-lista"></div>
+-          <div class="nube-pie"><button class="gh nube-cerrar"></button></div>
+-        </div>`;
+-      document.body.appendChild(caja);
+-      // Un clic fuera del panel cierra; dentro, no.
+-      caja.addEventListener("mousedown", (e) => { if (e.target === caja) cerrar(); });
+-      document.addEventListener("keydown", alTeclear, true);
+-
+-      const campo = caja.querySelector(".nube-busca");
+-      campo.addEventListener("input", () => { busca = campo.value; pintarLista(); });
+-      setTimeout(() => campo.focus(), 0);
+-    }
++    caja = document.createElement("div");
++    caja.className = "dlg nube";
++    caja.innerHTML = `
++      <div class="panel">
++        <div class="cab"><b></b></div>
++        <div class="nube-cuerpo"></div>
++        <div class="nube-pie"><button class="gh nube-cerrar"></button></div>
++      </div>`;
++    document.body.appendChild(caja);
++    // Un clic fuera del panel cierra; dentro, no.
++    caja.addEventListener("mousedown", (e) => { if (e.target === caja) cerrar(); });
++    document.addEventListener("keydown", alTeclear, true);
+ 
+     caja.querySelector(".cab b").textContent = en ? "My files in the cloud" : "Mis archivos en la nube";
+-    caja.querySelector(".nube-busca").placeholder = en ? "Search by name…" : "Buscar por nombre…";
+     const bc = caja.querySelector(".nube-cerrar");
+     bc.textContent = en ? "Close" : "Cerrar";
+     bc.onclick = cerrar;
+ 
+-    const bo = caja.querySelector(".nube-ordenes");
+-    bo.innerHTML = "";
+-    for (const [clave, es, ing] of ORDENES) {
+-      const b = document.createElement("button");
+-      b.className = "gh" + (orden === clave ? " puesto" : "");
+-      // La clave va en un dato y no sólo en la etiqueta: el idioma de la app lo
+-      // decide el motor, así que un botón se busca por lo que hace y no por
+-      // cómo se llama hoy.
+-      b.dataset.orden = clave;
+-      b.textContent = (en ? ing : es) + (orden === clave && alReves ? " ↑" : "");
+-      b.onclick = () => {
+-        // Volver a picar el mismo orden lo invierte, que es lo que espera
+-        // cualquiera que haya usado una tabla.
+-        if (orden === clave) alReves = !alReves; else { orden = clave; alReves = false; }
+-        pintar();
+-      };
+-      bo.appendChild(b);
+-    }
+-
+-    const av = caja.querySelector(".nube-aviso");
+-    const por = elAviso();
+-    av.hidden = !por;
+-    av.textContent = por ? por.texto : "";
+-    // La razón, aparte de las palabras: es lo que se puede medir sin depender
+-    // del idioma, y lo que sirve para saber POR QUÉ la lista está así.
+-    if (por) av.dataset.por = por.por; else delete av.dataset.por;
+-
+-    pintarLista();
+-  }
+-
+-  function pintarLista() {
+-    if (!caja) return;
+-    const en = T();
+-    const lista = caja.querySelector(".nube-lista");
+-    lista.innerHTML = "";
+-    const filas = filtradas();
+-
+-    if (!filas.length) {
+-      const v = document.createElement("div");
+-      v.className = "nube-vacio";
+-      v.textContent = busca
+-        ? (en ? `Nothing matches “${busca}”.` : `Nada coincide con «${busca}».`)
+-        : (en ? "No files in the cloud yet." : "Todavía no hay archivos en la nube.");
+-      lista.appendChild(v);
+-      return;
+-    }
+-
+-    for (const a of filas) {
+-      const f = document.createElement("div");
+-      f.className = "nube-fila" + (a.ilegible ? " ilegible" : "");
+-      const nom = document.createElement("div");
+-      nom.className = "nube-nom";
+-      // Un nombre que no se pudo descifrar se dice, y el renglón sigue ahí: se
+-      // puede bajar y quitar igual. Perder la lista entera por un archivo raro
+-      // sería cambiar un problema chico por uno grande.
+-      nom.textContent = a.ilegible
+-        ? (en ? "(unreadable name)" : "(nombre ilegible)")
+-        : sinExt(a.nombre);
+-      nom.title = a.ilegible ? a.token : a.nombre;
+-
+-      const dat = document.createElement("div");
+-      dat.className = "nube-dat";
+-      const cuantas = a.aperturas
+-        ? ` · ${a.aperturas} ${en ? (a.aperturas === 1 ? "open" : "opens") : (a.aperturas === 1 ? "apertura" : "aperturas")}`
+-        : "";
+-      dat.textContent = `${cuando(a.modificado)} · ${pesa(a.bytes)}${cuantas}`;
+-      dat.title = `${en ? "Modified" : "Modificado"}: ${a.modificado || "—"}\n`
+-        + `${en ? "Created" : "Creado"}: ${a.creado || "—"}\n`
+-        + `${en ? "Version" : "Versión"}: ${a.version ?? "—"}`;
+-
+-      const abrirB = document.createElement("button");
+-      abrirB.className = "gh";
+-      abrirB.textContent = en ? "Open" : "Abrir";
+-      abrirB.onclick = () => bajarYAbrir(a);
+-
+-      f.append(nom, dat, abrirB);
+-      // Doble clic en el renglón hace lo mismo que el botón.
+-      f.ondblclick = () => bajarYAbrir(a);
+-      lista.appendChild(f);
+-    }
++    delCuadro = explorador(caja.querySelector(".nube-cuerpo"));
++    setTimeout(() => { if (delCuadro) delCuadro.enfocar(); }, 0);
++    await delCuadro.cargar();
+   }
+ 
+   /* --- abrir uno ------------------------------------------------------- */
+@@ -304,6 +359,9 @@ const Nube = (() => {
+       return;
+     }
+     cerrar();
++    // La pantalla de inicio también se quita: se está abriendo un plano, y
++    // dejarla encima taparía justo lo que se acaba de pedir.
++    if (typeof Marco !== "undefined" && Marco.cerrarInicio) Marco.cerrarInicio();
+     // Se abre por la misma puerta que cualquier archivo, para que pase por lo
+     // mismo: preguntar si hay cambios sin guardar, las pestañas, el encuadre.
+     // Una puerta aparte para «los de la nube» sería otro camino que mantener y
+@@ -312,9 +370,9 @@ const Nube = (() => {
+     catch (e) { avisar(e.message, true, 9000); }
+   }
+ 
+-  return { abrir, cerrar, abierta: () => !!caja, _filtradas: filtradas,
++  return { abrir, cerrar, abierta: () => !!caja, explorador,
+            get ultimoFallo() { return ultimoFallo; },
+-           _poner: (l, o, b, rev) => { archivos = l; orden = o || orden; busca = b ?? busca; alReves = !!rev; } };
++           _delCuadro: () => delCuadro };
+ })();
+ 
+ Comandos.registrar({

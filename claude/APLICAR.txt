@@ -63,3 +63,8 @@ B19-t035-al-dia.patch
 0.22.1-a-fecha.patch
 0.22.1-b-prueba.patch
 0.22.1-c-version.patch
+0.22.2-a-explorador.patch
+0.22.2-b-inicio.patch
+0.22.2-c-estilos.patch
+0.22.2-d-t050.patch
+0.22.2-f-version.patch
