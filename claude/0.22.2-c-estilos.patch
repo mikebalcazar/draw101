@@ -1,0 +1,63 @@
+diff --git a/ui/styles.css b/ui/styles.css
+index b1fa933..6e5beee 100644
+--- a/ui/styles.css
++++ b/ui/styles.css
+@@ -601,8 +601,21 @@ footer .sel{color:var(--acc2)}
+ /* minmax(0,1fr) y no 1fr: una columna «1fr» no se encoge por debajo de su
+  * contenido, y una ruta larga sin quiebres (nowrap) estiraba la columna de
+  * recientes fuera de la ventana (Mike, 15-sep-2026). */
+-#inicio .cols{display:grid;grid-template-columns:minmax(0,1fr) minmax(0,1fr);gap:26px;align-items:start}
+-#inicio .recientes{min-width:0}
++/* Tres columnas desde la 0.22.2: los botones, los recientes de esta maquina y
++   la nube. Mike, 1-oct-2026: «quiero ver los archivos recientes y tambien los
++   archivos en la nube... quiero poder explorar los archivos de la nube cuando
++   abro». La de la nube es la mas ancha porque es la unica que lleva buscador y
++   ordenes. Abajo de 1040 px se apilan: tres columnas en una laptop angosta
++   dejan los nombres de los planos cortados, que es justo lo que se viene a
++   leer. */
++#inicio .cols{display:grid;grid-template-columns:minmax(190px,0.75fr) minmax(0,1fr) minmax(0,1.25fr);
++  gap:24px;align-items:start}
++#inicio .recientes,#inicio .ennube{min-width:0}
++#inicio .ennube[hidden]{display:none}
++@media (max-width:1040px){
++  #inicio .cols{grid-template-columns:minmax(0,1fr);gap:18px}
++  #inicio .lista,#inicio .nubecaja .nube-lista{max-height:168px}
++}
+ #inicio .acciones{display:grid;gap:10px}
+ #inicio .tarj{display:flex;align-items:center;gap:13px;text-align:left;padding:15px 16px;
+   background:var(--panel2);border:1px solid var(--linea);border-radius:9px;width:100%}
+@@ -615,9 +628,33 @@ footer .sel{color:var(--acc2)}
+ #inicio .tarj .txt{display:block}
+ #inicio .tarj b{display:block;font-size:13.5px}
+ #inicio .tarj small{display:block;font-size:11px;color:var(--txt3);margin-top:2px}
+-#inicio .recientes .hd{display:flex;align-items:center;font-size:11px;
++#inicio .recientes .hd,#inicio .ennube .hd{display:flex;align-items:center;font-size:11px;
+   letter-spacing:.12em;text-transform:uppercase;color:var(--txt3);font-weight:700;
+   padding:0 0 7px;border-bottom:1px solid var(--linea);margin-bottom:4px}
++/* La columna de la nube reusa las clases .nube-* del cuadro NUBE. Alla viven
++   dentro de un dialogo y aqui dentro del panel de inicio: cambian tamanos y
++   margenes, nunca la estructura, porque la estructura es lo que miden t050 y
++   t054. */
++#inicio .nubecaja .nube-barra{display:flex;gap:8px;align-items:center;flex-wrap:wrap;margin:6px 0 8px}
++#inicio .nubecaja .nube-busca{flex:1 1 140px;min-width:0;font:inherit;font-size:12px;
++  padding:6px 9px;border-radius:7px;border:1px solid var(--linea2);
++  background:var(--panel2);color:var(--txt)}
++#inicio .nubecaja .nube-ordenes{display:flex;gap:2px;flex-wrap:wrap}
++#inicio .nubecaja .nube-ordenes .gh{font-size:10.5px;padding:3px 6px;border-radius:6px}
++#inicio .nubecaja .nube-aviso{font-size:11px;line-height:1.45;color:var(--txt3);
++  background:var(--panel2);border-radius:7px;padding:7px 9px;margin-bottom:8px}
++#inicio .nubecaja .nube-lista{max-height:232px;overflow-y:auto}
++#inicio .nubecaja .nube-lista::-webkit-scrollbar{width:8px}
++#inicio .nubecaja .nube-lista::-webkit-scrollbar-thumb{background:var(--sw);border-radius:5px}
++#inicio .nubecaja .nube-vacio{font-size:11.5px;color:var(--txt3);padding:14px 2px}
++#inicio .nubecaja .nube-fila{display:grid;grid-template-columns:minmax(0,1fr) auto;
++  gap:1px 8px;align-items:center;padding:7px 8px;border-radius:8px}
++#inicio .nubecaja .nube-fila:hover{background:var(--panel2)}
++#inicio .nubecaja .nube-nom{font-size:12.5px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
++#inicio .nubecaja .nube-dat{grid-column:1;font-size:10.5px;color:var(--txt3);
++  overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
++#inicio .nubecaja .nube-fila>.gh{grid-column:2;grid-row:1/3;font-size:11px;padding:4px 9px;align-self:center}
++#inicio .nubecaja .nube-fila.ilegible .nube-nom{color:var(--txt3);font-style:italic}
+ #inicio .recientes .limpiar{margin-left:auto;background:transparent;border:none;
+   padding:0;font-size:10px;color:var(--txt3);text-transform:none;letter-spacing:0}
+ #inicio .recientes .limpiar:hover{color:var(--acc2);background:transparent}

@@ -1,0 +1,90 @@
+diff --git a/ui/marco.js b/ui/marco.js
+index 7ee81bf..e30e638 100644
+--- a/ui/marco.js
++++ b/ui/marco.js
+@@ -217,6 +217,40 @@ const Marco = (() => {
+     }
+   }
+ 
++  /* La columna de la nube  ·  0.22.2
++   *
++   * No se reimplementa aqui: se monta la MISMA lista del cuadro NUBE (ver
++   * Nube.explorador). El buscador sin acentos, las palabras en cualquier
++   * orden, los cuatro ordenes y los cinco avisos son trabajo ya medido; una
++   * segunda copia habria nacido sin nada de eso.
++   *
++   * SE MONTA AL ABRIR Y SE SUELTA AL CERRAR, y no una sola vez al arrancar,
++   * por dos razones: la lista se refresca sola cada vez que uno vuelve a la
++   * pantalla, y una respuesta del servidor que llega tarde no pinta sobre una
++   * pantalla que ya se cerro.
++   *
++   * SI LA VERSION NO TRAE NUBE la columna no sale en vez de salir vacia: una
++   * columna titulada «En la nube» y siempre en blanco se lee como que la nube
++   * esta rota. */
++  let expNube = null;
++
++  function montarNube() {
++    const host = $("#iNube");
++    const col = $("#iEnNube");
++    if (!host || !col) return;
++    if (!(window.Nube && Nube.explorador)) { col.hidden = true; return; }
++    col.hidden = false;
++    soltarNube();
++    expNube = Nube.explorador(host);
++    // Sin await: la pantalla de inicio sale completa de inmediato y la lista
++    // se llena sola. Esperar a la red aqui seria mirar un hueco al arrancar.
++    Promise.resolve(expNube.cargar()).catch(() => {});
++  }
++
++  function soltarNube() {
++    if (expNube) { expNube.soltar(); expNube = null; }
++  }
++
+   function abrirInicio() {
+     const caja = $("#inicio");
+     if (!caja) return;
+@@ -227,11 +261,13 @@ const Marco = (() => {
+     const v = $("#iVersion");
+     if (v && estado.version) v.textContent = `versión ${estado.version.version}`;
+     pintarRecientes();
++    montarNube();
+   }
+ 
+   function cerrarInicio() {
+     const caja = $("#inicio");
+     if (caja) caja.classList.remove("on");
++    soltarNube();
+   }
+ 
+   const inicioAbierto = () => !!$("#inicio") && $("#inicio").classList.contains("on");
+diff --git a/ui/index.html b/ui/index.html
+index 3e98def..6fc1a53 100644
+--- a/ui/index.html
++++ b/ui/index.html
+@@ -46,6 +46,14 @@
+              title="Vaciar la lista">limpiar</button></div>
+         <div class="lista" id="iRecientes"></div>
+       </div>
++
++      <!-- La nube, con el mismo buscador y los mismos ordenes que el cuadro
++           NUBE: es el MISMO codigo montado aqui (ver Nube.explorador), no una
++           segunda copia. Si la version no trae nube, esta columna no sale. -->
++      <div class="ennube" id="iEnNube" hidden>
++        <div class="hd">En la nube</div>
++        <div class="nubecaja" id="iNube"></div>
++      </div>
+     </div>
+ 
+     <div class="pie">
+diff --git a/ui/idioma-en.js b/ui/idioma-en.js
+index 650db20..e0f799a 100644
+--- a/ui/idioma-en.js
++++ b/ui/idioma-en.js
+@@ -35,6 +35,7 @@ const IDIOMA_EN = {
+   "Traer de Taller 101…": "Import from Taller 101…",
+   "Un mueble .t101x ya despiezado": "A .t101x cabinet, already cut-listed",
+   "Recientes": "Recent", "limpiar": "clear",
++  "En la nube": "In the cloud",
+   "Los dibujos nuevos nacen en centímetros. El modelo se dibuja a 1:1.": "New drawings start in centimetres. The model is drawn at 1:1.",
+   "más": "more", "menos": "less",
+   "Ver más líneas de la consola (F2)": "Show more console lines (F2)",
