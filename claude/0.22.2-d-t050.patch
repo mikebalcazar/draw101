@@ -1,0 +1,133 @@
+diff --git a/pruebas/t050_nube_pantalla.py b/pruebas/t050_nube_pantalla.py
+index a7fe7e2..6538a66 100644
+--- a/pruebas/t050_nube_pantalla.py
++++ b/pruebas/t050_nube_pantalla.py
+@@ -38,6 +38,16 @@ from __future__ import annotations
+ 
+ from pruebas import comun, navegador
+ 
++# TODO LO QUE SE BUSCA AQUI VA ACOTADO A `.dlg.nube`, y no es cosmetico.
++#
++# Desde la 0.22.2 la pantalla de inicio monta OTRA lista de la nube, con las
++# mismas clases (es el mismo codigo: Nube.explorador). `#inicio` va primero en
++# el index.html, asi que un `document.querySelector('.nube-fila')` a secas
++# encontraria la de la pantalla de inicio y no la de este cuadro — y esta
++# prueba habria seguido en verde midiendo la pantalla equivocada. Cerrar la
++# pantalla de inicio no basta: cerrarla solo le quita una clase, su HTML se
++# queda en el documento.
++#
+ DESCRIPCION = "«Mis archivos en la nube»: buscar sin acentos, cuatro órdenes, y sin pedirle nada al servidor"
+ 
+ 
+@@ -62,8 +72,8 @@ LISTA = """[
+ ]"""
+ 
+ 
+-POR = "() => { const a = document.querySelector('.nube-aviso'); return a.hidden ? null : (a.dataset.por || ''); }"
+-TEXTO_AVISO = "() => { const a = document.querySelector('.nube-aviso'); return a.hidden ? '' : a.textContent; }"
++POR = "() => { const a = document.querySelector('.dlg.nube .nube-aviso'); return a.hidden ? null : (a.dataset.por || ''); }"
++TEXTO_AVISO = "() => { const a = document.querySelector('.dlg.nube .nube-aviso'); return a.hidden ? '' : a.textContent; }"
+ 
+ 
+ def correr(r: comun.Reporte) -> None:
+@@ -107,8 +117,8 @@ def correr(r: comun.Reporte) -> None:
+         r.igual(pagina.evaluate("() => window.espia.indiceBajar"), 1,
+                 "y la red una sola vez, después")
+ 
+-        filas = "() => [...document.querySelectorAll('.nube-fila .nube-nom')].map(n => n.textContent)"
+-        r.igual(pagina.evaluate("() => [...document.querySelectorAll('.nube-ordenes .gh')].map(b => b.dataset.orden)"),
++        filas = "() => [...document.querySelectorAll('.dlg.nube .nube-fila .nube-nom')].map(n => n.textContent)"
++        r.igual(pagina.evaluate("() => [...document.querySelectorAll('.dlg.nube .nube-ordenes .gh')].map(b => b.dataset.orden)"),
+                 ["modificado", "creado", "nombre", "aperturas"],
+                 "están los cuatro órdenes que pidió Mike: modificación, creación, nombre y frecuencia de uso")
+         r.igual(len(pagina.evaluate(filas)), 4, "salen los cuatro renglones")
+@@ -116,37 +126,37 @@ def correr(r: comun.Reporte) -> None:
+         # 2 · BUSCAR. Los dos detalles que hacen que un buscador se sienta roto.
+         antes = pagina.evaluate("() => window.espia.indiceBajar + window.espia.indiceYa")
+ 
+-        pagina.fill(".nube-busca", "ramirez")
++        pagina.fill(".dlg.nube .nube-busca", "ramirez")
+         pagina.wait_for_timeout(120)
+         hay = pagina.evaluate(filas)
+         r.igual(hay, ["Cocina Ramírez"],
+                 "escribir «ramirez» SIN ACENTO encuentra «Ramírez»")
+ 
+-        pagina.fill(".nube-busca", "ruiz cocina")
++        pagina.fill(".dlg.nube .nube-busca", "ruiz cocina")
+         pagina.wait_for_timeout(120)
+         r.igual(pagina.evaluate(filas), [],
+                 "«ruiz cocina» no encuentra nada, porque no hay ningún plano con las dos")
+ 
+-        pagina.fill(".nube-busca", "ruiz baño")
++        pagina.fill(".dlg.nube .nube-busca", "ruiz baño")
+         pagina.wait_for_timeout(120)
+         r.igual(pagina.evaluate(filas), ["Baño Ruiz etapa 2"],
+                 "y las palabras EN CUALQUIER ORDEN sí: «ruiz baño» encuentra «Baño Ruiz etapa 2»")
+ 
+-        pagina.fill(".nube-busca", "ruiz")
++        pagina.fill(".dlg.nube .nube-busca", "ruiz")
+         pagina.wait_for_timeout(120)
+         r.igual(len(pagina.evaluate(filas)), 2, "«ruiz» encuentra los dos de Ruiz")
+ 
+-        pagina.fill(".nube-busca", "zzzz")
++        pagina.fill(".dlg.nube .nube-busca", "zzzz")
+         pagina.wait_for_timeout(120)
+         r.igual(pagina.evaluate(filas), [], "y algo que no está no encuentra nada")
+-        r.cierto(pagina.evaluate("() => !!document.querySelector('.nube-vacio')"),
++        r.cierto(pagina.evaluate("() => !!document.querySelector('.dlg.nube .nube-vacio')"),
+                  "con un renglón que lo dice, en vez de quedarse en blanco")
+ 
+         # LA COMPROBACIÓN QUE IMPORTA de esta parte: nada de eso tocó el servidor.
+         r.igual(pagina.evaluate("() => window.espia.indiceBajar + window.espia.indiceYa"), antes,
+                 "y BUSCAR NO LE PIDIÓ NADA AL SERVIDOR: se filtra aquí, con los nombres ya descifrados")
+ 
+-        pagina.fill(".nube-busca", "")
++        pagina.fill(".dlg.nube .nube-busca", "")
+         pagina.wait_for_timeout(120)
+         r.igual(len(pagina.evaluate(filas)), 4, "al borrar la búsqueda vuelven los cuatro")
+ 
+@@ -156,7 +166,7 @@ def correr(r: comun.Reporte) -> None:
+         # fallaría con la interfaz en inglés sin que nada esté mal. Ya pasó.
+         def picar(clave: str) -> None:
+             pagina.evaluate("""(clave) => {
+-                const b = document.querySelector('.nube-ordenes .gh[data-orden="' + clave + '"]');
++                const b = document.querySelector('.dlg.nube .nube-ordenes .gh[data-orden="' + clave + '"]');
+                 if (!b) throw new Error('no hay botón de orden ' + clave);
+                 b.click();
+             }""", clave)
+@@ -168,7 +178,7 @@ def correr(r: comun.Reporte) -> None:
+ 
+         # El renglón ilegible se identifica por su clase y no por su etiqueta,
+         # que está traducida.
+-        clases = "() => [...document.querySelectorAll('.nube-fila')].map(f => f.classList.contains('ilegible'))"
++        clases = "() => [...document.querySelectorAll('.dlg.nube .nube-fila')].map(f => f.classList.contains('ilegible'))"
+ 
+         picar("nombre")
+         r.igual(pagina.evaluate(filas)[:3], ["Baño Ruiz etapa 2", "Closet Ruiz", "Cocina Ramírez"],
+@@ -207,7 +217,7 @@ def correr(r: comun.Reporte) -> None:
+         }"""), "no hay carpetas en la pantalla: todos los planos juntos, como se pidió")
+ 
+         # 5 · Abrir uno baja ese archivo y lo abre por la puerta de siempre.
+-        pagina.evaluate("""() => { [...document.querySelectorAll('.nube-fila')]
++        pagina.evaluate("""() => { [...document.querySelectorAll('.dlg.nube .nube-fila')]
+             .find((f) => f.querySelector('.nube-nom').textContent === 'Closet Ruiz')
+             .querySelector('button').click(); }""")
+         pagina.wait_for_timeout(300)
+@@ -222,7 +232,7 @@ def correr(r: comun.Reporte) -> None:
+         navegador.comando(pagina, "NUBE")
+         pagina.wait_for_selector(".dlg.nube", timeout=4000)
+         pagina.wait_for_timeout(250)
+-        r.cierto(pagina.evaluate("""() => !!document.querySelector('.nube-fila.ilegible button')"""),
++        r.cierto(pagina.evaluate("""() => !!document.querySelector('.dlg.nube .nube-fila.ilegible button')"""),
+                  "el renglón con nombre ilegible sigue ahí, con su botón: se puede bajar igual")
+ 
+         # 7 · SIN INTERNET: se dice que la lista es de la última vez.
+@@ -274,7 +284,7 @@ def correr(r: comun.Reporte) -> None:
+         navegador.comando(pagina, "NUBE")
+         pagina.wait_for_selector(".dlg.nube", timeout=4000)
+         pagina.wait_for_timeout(250)
+-        pagina.evaluate("""() => { document.querySelector('.nube-fila button').click(); }""")
++        pagina.evaluate("""() => { document.querySelector('.dlg.nube .nube-fila button').click(); }""")
+         pagina.wait_for_timeout(300)
+         r.igual(pagina.evaluate("() => Nube.ultimoFallo"), "no_esta",
+                 "si el archivo ya no está en la nube, se distingue ESE motivo y no un «no se pudo» a secas")
