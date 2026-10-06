@@ -1,0 +1,256 @@
+diff --git a/ui/soltar.js b/ui/soltar.js
+new file mode 100644
+index 0000000..364a3cb
+--- /dev/null
++++ b/ui/soltar.js
+@@ -0,0 +1,225 @@
++/* Arrastrar un archivo sobre la ventana  ·  draw101 0.23.0
++ *
++ * Mike, 6-oct-2026: «Quiero poder arrastrar un archivo desde mi carpeta sobre
++ * la ventana de draw y que en automático draw lo abra o pregunte si lo quiere
++ * importar en el archivo actual o abrirlo».
++ *
++ * EL GUARDIA ES LA MITAD DEL TRABAJO, y no es comodidad: es un arreglo. Una
++ * ventana de Electron sin nadie que atienda el soltar NAVEGA al archivo. O sea
++ * que hasta hoy, arrastrar un DWG sobre draw101 se llevaba la aplicación y
++ * dejaba el archivo en su lugar, con el dibujo abierto y sin guardar adentro.
++ * Por eso el guardia va primero y por eso t055 lo mide aparte.
++ *
++ * LA RUTA, EN ELECTRON 33. `File.path` se quitó en Electron 32. La ruta real
++ * del archivo sólo la sabe el proceso principal, y se pregunta por el puente
++ * (`window.t101.rutaDe`, que llama a `webUtils.getPathForFile`). Sin eso, lo
++ * único que llega a la página es el nombre, y con el nombre no se abre nada.
++ *
++ * CUÁNDO SE PREGUNTA Y CUÁNDO NO, que es la otra mitad:
++ *
++ *   · Un .t101x es una cocina de Taller 101: lo único que se puede hacer con él
++ *     es traerlo. Un PDF es para calcar encima. Ninguno de los dos abre un
++ *     dibujo, así que preguntar sería un cuadro con una sola respuesta.
++ *   · Un plano sobre un dibujo EN BLANCO se abre y ya. No hay nada que perder
++ *     ni con qué mezclarlo.
++ *   · Un plano sobre un dibujo con trabajo: AHÍ sí se pregunta, y es la única
++ *     vez. Tres salidas en un solo cuadro —abrir, bloque, suelto— y no dos
++ *     cuadros seguidos: la decisión es la misma y el clic de más no agrega
++ *     control, nada más cansa.
++ *   · Varios archivos de un jalón se abren en pestañas, sin preguntar. Quien
++ *     suelta cinco planos los quiere ver, no mezclarlos; y cinco cuadros
++ *     seguidos se contestan sin leer, que es justo lo que hay que evitar.
++ */
++
++const Soltar = (() => {
++  const T = () => (typeof Idioma !== "undefined" && Idioma.ingles);
++
++  const PLANOS = ["t101d", "dwg", "dxf"];
++  const PROPIOS = ["t101x"];
++  const FONDOS = ["pdf"];
++  const TODOS = [...PLANOS, ...PROPIOS, ...FONDOS];
++
++  const ext = (ruta) => String(ruta || "").split(".").pop().toLowerCase();
++  const soloNombre = (ruta) => String(ruta || "").split(/[\\/]/).pop();
++
++  let capa = null;            // el letrero que se ve mientras algo viene cayendo
++
++  /* --- el letrero ------------------------------------------------------- */
++
++  function mostrar(si) {
++    if (si && !capa) {
++      capa = document.createElement("div");
++      capa.id = "soltar-aqui";
++      capa.innerHTML = `<div class="marco"><b></b><small></small></div>`;
++      capa.querySelector("b").textContent = T() ? "Drop it here" : "Suelta aquí";
++      capa.querySelector("small").textContent = T()
++        ? "Drawing (.t101d, DWG, DXF), Taller 101 cabinet (.t101x) or PDF"
++        : "Plano (.t101d, DWG, DXF), mueble de Taller 101 (.t101x) o PDF";
++      document.body.appendChild(capa);
++    } else if (!si && capa) {
++      capa.remove();
++      capa = null;
++    }
++  }
++
++  /* --- qué hacer con cada tipo ------------------------------------------ */
++
++  async function unPlano(ruta) {
++    const en = T();
++    // En blanco no hay nada que decidir: se abre. Un cuadro aquí sería un
++    // cuadro en la cara cada vez que alguien arranca y suelta su plano.
++    const enBlanco = !(window.Marco && Marco.enBlanco) || Marco.enBlanco();
++    if (enBlanco) {
++      await Archivo.abrir(ruta);
++      return "abrio_en_blanco";
++    }
++
++    const v = await Dialogo.abrir({
++      titulo: en ? `What to do with “${soloNombre(ruta)}”` : `Qué hacer con «${soloNombre(ruta)}»`,
++      pista: en
++        ? "You already have a drawing open with work in it."
++        : "Ya tienes un dibujo abierto con trabajo adentro.",
++      campos: [
++        { clave: "que", etiqueta: en ? "What to do" : "Qué hacer", tipo: "lista", valor: "abrir",
++          opciones: en ? [
++            ["abrir", "Open it in a new tab"],
++            ["bloque", "Bring it into this drawing, as one block"],
++            ["suelto", "Bring it into this drawing, loose"],
++          ] : [
++            ["abrir", "Abrirlo en una pestaña nueva"],
++            ["bloque", "Traerlo a este dibujo, como un bloque"],
++            ["suelto", "Traerlo a este dibujo, suelto"],
++          ] },
++      ],
++      aceptar: en ? "Continue" : "Continuar",
++    });
++
++    // Cancelar no hace nada. Es lo único que no puede salir mal.
++    if (!v) return "cancelo";
++
++    if (v.que === "abrir") {
++      await Archivo.abrir(ruta);
++      return "abrio";
++    }
++
++    const r = await post("/api/importar-plano", { ruta, como: v.que });
++    aplicar(r);
++    await recargarTrazos();
++
++    if (v.que === "suelto") {
++      Comandos.eco(`${r.entidades} entidades y ${r.capas} capa(s) de «${soloNombre(ruta)}».`, "bien");
++      avisar(en
++        ? `Brought in loose: ${r.entidades} entities. Ctrl+Z undoes the whole import.`
++        : `Entró suelto: ${r.entidades} entidades. Ctrl+Z deshace la importación entera.`,
++        false, 10000);
++      encuadrar();
++      return "suelto";
++    }
++
++    // Como bloque: el motor sólo lo definió. Colocarlo es el INSERTAR de
++    // siempre, para que pase por el mismo camino medido.
++    Comandos.eco(`Bloque «${r.bloque}»: ${r.entidades} entidades.`, "bien");
++    const p = await Entrada.pedirPunto({
++      mensaje: en ? `Where does “${r.bloque}” go?` : `¿Dónde va «${r.bloque}»?` });
++    if (!p) {
++      avisar(en
++        ? `“${r.bloque}” is defined as a block. Place it any time with INSERTAR.`
++        : `«${r.bloque}» quedó definido como bloque. Lo colocas cuando quieras con INSERTAR.`,
++        false, 9000);
++      return "bloque_sin_colocar";
++    }
++    aplicar(await post("/api/insertar", { nombre: r.bloque, p, escala: 1, rotacion: 0 }));
++    await recargarTrazos();
++    return "bloque";
++  }
++
++  async function uno(ruta) {
++    const en = T();
++    const e = ext(ruta);
++    if (PROPIOS.includes(e)) { await window.traerT101x(ruta); return "t101x"; }
++    if (FONDOS.includes(e)) { await window.traerPdfFondo(ruta); return "pdf"; }
++    if (PLANOS.includes(e)) return await unPlano(ruta);
++    // Se dice QUÉ se puede soltar, no sólo que eso no. Un «no se puede» a secas
++    // deja a alguien probando archivos a ver cuál pega.
++    avisar(en
++      ? `draw101 can't open “${soloNombre(ruta)}”. Drop a drawing (.t101d, DWG, DXF), a Taller 101 cabinet (.t101x) or a PDF.`
++      : `draw101 no puede abrir «${soloNombre(ruta)}». Suelta un plano (.t101d, DWG, DXF), un mueble de Taller 101 (.t101x) o un PDF.`,
++      true, 11000);
++    return "no_se_puede";
++  }
++
++  let ultimo = null;          // lo que hizo el último soltar, para medirlo
++
++  async function recibir(rutas) {
++    const en = T();
++    const buenas = rutas.filter((r) => TODOS.includes(ext(r)));
++    if (!rutas.length) return;
++
++    if (rutas.length > 1) {
++      // Varios: se abren todos. Los que no se pueden abrir se dicen juntos, en
++      // un solo aviso, y no uno por archivo.
++      const planos = rutas.filter((r) => PLANOS.includes(ext(r)));
++      const fuera = rutas.filter((r) => !PLANOS.includes(ext(r)));
++      for (const r of planos) {
++        // `Archivo.abrir` ya decide sola: en blanco abre en su lugar y si no,
++        // en pestaña nueva. Pasarle nada es lo correcto.
++        try { await Archivo.abrir(r); }
++        catch (e) { avisar(e.message, true, 9000); }
++      }
++      if (fuera.length) {
++        avisar(en
++          ? `Dropped several files: only drawings open in tabs. Left out: ${fuera.map(soloNombre).join(", ")}.`
++          : `Soltaste varios: en pestañas sólo se abren planos. Quedaron fuera: ${fuera.map(soloNombre).join(", ")}.`,
++          true, 11000);
++      }
++      ultimo = "varios";
++      return;
++    }
++
++    try { ultimo = await uno(rutas[0]); }
++    catch (e) { ultimo = "error"; avisar(e.message, true, 11000); }
++  }
++
++  /* --- el guardia y los eventos ----------------------------------------- */
++
++  function conectar() {
++    // EL GUARDIA. `preventDefault` en los cuatro: si falta en `dragover`, el
++    // `drop` ni siquiera llega, y si falta en `drop`, la ventana navega al
++    // archivo y se lleva la aplicación. Van en `window` y en captura para que
++    // ningún trozo de la interfaz pueda quedarse sin ellos.
++    for (const ev of ["dragenter", "dragover", "dragleave", "drop"]) {
++      window.addEventListener(ev, (e) => { e.preventDefault(); e.stopPropagation(); }, true);
++    }
++
++    let dentro = 0;
++    window.addEventListener("dragenter", (e) => {
++      if (![...(e.dataTransfer?.types || [])].includes("Files")) return;
++      dentro++; mostrar(true);
++    }, true);
++    window.addEventListener("dragleave", () => { dentro = Math.max(0, dentro - 1); if (!dentro) mostrar(false); }, true);
++
++    window.addEventListener("drop", async (e) => {
++      dentro = 0; mostrar(false);
++      const fs = [...(e.dataTransfer?.files || [])];
++      if (!fs.length) return;
++      if (!(window.t101 && window.t101.rutaDe)) {
++        avisar(T()
++          ? "Dragging files in only works from the installed app."
++          : "Arrastrar archivos sólo funciona desde la aplicación instalada.", true, 9000);
++        return;
++      }
++      const rutas = fs.map((f) => window.t101.rutaDe(f)).filter(Boolean);
++      if (!rutas.length) {
++        avisar(T() ? "Couldn't read where that file is."
++                   : "No se pudo saber dónde está ese archivo.", true, 9000);
++        return;
++      }
++      await recibir(rutas);
++    }, true);
++  }
++
++  return { conectar, recibir, _ultimo: () => ultimo, _ext: ext };
++})();
++
++window.Soltar = Soltar;
++Soltar.conectar();
+diff --git a/electron/preload.js b/electron/preload.js
+index 7654d4b..32436ef 100644
+--- a/electron/preload.js
++++ b/electron/preload.js
+@@ -1,11 +1,19 @@
+ /* Puente entre la interfaz y Electron. Lo mínimo, y nada de Node en la página. */
+ 
+-const { contextBridge, ipcRenderer } = require("electron");
++const { contextBridge, ipcRenderer, webUtils } = require("electron");
+ 
+ contextBridge.exposeInMainWorld("t101", {
+   abrir: (filtros) => ipcRenderer.invoke("dialogo-abrir", filtros),
+   guardar: (filtros, sugerido) => ipcRenderer.invoke("dialogo-guardar", filtros, sugerido),
+   archivoInicial: () => ipcRenderer.invoke("archivo-inicial"),
++  // La ruta real de un archivo SOLTADO en la ventana  ·  6-oct-2026.
++  // Electron 32 quitó `File.path`, que es como se hacía antes y como lo explica
++  // medio internet. Lo que llega a la página es un File sin ruta; la ruta sólo
++  // la sabe el proceso principal, y se pregunta aquí. Sin esto, soltar un
++  // archivo da su nombre y nada más, y con el nombre no se abre nada.
++  rutaDe: (archivo) => {
++    try { return webUtils.getPathForFile(archivo) || ""; } catch (_) { return ""; }
++  },
+   abrirArchivo: (ruta) => ipcRenderer.invoke("abrir-con-sistema", ruta),
+   imprimirPDF: (ruta, opciones) => ipcRenderer.invoke("imprimir-pdf", ruta, opciones),
+   imprimirHTML: (html, opciones) => ipcRenderer.invoke("imprimir-html", html, opciones),
