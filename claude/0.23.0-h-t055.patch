@@ -1,0 +1,239 @@
+diff --git a/pruebas/t055_soltar_e_importar.py b/pruebas/t055_soltar_e_importar.py
+new file mode 100644
+index 0000000..0c4e989
+--- /dev/null
++++ b/pruebas/t055_soltar_e_importar.py
+@@ -0,0 +1,233 @@
++"""t055 · Soltar un archivo en la ventana, y traer un plano al dibujo abierto.
++
++Mike, 6-oct-2026: «Quiero poder arrastrar un archivo desde mi carpeta sobre la
++ventana de draw y que en automático draw lo abra o pregunte si lo quiere
++importar en el archivo actual o abrirlo».
++
++LO PRIMERO QUE MIDE ESTA PRUEBA ES UN ARREGLO, NO UNA COMODIDAD. Una ventana de
++Electron sin nadie que atienda el soltar NAVEGA al archivo: la aplicación se va
++y queda el archivo en su lugar, con el dibujo sin guardar adentro. Hasta hoy
++draw101 no tenía ese guardia. Por eso se mide aparte y primero: si algún día se
++quita el módulo, lo que se rompe no es arrastrar, es el programa.
++
++CUÁNDO SE PREGUNTA Y CUÁNDO NO es la otra mitad del trabajo, y la que decide si
++esto se siente bien o estorba:
++
++  · Un .t101x sólo se puede traer y un PDF sólo se puede poner de fondo: un
++    cuadro con una sola respuesta es un cuadro de más.
++  · Un plano sobre un dibujo EN BLANCO se abre. No hay nada que perder.
++  · Un plano sobre un dibujo CON TRABAJO: ahí sí, y es la única vez.
++  · Varios archivos de un jalón: pestañas, sin preguntar. Cinco cuadros
++    seguidos se contestan sin leer.
++
++Y EN EL MOTOR, lo que de verdad cuesta de importar un plano ajeno:
++
++  · LAS UNIDADES. Un plano en metros traído a un dibujo en centímetros tiene que
++    llegar midiendo lo mismo. Es el mismo problema que arregló core/unidades.py
++    el mismo día, y por eso esta prueba lo vuelve a medir desde este otro lado.
++  · LOS NOMBRES QUE CHOCAN. Dos planos tienen los dos una capa «0» y pueden
++    tener los dos un bloque «PUERTA» que no se parecen en nada.
++  · QUE NO SE PISE NADA DE QUIEN RECIBE: su capa «MUROS» conserva su color.
++
++VERIFICADA ROMPIENDO EL CÓDIGO, con los números medidos:
++
++  · quitando el guardia del soltar → 2, y el mensaje dice lo que se rompe;
++  · preguntando siempre, aun con el dibujo en blanco → 2;
++  · sin renombrar los bloques que chocan → 3, y la puerta importada se dibuja
++    con la geometría de la del destino (0.9 donde debía decir 7);
++  · sin escalar por unidades → 4, y el muro de 10 m llega midiendo 100 mm.
++"""
++
++from __future__ import annotations
++
++import pathlib
++
++from core import importar as mod_importar
++from core.documento import Documento
++from core.dxf_lector import leer
++from pruebas import comun, navegador
++
++DESCRIPCION = "soltar un archivo en la ventana, y traer un plano al dibujo abierto"
++
++
++def _plano_en_metros(carpeta: pathlib.Path) -> pathlib.Path:
++    """Un DXF honesto en metros, con una capa y un bloque propios."""
++    import ezdxf
++    f = carpeta / "del-arquitecto.dxf"
++    d = ezdxf.new("R2013")
++    d.header["$INSUNITS"] = 6                      # metros
++    d.layers.add("MUROS", color=1)
++    bl = d.blocks.new(name="PUERTA")
++    bl.add_line((0, 0), (0.9, 0))                  # 90 cm de puerta
++    ms = d.modelspace()
++    ms.add_line((0, 0), (10, 0), dxfattribs={"layer": "MUROS"})   # 10 m
++    ms.add_line((0, 0), (0, 4))
++    ms.add_blockref("PUERTA", (2, 0))
++    d.saveas(str(f))
++    return f
++
++
++def _motor(r: comun.Reporte) -> None:
++    with comun.carpeta() as tmp:
++        otro, _ = leer(_plano_en_metros(tmp))
++        r.igual(otro.unidades, "m", "CONTROL · el plano de prueba llega en metros")
++
++        # --- 1. Las unidades, que es lo que más duele si sale mal ---------
++        for como in ("bloque", "suelto"):
++            dest = Documento.nuevo()                    # nace en centímetros
++            res = (mod_importar.como_bloque if como == "bloque" else mod_importar.suelto)(
++                dest, otro, "del-arquitecto", "x")
++            if como == "bloque":
++                cuerpo = dest.bloques[res["bloque"]].entidades
++            else:
++                cuerpo = [e for e in dest.entidades.values()]
++            largo = max(abs(e.p2[0] - e.p1[0]) for e in cuerpo if e.tipo == "linea")
++            r.casi(largo * dest.mm_por_unidad(), 10000,
++                   f"«{como}»: el muro de 10 m llega midiendo 10 m de verdad", 1e-3)
++            r.casi(largo, 1000,
++                   f"«{como}»: y en un dibujo en centímetros eso se escribe 1 000", 1e-3)
++
++        # --- 2. Las capas: entran las que faltan, no se pisa lo que hay ---
++        dest = Documento.nuevo()
++        with dest.transaccion("suyo"):
++            from core import capas as mod_capas
++            dest.capas["MUROS"] = mod_capas.Capa(nombre="MUROS", color="#00FF00", grosor=50)
++        mod_importar.suelto(dest, otro, "del-arquitecto", "x")
++        # Pisarle a alguien su capa porque el archivo que importó traía otra con
++        # el mismo nombre es cambiarle el dibujo sin pedírselo.
++        r.igual(dest.capas["MUROS"].color, "#00FF00",
++                "la capa «MUROS» que YA tenía el dibujo conserva su color")
++        r.igual(dest.capas["MUROS"].grosor, 50, "y su grosor")
++
++        # --- 3. Los bloques que chocan -----------------------------------
++        dest = Documento.nuevo()
++        from core.entidades import Bloque, Linea
++        dest.bloque_agregar(Bloque(nombre="PUERTA", base=[0, 0],
++                                   entidades=[Linea(p1=[0, 0], p2=[7, 0])]))
++        mod_importar.suelto(dest, otro, "del-arquitecto", "x")
++        r.igual(len(dest.bloques["PUERTA"].entidades), 1,
++                "CONTROL · el bloque «PUERTA» que ya existía sigue siendo el suyo")
++        r.casi(abs(dest.bloques["PUERTA"].entidades[0].p2[0]), 7,
++               "y con su propia geometría, no la del plano que llegó", 1e-6)
++        r.cierto(any(n != "PUERTA" and n.startswith("PUERTA") for n in dest.bloques),
++                 "y el que llegó entra con otro nombre, en vez de pisarlo")
++        # Sin `[0]` a pelo: si no hubo renombre, la comprobación de arriba ya
++        # falló y ésta tiene que DECIRLO, no reventar. Una prueba que lanza una
++        # excepción se come el armado entero en vez de contar qué pasó.
++        otros = [n for n in dest.bloques if n != "PUERTA" and n.startswith("PUERTA")]
++        ins = [e for e in dest.entidades.values() if e.tipo == "insercion"]
++        # Si no, la puerta importada se dibujaría con la del dibujo de destino.
++        r.igual([e.bloque for e in ins], otros[:1],
++                "y la inserción que lo usaba apunta al nombre nuevo")
++
++        # --- 4. Las hojas del otro plano no se traen ----------------------
++        dest = Documento.nuevo()
++        hojas_antes = len(dest.layouts or [])
++        mod_importar.suelto(dest, otro, "del-arquitecto", "x")
++        r.igual(len(dest.layouts or []), hojas_antes,
++                "no se traen las hojas del otro plano: se importa el dibujo, no su papel")
++
++
++def _pantalla(r: comun.Reporte) -> None:
++    if not navegador.hay_navegador():
++        r.cierto(True, "(sin Playwright en esta máquina: se salta la parte de pantalla)")
++        return
++
++    with navegador.programa() as (pagina, base):
++        navegador.cerrar_inicio(pagina)
++
++        # --- EL GUARDIA, que es un arreglo y no una comodidad -------------
++        # Sin él, la ventana navega al archivo soltado y la aplicación se va.
++        for ev in ("dragover", "drop"):
++            prevenido = pagina.evaluate(f"""() => {{
++                const e = new DragEvent({ev!r}, {{ bubbles: true, cancelable: true }});
++                window.dispatchEvent(e);
++                return e.defaultPrevented;
++            }}""")
++            r.cierto(prevenido,
++                     f"«{ev}» queda atendido: la ventana no navega al archivo soltado",
++                     "sin esto, arrastrar un DWG sobre draw101 se lleva la aplicación")
++
++        r.cierto(pagina.evaluate("() => typeof Soltar === 'object' && !!Soltar.recibir"),
++                 "el módulo de soltar está cargado")
++
++        # Un puente de mentiras para ver A DÓNDE va cada tipo, sin archivos.
++        pagina.evaluate("""() => {
++            window.fue = [];
++            window.traerT101x = async (ruta) => { window.fue.push(['t101x', ruta]); };
++            window.traerPdfFondo = async (ruta) => { window.fue.push(['pdf', ruta]); };
++            Archivo.abrir = async (ruta) => { window.fue.push(['abrir', ruta]); };
++            window.cuadros = 0;
++            window.respuesta = null;
++            Dialogo.abrir = async () => { window.cuadros++; return window.respuesta; };
++            window.Marco = window.Marco || {};
++            Marco.enBlanco = () => window.blanco;
++        }""")
++
++        # --- 1. Los que no tienen nada que preguntar ---------------------
++        pagina.evaluate("() => { window.blanco = false; window.fue = []; window.cuadros = 0; }")
++        pagina.evaluate("(rs) => window.Soltar.recibir(rs)", ["C:/x/cocina.t101x"])
++        pagina.wait_for_timeout(260)
++        r.igual(pagina.evaluate("() => window.fue"), [["t101x", "C:/x/cocina.t101x"]],
++                "un .t101x se trae, aunque haya trabajo abierto")
++        r.igual(pagina.evaluate("() => window.cuadros"), 0,
++                "y NO se pregunta: traerlo es lo único que se puede hacer con él")
++
++        pagina.evaluate("() => { window.fue = []; window.cuadros = 0; }")
++        pagina.evaluate("(rs) => window.Soltar.recibir(rs)", ["C:/x/plano.pdf"])
++        pagina.wait_for_timeout(260)
++        r.igual(pagina.evaluate("() => window.fue"), [["pdf", "C:/x/plano.pdf"]],
++                "un PDF va de fondo para calcar encima")
++        r.igual(pagina.evaluate("() => window.cuadros"), 0, "y tampoco se pregunta")
++
++        # --- 2. Un plano sobre un dibujo EN BLANCO: se abre --------------
++        pagina.evaluate("() => { window.blanco = true; window.fue = []; window.cuadros = 0; }")
++        pagina.evaluate("(rs) => window.Soltar.recibir(rs)", ["C:/x/casa.dwg"])
++        pagina.wait_for_timeout(260)
++        r.igual(pagina.evaluate("() => window.fue"), [["abrir", "C:/x/casa.dwg"]],
++                "un plano sobre un dibujo en blanco se abre")
++        # Un cuadro aquí sería un cuadro en la cara cada vez que alguien arranca.
++        r.igual(pagina.evaluate("() => window.cuadros"), 0,
++                "CONTROL · y NO sale el cuadro: no hay nada que decidir")
++
++        # --- 3. Un plano sobre un dibujo CON TRABAJO: ahí sí se pregunta --
++        pagina.evaluate("""() => { window.blanco = false; window.fue = []; window.cuadros = 0;
++                                   window.respuesta = { que: 'abrir' }; }""")
++        pagina.evaluate("(rs) => window.Soltar.recibir(rs)", ["C:/x/casa.dwg"])
++        pagina.wait_for_timeout(260)
++        r.igual(pagina.evaluate("() => window.cuadros"), 1,
++                "con trabajo abierto SÍ se pregunta, y una sola vez")
++        r.igual(pagina.evaluate("() => window.fue"), [["abrir", "C:/x/casa.dwg"]],
++                "y «abrir» abre")
++
++        # Cancelar no hace nada. Es lo único que no puede salir mal.
++        pagina.evaluate("""() => { window.fue = []; window.cuadros = 0; window.respuesta = null; }""")
++        pagina.evaluate("(rs) => window.Soltar.recibir(rs)", ["C:/x/casa.dwg"])
++        pagina.wait_for_timeout(260)
++        r.igual(pagina.evaluate("() => window.fue"), [],
++                "cancelar el cuadro no abre ni importa nada")
++        r.igual(pagina.evaluate("() => Soltar._ultimo()"), "cancelo", "y queda dicho que se canceló")
++
++        # --- 4. Varios de un jalón: pestañas, sin preguntar --------------
++        pagina.evaluate("""() => { window.fue = []; window.cuadros = 0;
++                                   window.respuesta = { que: 'abrir' }; }""")
++        pagina.evaluate("(rs) => window.Soltar.recibir(rs)",
++                        ["C:/x/a.dwg", "C:/x/b.dxf", "C:/x/c.t101d"])
++        pagina.wait_for_timeout(360)
++        r.igual(pagina.evaluate("() => window.fue.length"), 3, "tres planos se abren los tres")
++        # Cinco cuadros seguidos se contestan sin leer, que es lo que hay que evitar.
++        r.igual(pagina.evaluate("() => window.cuadros"), 0,
++                "y no se pregunta por cada uno")
++
++        # --- 5. Un tipo que draw101 no abre ------------------------------
++        pagina.evaluate("() => { window.fue = []; window.cuadros = 0; }")
++        pagina.evaluate("(rs) => window.Soltar.recibir(rs)", ["C:/x/contrato.docx"])
++        pagina.wait_for_timeout(260)
++        r.igual(pagina.evaluate("() => window.fue"), [], "un .docx no hace nada")
++        r.igual(pagina.evaluate("() => Soltar._ultimo()"), "no_se_puede",
++                "y se dice, con la lista de lo que sí se puede soltar")
++
++
++def correr(r: comun.Reporte) -> None:
++    _motor(r)
++    _pantalla(r)
