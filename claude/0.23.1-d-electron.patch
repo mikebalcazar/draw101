@@ -1,0 +1,69 @@
+diff --git a/electron/main.js b/electron/main.js
+index 97623ce..f204f57 100644
+--- a/electron/main.js
++++ b/electron/main.js
+@@ -540,6 +540,16 @@ function cerrarSesionMotor() {
+ }
+ 
+ let cerrandoBien = false;
++let devolviendoNube = false;
++
++/* Cuánto se le espera a la nube al salir sin guardar  ·  0.23.1.
++ *
++ * SALIR NUNCA SE PUEDE QUEDAR COLGADO. Si la nube no contesta en este tiempo,
++ * la ventana se cierra igual: el usuario pidió salir, no pidió esperar. Lo que
++ * se pierde es que la copia de la nube se queda siendo el autoguardado — y eso
++ * NO queda en silencio, porque el archivo lleva la marca por dentro y draw101
++ * lo dice al abrirlo (ver core/proyecto.py y ui/app.js). */
++const TOPE_DEVOLVER_NUBE = 4000;
+ 
+ async function salirBien() {
+   if (cerrandoBien) return;
+@@ -549,6 +559,9 @@ async function salirBien() {
+ }
+ 
+ ipcMain.on("cerrar", (_e, sucio) => {
++  // Si ya se está saliendo —esperando a que la nube vuelva al último guardado—
++  // volver a picar la X no vuelve a preguntar: se sale.
++  if (devolviendoNube) { salirBien(); return; }
+   // `sucio` puede ser un número (cuántos dibujos tienen cambios) o un booleano.
+   const n = typeof sucio === "number" ? sucio : (sucio ? 1 : 0);
+   if (n > 0) {
+@@ -561,6 +574,21 @@ ipcMain.on("cerrar", (_e, sucio) => {
+     });
+     if (eleccion === 2) return;
+     if (eleccion === 0) { ventana.webContents.send("guardar-y-salir"); return; }
++
++    /* «SALIR SIN GUARDAR»: LA NUBE VUELVE AL ÚLTIMO GUARDADO  ·  0.23.1
++     *
++     * Mike lo escogió con botones el 6-oct-2026. Desde que el autoguardado
++     * sube, la copia de la nube puede ser trabajo sin guardar; si el usuario
++     * acaba de decir que NO lo quiere, dejarlo allá como la copia más nueva
++     * haría que la otra computadora lo abriera mañana como si fuera el archivo.
++     *
++     * Se le da a la interfaz una ventana corta para subir el guardado de verdad
++     * y se sale. Ver TOPE_DEVOLVER_NUBE. */
++    devolviendoNube = true;
++    ventana.webContents.send("salir-sin-guardar");
++    const tope = setTimeout(salirBien, TOPE_DEVOLVER_NUBE);
++    ipcMain.once("nube-devuelta", () => { clearTimeout(tope); salirBien(); });
++    return;
+   }
+   salirBien();
+ });
+diff --git a/electron/preload.js b/electron/preload.js
+index 32436ef..74de829 100644
+--- a/electron/preload.js
++++ b/electron/preload.js
+@@ -31,6 +31,11 @@ contextBridge.exposeInMainWorld("t101", {
+   alPreguntarCierre: (fn) => ipcRenderer.on("preguntar-cierre", fn),
+   alAbrirArchivo: (fn) => ipcRenderer.on("abrir-archivo", (_e, ruta) => fn(ruta)),
+   alGuardarYSalir: (fn) => ipcRenderer.on("guardar-y-salir", fn),
++  // «Salir sin guardar»: la nube tiene que volver al último guardado antes de
++  // que la ventana se muera  ·  0.23.1. `nubeDevuelta` es el «ya acabé»; el
++  // proceso principal no lo espera para siempre (ver electron/main.js).
++  alSalirSinGuardar: (fn) => ipcRenderer.on("salir-sin-guardar", fn),
++  nubeDevuelta: () => ipcRenderer.send("nube-devuelta"),
+   cerrar: (sucio) => ipcRenderer.send("cerrar", sucio),
+ 
+   /* LA NUBE (0.22.0). Nada de esto avienta: cada uno contesta por qué no se
