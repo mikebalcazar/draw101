@@ -1,0 +1,142 @@
+diff --git a/server.py b/server.py
+index 840f0da..00274ef 100644
+--- a/server.py
++++ b/server.py
+@@ -27,6 +27,7 @@ from pydantic import BaseModel
+ 
+ from core import capas as mod_capas
+ from core import actualizar as mod_actualizar, avisos as mod_avisos, config, unidades as mod_unidades, cotas as mod_cotas, licencias as mod_licencias, dibujo, geometria, papel, pdf_fondo, preferencias, proyecto, t101x
++from core import importar as mod_importar
+ from core import unir as mod_unir
+ from core import agrupar as mod_agrupar
+ from core import oda as mod_oda
+@@ -1517,6 +1518,129 @@ def abrir(entrada: Abrir):
+     return r
+ 
+ 
++class Copiar(BaseModel):
++    ids: list[str]
++
++
++@app.post("/api/copiar-portapapeles")
++def copiar_portapapeles(entrada: Copiar):
++    """Lo seleccionado, para los DOS destinos, en UN SOLO TEXTO  ·  6-oct-2026.
++
++    Mike: «copiar bloques y líneas y trazos y que se vayan en el portapapeles
++    para pegarlos en otro documento de draw o en algún programa que lea
++    vectores». Son dos destinos con necesidades opuestas:
++
++      · Illustrator, Inkscape, Figma o Word quieren vectores. Un SVG no sabe lo
++        que es una cota: la vuelve rayas y un texto suelto. Para allá está bien.
++      · Otro draw101 quiere las entidades como son, con sus capas y las
++        definiciones de los bloques que usan, para que la cota siga siendo una
++        cota y el bloque siga siendo un bloque.
++
++    Y VAN EN UN SOLO TEXTO, no en dos: el SVG, con el formato propio escondido
++    en `<metadata id="draw101">`, que el estándar manda ignorar. Dos textos
++    distintos en el portapapeles se pueden desincronizar y hay que pelearse con
++    los formatos a medida de cada sistema operativo; uno solo, no.
++    """
++    with S.candado:
++        ids = [i for i in entrada.ids if i in S.doc.entidades]
++        if not ids:
++            _error(ValueError("No hay nada seleccionado que se pueda copiar"))
++        copiadas = [S.doc.entidades[i] for i in ids]
++
++        from core import svg as mod_svg
++        carga = mod_svg.carga_de_seleccion(S.doc, ids)
++        try:
++            svg = mod_svg.seleccion_svg(S.doc, ids, carga)
++        except Exception as exc:
++            _error(exc)
++    # Un solo texto: el SVG, con el formato propio escondido dentro. Ver
++    # `core/svg.seleccion_svg`.
++    return {"svg": svg, "entidades": len(copiadas), "bloques": len(carga["bloques"])}
++
++
++class Pegar(BaseModel):
++    texto: str
++
++
++@app.post("/api/pegar-portapapeles")
++def pegar_portapapeles(entrada: Pegar):
++    """Pega lo que venía de otro draw101, en el sitio en que se copió."""
++    from core import svg as mod_svg
++    c = mod_svg.carga_de(entrada.texto or "")
++    if not c:
++        _error(ValueError("Lo que hay en el portapapeles no viene de draw101"))
++    try:
++        otro = Documento()
++        otro.unidades = c.get("unidades") if c.get("unidades") in ("mm", "cm", "m") else "mm"
++        for d in c.get("capas") or []:
++            otro.capas[d["nombre"]] = mod_capas.Capa.de_dict(d)
++        for d in c.get("bloques") or []:
++            otro.bloques[d["nombre"]] = ent_mod.Bloque.de_dict(d)
++        for d in c.get("entidades") or []:
++            e = ent_mod.de_dict(d)
++            otro.entidades[e.id] = e
++    except Exception as exc:
++        _error(ValueError(f"El portapapeles trae algo que no se pudo leer: {exc}"))
++
++    with S.candado:
++        antes = set(S.doc.entidades)
++        with S.doc.transaccion("Pegar"):
++            r = mod_importar.suelto(S.doc, otro, "portapapeles", "pegado")
++        # SE PEGA EN SU SITIO, con las mismas coordenadas con que se copió, y se
++        # devuelven los ids para que la interfaz las deje seleccionadas. Colocar
++        # con el ratón es el comando MOVER, que ya existe: mover entidades vive
++        # en la interfaz (ver `transformarSeleccion` en ui/editar.js), no aquí,
++        # y una segunda implementación en el motor sería otra geometría que
++        # mantener y otro lugar donde los arcos y las elipses salen mal.
++        r["ids"] = [i for i in S.doc.entidades if i not in antes]
++    return {**r, **S.resumen()}
++
++
++class ImportarPlano(BaseModel):
++    ruta: str
++    como: str = "bloque"          # "bloque" | "suelto"
++
++
++@app.post("/api/importar-plano")
++def importar_plano(entrada: ImportarPlano):
++    """Trae OTRO plano al dibujo abierto  ·  ver core/importar.py.
++
++    Con `como="bloque"` sólo se DEFINE el bloque y se devuelve su nombre: quien
++    lo coloca es el comando INSERTAR, que ya existe y ya está medido. Un segundo
++    camino para colocar sería otro lugar donde olvidar el encuadre o el
++    historial.
++    """
++    ruta = pathlib.Path(entrada.ruta)
++    if not ruta.exists():
++        _error(FileNotFoundError(f"No existe {ruta}"), 404)
++    if entrada.como not in ("bloque", "suelto"):
++        _error(ValueError("Sólo se puede importar «bloque» o «suelto»"))
++    try:
++        if ruta.suffix.lower() == config.EXT_PROYECTO:
++            otro = proyecto.abrir(ruta)
++        else:
++            otro, _informe = leer(ruta)
++    except Exception as exc:
++        if isinstance(exc, DWGNoDisponible):
++            _error(exc, 501)
++        _error(exc)
++
++    marca = f"importado:{ruta.name}"
++    try:
++        with S.candado:
++            # Un solo paso del historial: Ctrl+Z deshace la importación entera.
++            # Traer trescientas entidades y que cada una sea un paso sería
++            # dejar a alguien picando Ctrl+Z trescientas veces.
++            with S.doc.transaccion(f"Importar «{ruta.stem}»"):
++                if entrada.como == "bloque":
++                    r = mod_importar.como_bloque(S.doc, otro, ruta.stem, marca)
++                else:
++                    r = mod_importar.suelto(S.doc, otro, ruta.stem, marca)
++    except Exception as exc:
++        _error(exc)
++    return {**r, **S.resumen()}
++
++
+ @app.post("/api/token-nuevo")
+ def token_nuevo():
+     """Le estrena token al documento abierto, para «abrir como documento nuevo».
