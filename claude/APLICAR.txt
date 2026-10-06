@@ -78,3 +78,9 @@ B19-t035-al-dia.patch
 0.23.0-h-t055.patch
 0.23.0-i-t056.patch
 0.23.0-j-version.patch
+0.23.1-a-motor.patch
+0.23.1-b-servidor.patch
+0.23.1-c-interfaz.patch
+0.23.1-d-electron.patch
+0.23.1-e-t057.patch
+0.23.1-f-version.patch
