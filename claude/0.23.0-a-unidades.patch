@@ -1,0 +1,201 @@
+diff --git a/core/unidades.py b/core/unidades.py
+index 0075ad5..da61b68 100644
+--- a/core/unidades.py
++++ b/core/unidades.py
+@@ -133,6 +133,85 @@ def escalar_entidad(e, k: float) -> None:
+         e.escala = [e.escala[0] * k, e.escala[1] * k]
+ 
+ 
++def _encabezado_miente(doc, k: float):
++    """¿El tamaño del dibujo desmiente la unidad que declara el encabezado?
++
++    Hay archivos que dicen una unidad y están dibujados en otra. `ezdxf.new()`
++    sin más pone $INSUNITS = 6 (metros) aunque el dibujo esté en milímetros —lo
++    hacen nuestras propias pruebas—, y hacerle caso convertiría una línea de
++    1 000 mm en una de un kilómetro.
++
++    Un plano de arquitectura o de taller mide entre un centímetro y medio
++    kilómetro. Si con esa unidad el dibujo cae fuera de esa horquilla, el que
++    está mal es el encabezado. Devuelve la medida absurda, o None si cuadra.
++
++    Estaba dentro de `a_milimetros`; se sacó el 6-oct-2026 porque `adoptar`
++    necesita exactamente el mismo freno y copiarlo habría sido tener dos.
++    """
++    ext = doc.extension()
++    if not ext:
++        return None
++    mayor = max(ext[2] - ext[0], ext[3] - ext[1]) * k
++    if mayor > SENSATO_MAX or (mayor and mayor < SENSATO_MIN):
++        return mayor
++    return None
++
++
++def adoptar(doc, insunits: int | None) -> dict:
++    """EL DIBUJO SE QUEDA EN LA UNIDAD QUE DECLARA EL ARCHIVO  ·  6-oct-2026.
++
++    Mike: «¿Hay manera de leer en qué están las unidades del archivo a importar
++    —si metros o cm o pulgadas— y que draw iguale esa info? Que aplique las
++    unidades del plano iguales a como las traía el archivo».
++
++    QUÉ PASABA ANTES. draw101 convertía todo a milímetros al abrir. Un plano en
++    metros entraba multiplicado por mil: un muro de 10 m salía como 10 000. El
++    tamaño real era correcto —10 000 mm SON 10 m— pero el número que uno lee en
++    la cota, el que teclea y el que compara contra el plano del arquitecto, no
++    era el del archivo. Y como un dibujo nuevo nace en centímetros, la cosa se
++    sentía peor todavía: unos planos en cm y otros en mm, sin razón visible.
++
++    QUÉ PASA AHORA. Si el archivo declara milímetros, centímetros o metros —las
++    tres unidades en que draw101 sabe trabajar— el dibujo se pone en ESA unidad
++    y NO SE TOCA NI UNA COORDENADA. El muro de 10 m sigue diciendo 10. De paso,
++    al exportar se devuelve con el mismo $INSUNITS y los mismos números con que
++    llegó, que es lo que este módulo prometía desde el principio y no cumplía.
++
++    LO QUE NO CAMBIA. Las unidades en que draw101 **no** sabe trabajar
++    (pulgadas, pies, yardas…) siguen convirtiéndose a milímetros: no hay una
++    unidad de trabajo que las reciba, y dejar el dibujo en pulgadas mintiendo
++    que son milímetros sería mucho peor. Y el freno de mano sigue igual: si el
++    encabezado no cuadra con el tamaño del dibujo, no se le hace caso.
++    """
++    k = MM_POR_UNIDAD.get(insunits or 0)
++    if k is None:
++        return {"adoptado": None, "convertido": False,
++                "motivo": "unidad desconocida", "insunits": insunits}
++
++    absurda = _encabezado_miente(doc, k)
++    if absurda:
++        return {"adoptado": None, "convertido": False, "insunits": insunits,
++                "motivo": "el encabezado no cuadra con el tamaño del dibujo",
++                "unidad": NOMBRE.get(insunits, f"código {insunits}"),
++                "medida_absurda": absurda}
++
++    nombre = NOMBRE_POR_INSUNITS.get(insunits)
++    if not nombre:
++        # Pulgadas, pies, yardas…: no hay unidad de trabajo que las reciba.
++        return a_milimetros(doc, insunits)
++
++    if doc.unidades != nombre:
++        vieja = doc.unidades if doc.unidades in MM_POR_NOMBRE else "mm"
++        # `aplicar` y no `cambiar`: `cambiar` anota un paso en el historial, y
++        # abrir un archivo no es una acción que alguien pueda deshacer.
++        sucio = doc.sucio
++        aplicar(doc, vieja, nombre, escalar=False)
++        doc.sucio = sucio        # recién abierto no tiene cambios sin guardar
++    doc.factor_unidades = 1.0    # no hay nada que deshacer al exportar
++    return {"adoptado": nombre, "convertido": False, "insunits": insunits,
++            "unidad": NOMBRE.get(insunits, f"código {insunits}")}
++
++
+ def a_milimetros(doc, insunits: int | None) -> dict:
+     """Lleva el documento a milímetros. Devuelve qué se hizo, para el informe.
+ 
+@@ -148,23 +227,13 @@ def a_milimetros(doc, insunits: int | None) -> dict:
+         return {"convertido": False, "motivo": "ya viene en milímetros",
+                 "insunits": insunits}
+ 
+-    # Freno de mano: hay archivos que declaran una unidad y están dibujados en
+-    # otra. `ezdxf.new()` sin más pone $INSUNITS = 6 (metros) aunque el dibujo
+-    # esté en milímetros — lo hacen nuestras propias pruebas — y hacerle caso
+-    # convertiría una línea de 1000 mm en una de un kilómetro.
+-    #
+-    # Un plano de arquitectura o de taller mide entre un centímetro y medio
+-    # kilómetro. Si la conversión deja algo fuera de esa horquilla, el que está
+-    # mal es el encabezado: se deja el dibujo como viene y se dice. Adivinar
+-    # menos es mejor que adivinar mal.
+-    ext = doc.extension()
+-    if ext:
+-        mayor = max(ext[2] - ext[0], ext[3] - ext[1]) * k
+-        if mayor > SENSATO_MAX or (mayor and mayor < SENSATO_MIN):
+-            return {"convertido": False, "insunits": insunits,
+-                    "motivo": "el encabezado no cuadra con el tamaño del dibujo",
+-                    "unidad": NOMBRE.get(insunits, f"código {insunits}"),
+-                    "medida_absurda": mayor}
++    # Freno de mano, el mismo que usa `adoptar`: ver `_encabezado_miente`.
++    absurda = _encabezado_miente(doc, k)
++    if absurda:
++        return {"convertido": False, "insunits": insunits,
++                "motivo": "el encabezado no cuadra con el tamaño del dibujo",
++                "unidad": NOMBRE.get(insunits, f"código {insunits}"),
++                "medida_absurda": absurda}
+ 
+     silencio = doc.historial.silencio
+     doc.historial.silencio = True
+diff --git a/core/dxf_lector.py b/core/dxf_lector.py
+index cd40c94..37509ec 100644
+--- a/core/dxf_lector.py
++++ b/core/dxf_lector.py
+@@ -841,18 +841,29 @@ def leer_dxf(ruta: str | pathlib.Path, carpeta: pathlib.Path | None = None,
+         ent_mod.sembrar_contador(doc.entidades.values())
+         if doc.capa_activa not in doc.capas:
+             doc.capa_activa = "0"
+-        # A milímetros, si el archivo viene en otra unidad  ·  ver core/unidades.py
++        # El dibujo adopta la unidad que declara el archivo  ·  core/unidades.py
+         insunits = None
+         try:
+             insunits = int(doc_dxf.header.get("$INSUNITS", 0) or 0)
+         except (TypeError, ValueError):
+             insunits = None
+         doc.insunits_origen = insunits
+-        conv = mod_unidades.a_milimetros(doc, insunits)
+-        if conv["convertido"]:
++        conv = mod_unidades.adoptar(doc, insunits)
++        if conv.get("adoptado"):
++            # Sólo se dice cuando hay algo que decir: si el archivo venía en
++            # milímetros y el dibujo ya estaba en milímetros, no pasó nada que
++            # contar, y un aviso de más se deja de leer.
++            if conv["adoptado"] != "mm":
++                informe.avisos.append(
++                    f"El plano viene en {conv['unidad']}: el dibujo se puso en "
++                    f"{conv['unidad']} y las medidas se quedan como venían. "
++                    "Se cambia en Ayuda ▾ → Unidades del dibujo."
++                )
++        elif conv["convertido"]:
+             informe.avisos.append(
+                 f"El plano venía en {conv['unidad']}: se convirtió a milímetros "
+-                f"(x{conv['factor']:g}). Al exportar se devuelve como vino."
++                f"(x{conv['factor']:g}), porque draw101 no dibuja en esa unidad. "
++                "Al exportar se devuelve como vino."
+             )
+         elif conv.get("medida_absurda"):
+             informe.avisos.append(
+diff --git a/pruebas/t001_dxf.py b/pruebas/t001_dxf.py
+index ed10d24..8e2ef03 100644
+--- a/pruebas/t001_dxf.py
++++ b/pruebas/t001_dxf.py
+@@ -69,16 +69,30 @@ def _ida_y_vuelta(r: comun.Reporte, tmp) -> None:
+     r.igual(tipos, sorted(["linea", "polilinea", "circulo", "arco", "texto", "textom"]),
+             "vuelven las seis, y del mismo tipo cada una")
+ 
+-    # **Todo se compara en milímetros de verdad, no en números.** Un dibujo
+-    # nuevo nace en centímetros y al abrir un archivo se convierte a la unidad
+-    # que declara su encabezado: 1 200 cm vuelven como 12 000 mm, que es el
+-    # mismo mueble. Comparar los números pelados haría fallar la prueba por
+-    # una conversión correcta, y —peor— la haría pasar el día que la
+-    # conversión se pierda.
++    # **Todo se compara en milímetros de verdad, no en números.** Comparar los
++    # números pelados haría fallar la prueba por una conversión correcta, y
++    # —peor— la haría pasar el día que la conversión se pierda.
++    #
++    # DESDE EL 6-OCT-2026 EL ARCHIVO DA LA VUELTA COMPLETA EN SU PROPIA UNIDAD.
++    # Antes, abrir convertía todo a milímetros: se dibujaba en cm, se exportaba
++    # declarando cm, y al releer volvían 12 000 mm. El mueble medía lo mismo,
++    # pero el número que uno lee en la cota no era el del archivo. Mike lo pidió
++    # al revés —«que aplique las unidades del plano iguales a como las traía»—,
++    # así que ahora el dibujo adopta la unidad declarada y no se toca ninguna
++    # coordenada: salen 1 200 cm y vuelven 1 200 cm.
+     ki = doc.mm_por_unidad()
+     kv = vuelto.mm_por_unidad()
+     r.casi(ki, 10.0, "el dibujo nuevo nace en centímetros")
+-    r.casi(kv, 1.0, "el archivo vuelve en la unidad que declara (mm)")
++    r.casi(kv, 10.0, "y el archivo vuelve en la unidad que declara, que es la misma (cm)")
++
++    # LO QUE DE VERDAD DEFIENDE EL ARREGLO, y que no medía nadie: que los
++    # NÚMEROS sobrevivan la ida y vuelta, no sólo el tamaño real. Las
++    # comprobaciones de abajo van en milímetros y seguirían pasando aunque el
++    # archivo volviera multiplicado por diez, que es justo lo que pasaba.
++    ida = [e for e in doc.lista() if e.tipo == "linea"][0]
++    vta = [e for e in vuelto.lista() if e.tipo == "linea"][0]
++    r.casi(abs(vta.p2[0] - vta.p1[0]), abs(ida.p2[0] - ida.p1[0]),
++           "la línea de 1 200 vuelve diciendo 1 200, no 12 000", 1e-6)
+ 
+     def mm(v):
+         return [c * kv for c in v[:2]]
