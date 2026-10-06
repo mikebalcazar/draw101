@@ -1,0 +1,108 @@
+diff --git a/ui/bloques.js b/ui/bloques.js
+index f0a8d5a..b52d9b2 100644
+--- a/ui/bloques.js
++++ b/ui/bloques.js
+@@ -103,6 +103,16 @@ Comandos.registrar({
+   correr: async () => {
+     const ruta = await pedirRuta("abrir", [{ name: "PDF", extensions: ["pdf"] }]);
+     if (!ruta) return;
++    await window.traerPdfFondo(ruta);
++  },
++});
++
++/* El cuerpo de PDFFONDO, con la ruta ya resuelta. Se sacó aparte el 6-oct-2026
++ * para que soltar un PDF sobre la ventana (ui/soltar.js) haga EXACTAMENTE lo
++ * mismo que el comando, y no una segunda versión parecida que se olvide de las
++ * páginas, de la escala o del aviso de la capa bloqueada. */
++window.traerPdfFondo = async (ruta) => {
++  {
+     let paginas;
+     try {
+       ({ paginas } = await post("/api/pdf_paginas", { ruta }));
+@@ -130,8 +140,8 @@ Comandos.registrar({
+         Comandos.eco("Prueba con IMAGENREF para meterlo como imagen y calcar encima.");
+       }
+     }
+-  },
+-});
++  }
++};
+ 
+ /* ===================================================================== */
+ /* 8 · Imagen de referencia                                              */
+diff --git a/ui/suite.js b/ui/suite.js
+index 5b0e83c..c4ce08f 100644
+--- a/ui/suite.js
++++ b/ui/suite.js
+@@ -12,6 +12,15 @@ Comandos.registrar({
+     const ruta = await pedirRuta("abrir", [
+       { name: "Proyecto Taller 101", extensions: ["t101x"] }]);
+     if (!ruta) return;
++    await window.traerT101x(ruta);
++  },
++});
++
++/* El cuerpo de IMPORTART101X, con la ruta ya resuelta  ·  6-oct-2026. Igual que
++ * con el PDF: soltar un .t101x sobre la ventana tiene que hacer lo mismo que el
++ * comando, incluida la pregunta de acotar y el aviso de ACT. */
++window.traerT101x = async (ruta) => {
++  {
+     let resumen;
+     try {
+       resumen = await post("/api/t101x/resumen", { ruta });
+@@ -34,8 +43,8 @@ Comandos.registrar({
+       avisar(`Cocina importada: ${r.gabinetes} muebles, cada uno como bloque. ` +
+              "Si cambias el proyecto en Taller 101, usa ACT para rehacerlos.", false, 11000);
+     } catch (e) { avisar(e.message, true, 11000); }
+-  },
+-});
++  }
++};
+ 
+ Comandos.registrar({
+   // Ojo con el nombre: REGENERAR (alias RE) ya es el de refrescar la pantalla,
+diff --git a/ui/index.html b/ui/index.html
+index 6fc1a53..c56dbc4 100644
+--- a/ui/index.html
++++ b/ui/index.html
+@@ -370,5 +370,7 @@
+ <script src="app.js"></script>
+ <script src="sugeridor.js"></script>
+ <script src="marco.js"></script>
++<script src="soltar.js"></script>
++<script src="portapapeles.js"></script>
+ </body>
+ </html>
+diff --git a/ui/styles.css b/ui/styles.css
+index 6e5beee..959738a 100644
+--- a/ui/styles.css
++++ b/ui/styles.css
+@@ -941,3 +941,16 @@ select.campo-hoja{position:absolute;z-index:6;box-sizing:border-box;padding:2px
+ .nube-vacio{padding:26px 0;text-align:center;font-size:12px;color:var(--txt3)}
+ .nube-pie{padding:11px 18px;border-top:1px solid var(--linea);
+   display:flex;justify-content:flex-end}
++
++/* El letrero de «suelta aquí»  ·  6-oct-2026 ------------------------------
++   Cubre la ventana mientras algo viene cayendo. `pointer-events:none` es
++   obligatorio y no cosmético: si la capa recibiera el ratón, se tragaría el
++   `drop` y el archivo nunca llegaría. */
++#soltar-aqui{position:fixed;inset:0;z-index:90;display:flex;align-items:center;
++  justify-content:center;pointer-events:none;background:rgba(0,0,0,.42);
++  backdrop-filter:blur(1.5px)}
++#soltar-aqui .marco{border:2px dashed var(--acc);border-radius:14px;
++  background:var(--panel);padding:26px 34px;text-align:center;
++  box-shadow:0 18px 50px rgba(0,0,0,.35)}
++#soltar-aqui b{display:block;font-size:17px;color:var(--txt);margin-bottom:5px}
++#soltar-aqui small{display:block;font-size:12px;color:var(--txt3)}
+diff --git a/ui/idioma-en.js b/ui/idioma-en.js
+index e0f799a..909fd65 100644
+--- a/ui/idioma-en.js
++++ b/ui/idioma-en.js
+@@ -36,6 +36,7 @@ const IDIOMA_EN = {
+   "Un mueble .t101x ya despiezado": "A .t101x cabinet, already cut-listed",
+   "Recientes": "Recent", "limpiar": "clear",
+   "En la nube": "In the cloud",
++  "Suelta aquí": "Drop it here",
+   "Los dibujos nuevos nacen en centímetros. El modelo se dibuja a 1:1.": "New drawings start in centimetres. The model is drawn at 1:1.",
+   "más": "more", "menos": "less",
+   "Ver más líneas de la consola (F2)": "Show more console lines (F2)",
