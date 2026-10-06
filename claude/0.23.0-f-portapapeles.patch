@@ -1,0 +1,153 @@
+diff --git a/ui/portapapeles.js b/ui/portapapeles.js
+new file mode 100644
+index 0000000..b140825
+--- /dev/null
++++ b/ui/portapapeles.js
+@@ -0,0 +1,147 @@
++/* Copiar y pegar vectores  ·  draw101 0.23.0
++ *
++ * Mike, 6-oct-2026: «Quiero poder copiar bloques y líneas y trazos y que se
++ * vayan en el portapapeles para pegarlos en otro documento de draw o en algún
++ * programa que lea vectores».
++ *
++ * DOS DESTINOS, UN SOLO TEXTO. Lo que se copia es un SVG —que Illustrator,
++ * Inkscape, Figma y hasta Word pegan y dejan editable— con el formato propio de
++ * draw101 escondido dentro, en `<metadata>`. Pegar en otro draw101 recupera
++ * capas, bloques y cotas tal como eran; pegar en cualquier otro programa deja
++ * los vectores. No hay que escoger al copiar, y no hay dos formatos del
++ * portapapeles que mantener.
++ *
++ * CTRL+C Y CTRL+V, COMO EN AUTOCAD, y por eso el comando COPIAR no cambia: ahí
++ * COPIAR también es duplicar dentro del dibujo y el portapapeles es Ctrl+C. Si
++ * se le cambiara el significado a COPIAR, media oficina pegaría donde quería
++ * duplicar.
++ *
++ * NO SE SECUESTRA EL CTRL+C DE UN CAMPO DE TEXTO. Quien está escribiendo el
++ * nombre de una capa y copia tres letras espera tres letras, no su dibujo.
++ */
++
++const Portapapeles = (() => {
++  const T = () => (typeof Idioma !== "undefined" && Idioma.ingles);
++
++  let ultimo = null;          // qué pasó la última vez, para poder medirlo
++
++  const enTexto = () => {
++    const a = document.activeElement;
++    if (!a) return false;
++    const t = (a.tagName || "").toUpperCase();
++    return t === "INPUT" || t === "TEXTAREA" || a.isContentEditable;
++  };
++
++  async function escribir(texto) {
++    // `navigator.clipboard` funciona igual dentro de Electron: no hace falta
++    // puente. El `catch` es real: sin foco en la ventana, el navegador se niega.
++    try { await navigator.clipboard.writeText(texto); return true; }
++    catch (_) { return false; }
++  }
++
++  async function leer() {
++    try { return await navigator.clipboard.readText(); }
++    catch (_) { return null; }
++  }
++
++  async function copiar() {
++    const en = T();
++    const ids = [...(estado.sel || [])];
++    if (!ids.length) {
++      ultimo = "sin_seleccion";
++      avisar(en ? "Select something first, then Ctrl+C."
++                : "Primero selecciona algo, luego Ctrl+C.", true);
++      return ultimo;
++    }
++    let r;
++    try { r = await post("/api/copiar-portapapeles", { ids }); }
++    catch (e) { ultimo = "error"; return avisar(e.message, true, 9000), ultimo; }
++
++    if (!(await escribir(r.svg))) {
++      ultimo = "sin_permiso";
++      avisar(en ? "Couldn't reach the clipboard. Click on the drawing and try again."
++                : "No se pudo llegar al portapapeles. Pica en el dibujo y vuelve a intentar.",
++             true, 9000);
++      return ultimo;
++    }
++    ultimo = "copio";
++    const conBloques = r.bloques
++      ? (en ? ` and ${r.bloques} block definition(s)` : ` y ${r.bloques} definición(es) de bloque`)
++      : "";
++    Comandos.eco(`${r.entidades} entidad(es)${conBloques} al portapapeles.`, "bien");
++    avisar(en
++      ? `Copied ${r.entidades} entities. Paste them in another draw101 with Ctrl+V, or in Illustrator, Inkscape or Figma as vectors.`
++      : `Copiadas ${r.entidades} entidades. Pégalas en otro draw101 con Ctrl+V, o en Illustrator, Inkscape o Figma como vectores.`,
++      false, 10000);
++    return ultimo;
++  }
++
++  async function pegar() {
++    const en = T();
++    const texto = await leer();
++    if (!texto) {
++      ultimo = "vacio";
++      avisar(en ? "There's nothing in the clipboard, or it can't be read."
++                : "No hay nada en el portapapeles, o no se puede leer.", true);
++      return ultimo;
++    }
++    let r;
++    try { r = await post("/api/pegar-portapapeles", { texto }); }
++    catch (e) {
++      // El caso de todos los días: lo que hay en el portapapeles es un texto, o
++      // un SVG de otro programa. Se dice QUÉ se puede pegar.
++      ultimo = "ajeno";
++      avisar(en
++        ? "The clipboard doesn't have anything from draw101. Copy with Ctrl+C from another draw101 drawing."
++        : "El portapapeles no trae nada de draw101. Copia con Ctrl+C desde otro dibujo de draw101.",
++        true, 10000);
++      return ultimo;
++    }
++    aplicar(r);
++    await recargarTrazos();
++    // Queda seleccionado: así se coloca con M (MOVER) sin tener que volver a
++    // escogerlo. Pegar en su sitio y mover es lo que hace AutoCAD.
++    // `Seleccion.refrescar()` y no un repintado a secas: es lo que usan las
++    // demás (ui/app.js, ui/dibujar.js) para que los grips y el resaltado se
++    // enteren de que la selección cambió.
++    if (estado.sel) {
++      estado.sel.clear();
++      for (const i of (r.ids || [])) estado.sel.add(i);
++      Seleccion.refrescar();
++    }
++    ultimo = "pego";
++    Comandos.eco(`Pegadas ${r.entidades} entidad(es), ${r.capas} capa(s) nueva(s).`, "bien");
++    avisar(en
++      ? `Pasted ${r.entidades} entities, selected. Press M to place them. Ctrl+Z undoes the whole paste.`
++      : `Pegadas ${r.entidades} entidades, y quedan seleccionadas. Pica M para colocarlas. Ctrl+Z deshace todo.`,
++      false, 10000);
++    return ultimo;
++  }
++
++  function conectar() {
++    window.addEventListener("keydown", (e) => {
++      if (!(e.ctrlKey || e.metaKey) || e.shiftKey || e.altKey) return;
++      if (enTexto()) return;
++      const k = (e.key || "").toLowerCase();
++      if (k === "c") { e.preventDefault(); copiar(); }
++      else if (k === "v") { e.preventDefault(); pegar(); }
++    }, true);
++  }
++
++  return { conectar, copiar, pegar, _ultimo: () => ultimo };
++})();
++
++window.Portapapeles = Portapapeles;
++Portapapeles.conectar();
++
++Comandos.registrar({
++  nombre: "COPIARVECTORES", alias: ["CV", "COPIARSVG"],
++  ayuda: "Copia lo seleccionado al portapapeles, como vectores (Ctrl+C)",
++  correr: () => Portapapeles.copiar(),
++});
++
++Comandos.registrar({
++  nombre: "PEGAR", alias: ["PG"],
++  ayuda: "Pega lo que haya en el portapapeles (Ctrl+V)",
++  correr: () => Portapapeles.pegar(),
++});
