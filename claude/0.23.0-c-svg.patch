@@ -1,0 +1,196 @@
+diff --git a/core/svg.py b/core/svg.py
+index 839fa6d..52bce7e 100644
+--- a/core/svg.py
++++ b/core/svg.py
+@@ -11,6 +11,8 @@ por lo tanto lo mismo que sale en el PDF y en pantalla.
+ from __future__ import annotations
+ 
+ import base64
++import json
++import re
+ import html
+ from pathlib import Path
+ 
+@@ -22,18 +24,16 @@ def _color(c: str | None) -> str:
+     return c or "#1A1F27"
+ 
+ 
+-def hoja_svg(doc: Documento, layout: dict, con_logo: bool = True) -> str:
+-    """SVG de la hoja completa (marco, pie, ventanas y lo dibujado encima)."""
+-    h = papel.trazos_papel(doc, layout, propias=True)
+-    ancho, alto = h["ancho"], h["alto"]
++def _formas(trazos, con_logo: bool = True) -> list[str]:
++    """Los trazos, vueltos formas de SVG.
++
++    Estaba dentro de `hoja_svg` y nada más. Se sacó aparte el 6-oct-2026 porque
++    copiar al portapapeles necesita exactamente esto para la SELECCIÓN, y una
++    segunda copia habría nacido sin los guiones del tipo de línea, sin el texto
++    enderezado o sin el relleno `evenodd`, y habría que arreglarla dos veces.
++    """
+     partes: list[str] = []
+-    partes.append(f'<svg xmlns="http://www.w3.org/2000/svg" xmlns:xlink="http://www.w3.org/1999/xlink" '
+-                  f'width="{ancho}mm" height="{alto}mm" viewBox="0 0 {ancho} {alto}" '
+-                  f'font-family="Raleway, Cifras, Arial, sans-serif">')
+-    partes.append(f'<rect x="0" y="0" width="{ancho}" height="{alto}" fill="#fff"/>')
+-    # y crece hacia abajo en SVG y hacia arriba en el papel: se voltea.
+-    partes.append(f'<g transform="translate(0 {alto}) scale(1 -1)">')
+-    for t in h["trazos"]:
++    for t in trazos:
+         if t.get("imprime") is False:
+             continue
+         cl = t.get("clase")
+@@ -81,5 +81,154 @@ def hoja_svg(doc: Documento, layout: dict, con_logo: bool = True) -> str:
+             partes.append(f'<g transform="translate({x:.3f} {y + hh:.3f}) scale(1 -1)">'
+                           f'<image x="0" y="0" width="{w:.3f}" height="{hh:.3f}" '
+                           f'xlink:href="data:image/png;base64,{datos}"/></g>')
++    return partes
++
++
++def hoja_svg(doc: Documento, layout: dict, con_logo: bool = True) -> str:
++    """SVG de la hoja completa (marco, pie, ventanas y lo dibujado encima)."""
++    h = papel.trazos_papel(doc, layout, propias=True)
++    ancho, alto = h["ancho"], h["alto"]
++    partes: list[str] = []
++    partes.append(f'<svg xmlns="http://www.w3.org/2000/svg" xmlns:xlink="http://www.w3.org/1999/xlink" '
++                  f'width="{ancho}mm" height="{alto}mm" viewBox="0 0 {ancho} {alto}" '
++                  f'font-family="Raleway, Cifras, Arial, sans-serif">')
++    partes.append(f'<rect x="0" y="0" width="{ancho}" height="{alto}" fill="#fff"/>')
++    # y crece hacia abajo en SVG y hacia arriba en el papel: se voltea.
++    partes.append(f'<g transform="translate(0 {alto}) scale(1 -1)">')
++    partes += _formas(h["trazos"], con_logo)
+     partes.append("</g></svg>")
+     return "".join(partes)
++
++
++def carga_de_seleccion(doc, ids):
++    """El formato propio de draw101 para lo seleccionado  ·  6-oct-2026.
++
++    VIVE AQUÍ Y NO EN EL ENDPOINT A PROPÓSITO: lo que decide qué viaja en el
++    portapapeles es exactamente lo que hay que poder medir en una prueba, y una
++    prueba que le copia la lógica al servidor sólo se mide a sí misma.
++
++    Se lleva SÓLO LOS BLOQUES QUE DE VERDAD SE USAN, siguiendo las inserciones
++    hacia dentro: un bloque puede contener otros. Copiar las 176 definiciones de
++    un plano de arquitectura por llevarse una línea haría un portapapeles de
++    megabytes para nada.
++    """
++    copiadas = [doc.entidades[i] for i in ids]
++
++    usados: set[str] = set()
++    pendientes = [e for e in copiadas if e.tipo == "insercion"]
++    while pendientes:
++        e = pendientes.pop()
++        if e.bloque in usados or e.bloque not in doc.bloques:
++            continue
++        usados.add(e.bloque)
++        pendientes += [x for x in doc.bloques[e.bloque].entidades
++                       if x.tipo == "insercion"]
++
++    capas = sorted({e.capa for e in copiadas if e.capa in doc.capas})
++    return {
++        "formato": "draw101/portapapeles",
++        "version": 1,
++        "unidades": doc.unidades,
++        "entidades": [e.a_dict() for e in copiadas],
++        "bloques": [doc.bloques[n].a_dict() for n in sorted(usados)],
++        "capas": [doc.capas[c].a_dict() for c in capas],
++    }
++
++
++def seleccion_svg(doc: Documento, ids, carga: dict | None = None) -> str:
++    """SVG de lo seleccionado, recortado a su propio tamaño  ·  6-oct-2026.
++
++    Mike: «Quiero poder copiar bloques y líneas y trazos y que se vayan en el
++    portapapeles para pegarlos en otro documento de draw o en algún programa que
++    lea vectores».
++
++    Esto es la mitad «que lea vectores»: Illustrator, Inkscape, Figma y hasta
++    Word pegan un SVG y lo dejan editable. La otra mitad —pegar en otro draw101
++    sin perder capas, bloques ni cotas— va por su propio formato, porque un SVG
++    no sabe lo que es una cota: la vuelve rayas y un texto suelto.
++
++    EL RECORTE ES LO QUE LO HACE ÚTIL. Un SVG del tamaño del plano entero, con
++    la pieza perdida en una esquina, se pega como un cuadro gigante y vacío que
++    hay que recortar a mano. El `viewBox` va a la caja de lo copiado, con un
++    margen chico para que el trazo del borde no quede partido por la mitad.
++
++    Las medidas salen EN MILÍMETROS DE VERDAD, no en unidades del dibujo: lo que
++    se pega en Illustrator tiene que medir lo que mide la pieza, y allá nadie
++    sabe que este plano estaba en centímetros.
++
++    Y CON `carga`, EL FORMATO PROPIO VIAJA DENTRO DEL MISMO SVG, en `<metadata>`.
++    Es lo que evita tener que poner dos cosas distintas en el portapapeles y
++    pelearse con los formatos a medida de cada sistema operativo: el portapapeles
++    lleva UN texto, Illustrator lee los vectores y se salta el `metadata` —el
++    estándar se lo manda—, y draw101 lee el `metadata` y recupera las capas, los
++    bloques y las cotas tal como eran. Un solo texto, dos lectores.
++    """
++    from . import dibujo as mod_dibujo
++
++    k = doc.mm_por_unidad()
++    trazos: list[dict] = []
++    for i in ids:
++        e = doc.entidades.get(i)
++        if e is None or getattr(e, "espacio", ""):
++            continue
++        trazos += mod_dibujo.trazos_de(doc, e)
++    if not trazos:
++        raise ValueError("No hay nada seleccionado que se pueda copiar")
++
++    xs: list[float] = []
++    ys: list[float] = []
++    for t in trazos:
++        for p in (t.get("puntos") or []):
++            xs.append(p[0]); ys.append(p[1])
++        for pol in (t.get("poligonos") or []):
++            for p in pol:
++                xs.append(p[0]); ys.append(p[1])
++        if t.get("p"):
++            xs.append(t["p"][0]); ys.append(t["p"][1])
++    if not xs:
++        raise ValueError("No hay nada seleccionado que se pueda copiar")
++
++    margen = 2.0 / k        # 2 mm, en unidades del dibujo
++    x0, x1 = min(xs) - margen, max(xs) + margen
++    y0, y1 = min(ys) - margen, max(ys) + margen
++    ancho, alto = (x1 - x0) * k, (y1 - y0) * k
++
++    partes = [
++        f'<svg xmlns="http://www.w3.org/2000/svg" xmlns:xlink="http://www.w3.org/1999/xlink" '
++        f'width="{ancho:.3f}mm" height="{alto:.3f}mm" viewBox="0 0 {ancho:.3f} {alto:.3f}" '
++        f'font-family="Raleway, Cifras, Arial, sans-serif">',
++        # Dos cosas en una: la y se voltea (en SVG crece hacia abajo) y el
++        # dibujo se corre a su esquina, para que el recorte quede pegado.
++        f'<g transform="translate({-x0 * k:.3f} {alto + y0 * k:.3f}) scale({k:g} {-k:g})">',
++    ]
++    partes += _formas(trazos, con_logo=False)
++    partes.append("</g>")
++    if carga is not None:
++        # En base64 a propósito: el JSON lleva comillas, acentos y signos que en
++        # XML habría que escapar uno por uno, y un solo escape olvidado deja el
++        # SVG roto para todo el mundo, no sólo para nosotros.
++        crudo = base64.b64encode(
++            json.dumps(carga, ensure_ascii=False).encode("utf-8")).decode("ascii")
++        partes.append(f'<metadata id="draw101">{crudo}</metadata>')
++    partes.append("</svg>")
++    return "".join(partes)
++
++
++def carga_de(texto: str) -> dict | None:
++    """El formato propio escondido en un SVG de draw101, o None si no lo trae.
++
++    Es lo que hace que pegar en otro draw101 no pierda nada. Si lo que hay en el
++    portapapeles es un SVG de cualquier otro programa, devuelve None y quien
++    llama decide qué decir: adivinar a partir de los vectores sería inventarse
++    capas y cotas que nadie dibujó.
++    """
++    if not texto or "draw101" not in texto:
++        return None
++    m = re.search(r'<metadata id="draw101">([A-Za-z0-9+/=\s]*)</metadata>', texto)
++    if not m:
++        return None
++    try:
++        d = json.loads(base64.b64decode(m.group(1)).decode("utf-8"))
++    except Exception:
++        return None
++    return d if isinstance(d, dict) and d.get("formato") == "draw101/portapapeles" else None
