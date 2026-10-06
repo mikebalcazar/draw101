@@ -1,0 +1,245 @@
+diff --git a/ui/papel.js b/ui/papel.js
+index 4f1a682..2e3e019 100644
+--- a/ui/papel.js
++++ b/ui/papel.js
+@@ -1143,16 +1143,29 @@ Papel.calcularImpresion = calcularImpresion;
+ Papel.armarHTMLImpresion = armarHTMLImpresion;
+ Papel.PAPELES = PAPELES;
+ 
+-/** La vista previa: el papel elegido con la hoja centrada, a escala. */
+-Papel.vistaPrevia = async function ({ papel = "HOJA", impresora = "", layouts = null } = {}) {
+-  const cuales = layouts || (estado.modo === "papel" ? [estado.layoutActivo] : null);
+-  const { layouts: todos } = await api("/api/layouts");
+-  if (!todos.length) { Comandos.eco("No hay ninguna hoja que imprimir. Crea una con PLANO.", "malo"); return null; }
+-  const indices = cuales || todos.map((_, i) => i);
+-  const i0 = indices[0];
+-  const L = todos[i0];
+-  const svg = await (await fetch(`/api/papel/${i0}/svg`)).text();
+-  const hoja = await api(`/api/papel/${i0}`);
++/** La vista previa. Con `hojas` —[{ancho, alto, svg}]— enseña una hoja que NO
++ *  está en el documento, que es lo que necesita imprimir una ventana del modelo
++ *  (0.24.0): ahí la hoja se arma en memoria y no se guarda en ninguna parte.
++ *  Sin `hojas` hace lo de siempre y pide la hoja por su índice. `detalle` es
++ *  una frase más para el pie, donde la ventana del modelo dice a qué escala
++ *  quedó. */
++Papel.vistaPrevia = async function ({ papel = "HOJA", impresora = "", layouts = null,
++                                      hojas = null, detalle = "" } = {}) {
++  let indices = null, L = null, svg = "", hoja = null;
++  if (hojas && hojas.length) {
++    hoja = hojas[0];
++    svg = hoja.svg;
++  } else {
++    const cuales = layouts || (estado.modo === "papel" ? [estado.layoutActivo] : null);
++    const { layouts: todos } = await api("/api/layouts");
++    if (!todos.length) { Comandos.eco("No hay ninguna hoja que imprimir. Crea una con PLANO.", "malo"); return null; }
++    indices = cuales || todos.map((_, i) => i);
++    const i0 = indices[0];
++    L = todos[i0];
++    svg = await (await fetch(`/api/papel/${i0}/svg`)).text();
++    hoja = await api(`/api/papel/${i0}`);
++  }
++  const cuantas = indices ? indices.length : hojas.length;
+   const c = calcularImpresion(hoja.ancho, hoja.alto, papel);
+ 
+   const capa = document.createElement("div");
+@@ -1165,10 +1178,10 @@ Papel.vistaPrevia = async function ({ papel = "HOJA", impresora = "", layouts =
+   capa.innerHTML = `
+     <div class="panel">
+       <div class="cab"><b>${Tr("Vista previa de impresión")}</b>
+-        <span class="det">${(impresora ? impresora + " · " : "") + etPapel}${indices.length > 1 ? ` · ${indices.length} ${Tr("hojas")}` : ""}</span>
++        <span class="det">${(impresora ? impresora + " · " : "") + etPapel}${cuantas > 1 ? ` · ${cuantas} ${Tr("hojas")}` : ""}</span>
+         <button class="cerrar" title="${Tr("Cerrar")}">×</button></div>
+       <div class="lienzo"><div class="papel"><div class="borde"></div><div class="hoja"></div></div></div>
+-      <div class="pie"><span class="nota">${nota}${recorte} ${Tr("Centrado en el papel (no en los márgenes)")}.</span>
++      <div class="pie"><span class="nota">${detalle ? detalle + " " : ""}${nota}${recorte} ${Tr("Centrado en el papel (no en los márgenes)")}.</span>
+         <span class="crece"></span>
+         <button class="gh cerrar">${Tr("Cerrar")}</button>
+         <button class="pri imprimir">${Tr("Imprimir")}</button></div>
+@@ -1191,21 +1204,29 @@ Papel.vistaPrevia = async function ({ papel = "HOJA", impresora = "", layouts =
+   capa.querySelector(".imprimir").onclick = async () => {
+     cerrar();
+     if (typeof Dialogo !== "undefined" && Dialogo.activo()) Dialogo.cerrar(null);
+-    await Papel.imprimirEn({ deviceName: impresora || null, copias: 1, color: true, papel }, indices);
++    await Papel.imprimirEn({ deviceName: impresora || null, copias: 1, color: true, papel },
++                           indices, hojas);
+   };
+   capa.addEventListener("keydown", (e) => { if (e.key === "Escape") cerrar(); });
+-  return { calculo: c, hoja: L, indices };
++  return { calculo: c, hoja: L, indices, hojas };
+ };
+ 
+-/** Manda las hojas a la impresora, centradas en el papel (HTML + @page). */
+-Papel.imprimirEn = async function (elegido, indices) {
++/** Manda las hojas a la impresora, centradas en el papel (HTML + @page).
++ *
++ *  `yaHechas` —[{ancho, alto, svg}]— imprime hojas que no están en el
++ *  documento, para la ventana del modelo (0.24.0). Es el mismo formato que
++ *  `armarHTMLImpresion` ya consumía, así que no hay un segundo camino de
++ *  impresión que mantener: sólo cambia de dónde salen las hojas. */
++Papel.imprimirEn = async function (elegido, indices, yaHechas = null) {
+   if (!enElectron() || !window.t101.imprimirHTML) {
+     return Comandos.eco("Imprimir en papel sólo funciona en la aplicación instalada.", "malo");
+   }
+   avisar("Preparando la hoja…");
+   try {
+     const hojas = [];
+-    for (const i of indices) {
++    if (yaHechas && yaHechas.length) {
++      hojas.push(...yaHechas.map((h) => ({ ancho: h.ancho, alto: h.alto, svg: h.svg })));
++    } else for (const i of indices) {
+       const h = await api(`/api/papel/${i}`);
+       const svg = await (await fetch(`/api/papel/${i}/svg`)).text();
+       hojas.push({ ancho: h.ancho, alto: h.alto, svg });
+@@ -1258,3 +1279,124 @@ Comandos.registrar({
+     await Papel.imprimirEn(elegido, indices);
+   },
+ });
++
++/* === IMPRIMIR UNA VENTANA DEL MODELO  ·  0.24.0 ============================
++ *
++ * Mike, 6-oct-2026: «quiero poder imprimir directo una ventana de la pantalla
++ * de model. Que cuando le de Ctrl+P me abra un diálogo de seleccionar la
++ * ventana. Pueda trazar una ventana del área que quiero imprimir y al dar enter
++ * me abra un preview de cómo queda en el tamaño de hoja seleccionado para
++ * mandar a imprimir».
++ *
++ * QUÉ PASABA ANTES. Ctrl+P en el modelo contestaba «no hay ninguna hoja que
++ * imprimir, crea una con PLANO». Para sacar un pedazo del dibujo había que
++ * hacer una hoja, ponerle una ventana, acomodarla a ojo, imprimir, y luego
++ * decidir si la hoja se queda estorbando en las pestañas o se borra. Cinco
++ * pasos y un archivo más sucio para imprimir una cosa y ya.
++ *
++ * LA HOJA NO SE GUARDA EN NINGUNA PARTE: se arma en el motor, se dibuja, se
++ * imprime y se tira (ver `core/papel.hoja_de_ventana` y /api/imprimir-ventana).
++ * Imprimir no modifica el dibujo.
++ *
++ * LLENA LA HOJA, y por eso el rótulo dice S/E. Lo escogió Mike con botones; la
++ * razón de no escribir «1:N» cuando la escala salió un número cualquiera está
++ * en core/papel.py, y es suya: «un plano que dice 1:20 y no lo está es peor que
++ * uno que no dice escala; el primero se mide con escalímetro y sale mal». Pero
++ * la escala de verdad SÍ se enseña en el pie de la vista previa: que no se
++ * pueda medir con escalímetro no quiere decir que haya que esconderla.
++ *
++ * Y SE PUEDE VOLVER A TRAZAR SIN CANCELAR. El primer rectángulo casi nunca
++ * queda. Después de trazarlo, Enter abre la vista previa —con las palabras de
++ * Mike: «al dar enter me abra un preview»— y R vuelve a pedir las esquinas,
++ * sin tener que empezar otra vez desde el cuadro de la hoja.
++ */
++Papel.imprimirVentanaDelModelo = async function () {
++  const en = (typeof Idioma !== "undefined" && Idioma.ingles);
++
++  // 1 · El cuadro: hoja e impresora. LA HOJA ES EL PAPEL aquí, así que no hay
++  //     dos tamaños que puedan contradecirse como en una hoja de verdad (donde
++  //     se puede dibujar un A1 y mandarlo a un papel carta).
++  const hojas = Object.entries(Papel.PAPELES).map(([k, p]) => [k, p.et]);
++  const prefs = estado.prefs || {};
++  const v = await Dialogo.abrir({
++    titulo: en ? "Print a window of the model" : "Imprimir una ventana del modelo",
++    pista: en
++      ? "Then draw the area you want. It fills the sheet, so the title block says S/E."
++      : "Luego traza sobre el dibujo el área que quieres. Llena la hoja, así que el rótulo dice S/E.",
++    campos: [
++      { clave: "formato", etiqueta: en ? "Sheet" : "Hoja", tipo: "lista",
++        valor: hojas.some((h) => h[0] === prefs.papel) ? prefs.papel : "A3",
++        opciones: hojas },
++      { clave: "impresora", etiqueta: en ? "Printer" : "Impresora", tipo: "texto",
++        valor: prefs.impresora || "" },
++    ],
++    aceptar: en ? "Draw the window" : "Trazar la ventana",
++  });
++  if (!v) return Comandos.eco(en ? "Cancelled." : "Cancelado.");
++
++  const formato = v.formato;
++  const impresora = (v.impresora || "").trim();
++
++  // Escape llega como una excepción «cancelado» (ver ui/entrada.js). Se atrapa
++  // aquí y no con el `repetir` de ui/dibujar.js: ése es de las herramientas de
++  // dibujo y repite para siempre, y esto termina cuando se imprime.
++  try {
++    for (;;) {
++      const a = await Entrada.pedirPunto({
++        mensaje: en ? "First corner of the area to print"
++                    : "Primera esquina del área a imprimir" });
++      const b = await Entrada.pedirPunto({
++        mensaje: en ? "Opposite corner" : "Esquina opuesta", base: a,
++        hule: (q) => ({ tipo: "caja", a, b: q }),
++        dinamica: "xy",
++      });
++      if (Math.abs(b[0] - a[0]) < 1e-9 || Math.abs(b[1] - a[1]) < 1e-9) {
++        Comandos.eco(en ? "That window has no area. Draw it again."
++                        : "Esa ventana no tiene área. Vuelve a trazarla.", "malo");
++        continue;
++      }
++
++      // «al dar enter me abra un preview», con sus palabras. Y R para volver a
++      // trazar: el primer rectángulo casi nunca queda, y obligar a empezar
++      // desde el cuadro por correrse dos centímetros sería de lo más molesto.
++      const resp = String(await Entrada.pedirTexto({
++        mensaje: en ? "Enter for the preview (R to draw it again)"
++                    : "Enter para la vista previa (R para volver a trazar)",
++        valor: "", opciones: ["R", "P"],
++      }) || "").toUpperCase();
++      if (resp.startsWith("R")) continue;
++
++      let r;
++      try {
++        r = await post("/api/imprimir-ventana",
++                       { x1: a[0], y1: a[1], x2: b[0], y2: b[1], formato });
++      } catch (e) { return avisar(e.message, true, 9000); }
++
++      // La escala de verdad, dicha en voz alta. Que no se pueda medir con
++      // escalímetro no quiere decir que haya que esconderla.
++      const comoQueda = `1:${r.escala < 10 ? r.escala.toFixed(1) : Math.round(r.escala)}`;
++      const cual = (Papel.PAPELES[formato] || {}).et || formato;
++      Comandos.eco(en
++        ? `${cual}${r.vertical ? " portrait" : ""} · fills the sheet at ${comoQueda} (S/E).`
++        : `${cual}${r.vertical ? " vertical" : ""} · llena la hoja a ${comoQueda} (S/E).`, "bien");
++
++      await Papel.vistaPrevia({
++        papel: formato, impresora,
++        hojas: [{ ancho: r.ancho, alto: r.alto, svg: r.svg }],
++        detalle: en
++          ? `Fills the sheet: it lands at ${comoQueda}, so the title block says S/E.`
++          : `Llena la hoja: queda a ${comoQueda}, por eso el rótulo dice S/E.`,
++      });
++      return;
++    }
++  } catch (err) {
++    if (err && err.message === "cancelado") return Comandos.eco(en ? "Cancelled." : "Cancelado.");
++    throw err;
++  }
++};
++
++Comandos.registrar({
++  nombre: "IMPRIMIRVENTANA", alias: ["IV", "PLOTVENTANA"],
++  ayuda: "Traza un área del modelo y la imprime en la hoja que escojas (Ctrl+P)",
++  correr: async () => Papel.imprimirVentanaDelModelo(),
++});
+diff --git a/ui/app.js b/ui/app.js
+index af77df1..72bc70f 100644
+--- a/ui/app.js
++++ b/ui/app.js
+@@ -758,9 +758,20 @@ window.addEventListener("keydown", (e) => {
+   else if (k === "s") { e.preventDefault(); $("#b-guardar").click(); }
+   else if (k === "o") { e.preventDefault(); $("#b-abrir").click(); }
+   else if (k === "n") { e.preventDefault(); Marco.nuevoDoc(); }
+-  // Ctrl+P es imprimir en papel en todo el mundo; el PDF se queda en el
+-  // comando IMPRIMIR y en su botón.
+-  else if (k === "p") { e.preventDefault(); Comandos.correr("IMPRIMIRFISICO"); }
++  /* Ctrl+P es imprimir en papel en todo el mundo; el PDF se queda en el
++   * comando IMPRIMIR y en su botón.
++   *
++   * Y DEPENDE DE DÓNDE ESTÉS  ·  0.24.0. En una HOJA imprime esa hoja, como
++   * siempre. En el MODELO pide el área a imprimir (Mike, 6-oct-2026: «quiero
++   * poder imprimir directo una ventana de la pantalla de model»); antes
++   * contestaba «no hay ninguna hoja que imprimir, crea una con PLANO», que es
++   * cierto y no sirve de nada cuando lo único que uno quiere es sacar un pedazo
++   * del dibujo. Para mandar una hoja a la impresora estando en el modelo sigue
++   * estando el comando IMPRESORA. */
++  else if (k === "p") {
++    e.preventDefault();
++    Comandos.correr(estado.modo === "papel" ? "IMPRIMIRFISICO" : "IMPRIMIRVENTANA");
++  }
+   else if (k === "g" && e.shiftKey) { e.preventDefault(); Comandos.correr("DESAGRUPAR"); }
+   else if (k === "g") { e.preventDefault(); Comandos.correr("GRUPO"); }
+   else if (k === "w") {
