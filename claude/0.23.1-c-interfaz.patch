@@ -1,0 +1,193 @@
+diff --git a/ui/app.js b/ui/app.js
+index 1444e15..af77df1 100644
+--- a/ui/app.js
++++ b/ui/app.js
+@@ -452,6 +452,26 @@ const Archivo = (() => {
+       avisar(`Abierto: ${nat} entidades editables` +
+         (pre ? ` y ${pre} que se conservan tal cual (${Object.keys(inf.preservadas).join(", ").toLowerCase()}).` : "."));
+     }
++    /* ¿ESTE ARCHIVO LO ESCRIBIÓ EL AUTOSAVE?  ·  0.23.1
++     *
++     * Mike, 1-oct-2026: «si se cerró antes de guardar, en la siguiente vez que
++     * se abra que aparezca un mensaje que ese archivo fue recuperado de un
++     * autosave en la última sesión».
++     *
++     * La marca viaja DENTRO del .t101d (meta.json), y por eso esto atrapa
++     * también el caso que no se ve venir: el archivo que bajó de la nube y que
++     * resultó ser el autoguardado de la OTRA computadora. Sin la marca ese
++     * archivo llegaría como un guardado cualquiera, y nadie sabría que son
++     * cambios que su dueño nunca guardó.
++     *
++     * Va ANTES del bloque de la nube porque la nube puede volver a abrir por
++     * aquí: así el aviso sale sobre el archivo que de verdad quedó en pantalla. */
++    if (estado.resumen.autoguardado) {
++      avisar(Tr("Ojo: este archivo lo escribió el autosave, no se guardó a mano. " +
++                "Son los cambios de la última sesión. Ctrl+S para conservarlos."),
++             false, 13000);
++    }
++
+     /* LA NUBE, después de abrir (0.22.0). Va al final a propósito: el plano ya
+      * está en pantalla, así que si esto pregunta algo, se pregunta sobre algo
+      * que ya se puede ver, y si falla, el plano abrió igual.
+@@ -765,11 +785,49 @@ window.addEventListener("keydown", (e) => {
+   Marco.activarDoc((esc.activo + paso + n) % n);
+ });
+ 
+-/* --- Autoguardado  ·  feature 9 ---------------------------------------- */
+-setInterval(async () => {
+-  if (!estado.resumen || !estado.resumen.sucio) return;
+-  try { await post("/api/autoguardar"); } catch (_) {}
+-}, 120000);
++/* --- Autoguardado  ·  feature 9, y la nube desde 0.23.1 ---------------- */
++/* Mike, 1-oct-2026: «un autosave que por default sea cada 5 minutos, incluida
++ * actualización del archivo nube».
++ *
++ * EL INTERVALO LO MANDA EL MOTOR (`config.AUTOGUARDADO_SEG`, que viaja en el
++ * resumen). Aquí estaba escrito a mano —`120000`— mientras config.py decía 120
++ * segundos: dos números para lo mismo, y cambiar el de config.py no cambiaba
++ * nada. Quien lo leyera creería que sí.
++ *
++ * Y por eso es un `setTimeout` que se reprograma y no un `setInterval`: cuando
++ * esto corre todavía no hay resumen, así que un intervalo fijo se habría
++ * quedado con el valor de respaldo para toda la sesión. */
++(() => {
++  const cada = () => {
++    const s = Number((estado.resumen || {}).autoguardado_seg);
++    return (Number.isFinite(s) && s >= 10 ? s : 300) * 1000;
++  };
++
++  async function vuelta() {
++    try {
++      if (estado.resumen && estado.resumen.sucio) {
++        const r = await post("/api/autoguardar");
++        /* Y LA COPIA A LA NUBE. `subir` sólo viene en true si de verdad se
++         * escribió una copia Y el dibujo ya tiene archivo en el disco: el
++         * motor contesta `copia: null` cuando nada cambió desde el
++         * autoguardado anterior, y no crea renglones en la nube para dibujos
++         * que nunca se guardaron. Ver /api/autoguardar.
++         *
++         * Sin esperarla y sin que pueda tronar nada: el autoguardado ya está
++         * escrito en el disco, que es lo que importa. */
++        if (r && r.subir && window.Nube && Nube.alAutoguardar) {
++          Nube.alAutoguardar({ ruta: r.copia, token: r.token,
++                               nombre: r.nombre, modificado: r.modificado })
++            .catch(() => { /* la nube nunca estorba a un autoguardado */ });
++        }
++      }
++    } catch (_) { /* esto corre solo: nadie lo pidió y nadie debe enterarse */ }
++    setTimeout(vuelta, cada());
++  }
++
++  setTimeout(vuelta, cada());
++  window.Autoguardado = { cada, vuelta };    // para poder medirlo
++})();
+ 
+ /* Sólo hay algo que recuperar si la vez pasada el programa **no** se cerró por
+  * la X (se cayó, lo mataron, se fue la luz): el motor lo sabe por la marca de
+@@ -829,6 +887,18 @@ if (enElectron()) {
+     }
+     window.t101.cerrar(0);
+   });
++  /* «Salir sin guardar»: la nube vuelve al último guardado  ·  0.23.1
++   *
++   * Siempre se contesta `nubeDevuelta()`, pase lo que pase, y en `finally`: si
++   * esto se quedara callado por un error, el usuario vería la ventana ahí
++   * parada los cuatro segundos del tope sin saber por qué. Salir tiene que
++   * sentirse como salir. */
++  window.t101.alSalirSinGuardar(async () => {
++    try {
++      if (window.Nube && Nube.devolverAlGuardado) await Nube.devolverAlGuardado();
++    } catch (_) { /* salir nunca falla por la nube */ }
++    finally { window.t101.nubeDevuelta(); }
++  });
+   window.t101.alAbrirArchivo(async (ruta) => {
+     try { await abrirRuta(ruta); } catch (e) { avisar(e.message, true); }
+   });
+diff --git a/ui/nube.js b/ui/nube.js
+index 47652bb..9b11ab7 100644
+--- a/ui/nube.js
++++ b/ui/nube.js
+@@ -580,9 +580,16 @@ window.Nube = Nube;
+   const T = () => (typeof Idioma !== "undefined" && Idioma.ingles);
+   let avisadoEnSesion = false;
+   let ultimaSubida = null;      // para las pruebas y para poder decir qué pasó
+-
+-  async function alGuardar({ ruta, token, nombre, modificado } = {}) {
++  let ultimaFue = null;         // «guardado», «autoguardado» o «devolver»
++
++  /* `callado` apaga el aviso y nada más. Es UN solo camino de subida a
++   * propósito: una segunda función para el autoguardado habría nacido sin la
++   * comprobación del token, sin la del .t101d o sin poner el índice al día, y
++   * habría que arreglarla dos veces. */
++  async function alGuardar({ ruta, token, nombre, modificado,
++                             callado = false, fue = "guardado" } = {}) {
+     ultimaSubida = null;
++    ultimaFue = fue;
+     if (!window.t101 || !window.t101.nube) return;
+     if (!token) { ultimaSubida = "sin_token"; return; }
+     if (!ruta || !String(ruta).toLowerCase().endsWith(".t101d")) {
+@@ -605,7 +612,11 @@ window.Nube = Nube;
+     if (r && r.apagada) { ultimaSubida = "apagada"; return; }
+ 
+     ultimaSubida = r?.sinRed ? "sin_red" : r?.sinLicencia ? "sin_licencia" : "error";
+-    if (avisadoEnSesion) return;
++    /* EL AUTOGUARDADO NO HABLA. Corre solo cada cinco minutos y nadie lo pidió:
++     * un aviso aquí sería un aviso que el usuario no provocó, y si la nube anda
++     * caída, uno cada cinco minutos toda la tarde. El estado de verdad se ve en
++     * «Mis archivos en la nube». */
++    if (callado || avisadoEnSesion) return;
+     avisadoEnSesion = true;
+     const en = T();
+     avisar(r?.sinRed
+@@ -616,7 +627,39 @@ window.Nube = Nube;
+       false, 8000);
+   }
+ 
++  /* --- El autoguardado sube igual, pero callado  ·  0.23.1 --- */
++  const alAutoguardar = (d) => alGuardar({ ...d, callado: true, fue: "autoguardado" });
++
++  /* --- Al salir sin guardar: la nube vuelve al último guardado  ·  0.23.1 ---
++   *
++   * Mike lo escogió con botones: si sales con «Salir sin guardar», esos cambios
++   * NO los quieres, y la nube no se puede quedar con ellos como la copia más
++   * nueva — mañana la otra computadora los abriría como si fueran el archivo.
++   *
++   * El motor dice QUÉ devolver (/api/nube-devolver-al-guardado) y aquí se sube.
++   * Puede haber varios dibujos abiertos con cambios, así que es una lista.
++   *
++   * CALLADO Y SIN PODER TUMBAR EL CIERRE: devuelve cuántos logró, y quien llama
++   * ya tiene su propio tope de tiempo. Si no alcanza, el archivo que quedó en la
++   * nube sigue llevando la marca de autoguardado por dentro, así que al abrirlo
++   * draw101 lo dice: nada se queda en silencio.
++   */
++  async function devolverAlGuardado() {
++    let hechos = 0;
++    try {
++      const { devolver } = await post("/api/nube-devolver-al-guardado", {});
++      for (const d of (devolver || [])) {
++        await alGuardar({ ...d, callado: true, fue: "devolver" });
++        if (ultimaSubida === "subio") hechos++;
++      }
++    } catch (_) { /* salir nunca falla por la nube */ }
++    return hechos;
++  }
++
+   Nube.alGuardar = alGuardar;
++  Nube.alAutoguardar = alAutoguardar;
++  Nube.devolverAlGuardado = devolverAlGuardado;
+   Object.defineProperty(Nube, "ultimaSubida", { get: () => ultimaSubida });
++  Object.defineProperty(Nube, "ultimaSubidaFue", { get: () => ultimaFue });
+   Nube._olvidarAviso = () => { avisadoEnSesion = false; };
+ })();
+diff --git a/ui/idioma-en.js b/ui/idioma-en.js
+index 909fd65..83926af 100644
+--- a/ui/idioma-en.js
++++ b/ui/idioma-en.js
+@@ -37,6 +37,7 @@ const IDIOMA_EN = {
+   "Recientes": "Recent", "limpiar": "clear",
+   "En la nube": "In the cloud",
+   "Suelta aquí": "Drop it here",
++  "Ojo: este archivo lo escribió el autosave, no se guardó a mano. Son los cambios de la última sesión. Ctrl+S para conservarlos.": "Careful: the autosave wrote this file — nobody saved it by hand. These are last session's changes. Ctrl+S to keep them.",
+   "Los dibujos nuevos nacen en centímetros. El modelo se dibuja a 1:1.": "New drawings start in centimetres. The model is drawn at 1:1.",
+   "más": "more", "menos": "less",
+   "Ver más líneas de la consola (F2)": "Show more console lines (F2)",
