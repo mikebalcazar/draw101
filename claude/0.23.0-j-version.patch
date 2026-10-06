@@ -1,0 +1,77 @@
+diff --git a/core/version.py b/core/version.py
+index aafe3c2..a03a318 100644
+--- a/core/version.py
++++ b/core/version.py
+@@ -21,13 +21,46 @@ Numeración: `mayor.menor.parche`.
+ 
+ from __future__ import annotations
+ 
+-VERSION = "0.22.2"
+-FECHA = "2026-10-01"
++VERSION = "0.23.0"
++FECHA = "2026-10-06"
+ 
+ # Qué trae cada entrega, en el idioma del taller y no en el del código.
+ # La más nueva arriba. Lo que se lista aquí es lo que el comando VERSION
+ # enseña en la consola.
+ BITACORA: list[dict] = [
++    {
++        "version": "0.23.0",
++        "fecha": "2026-10-06",
++        "cambios": [
++            "ARRASTRAR UN ARCHIVO A LA VENTANA. Jalas un plano de tu carpeta, lo "
++            "sueltas encima de draw101 y entra. Si estás en un dibujo en blanco "
++            "se abre sin preguntarte nada; si ya estabas trabajando, draw101 "
++            "pregunta qué quieres: abrirlo aparte, traerlo al dibujo de ahora "
++            "como un bloque, o traerlo suelto para editarlo. Si sueltas varios "
++            "de golpe, se abren en pestañas y no pregunta nada.",
++            "Acepta .t101x, PDF de fondo y los planos de siempre (DXF, DWG, "
++            "t101d): cada uno se va por donde ya se iba, sólo cambia la manera "
++            "de pedirlo.",
++            "LAS UNIDADES DEL PLANO QUE LLEGA, RESPETADAS. Un plano en metros "
++            "importado a un dibujo en centímetros ya no se multiplica por mil. "
++            "draw101 lee en qué unidades viene el archivo ($INSUNITS) y lo trae "
++            "a la escala que le toca: un muro de 7 m sigue midiendo 7 m.",
++            "Si el archivo miente sobre sus unidades —pasa, y seguido—, draw101 "
++            "mira el tamaño de lo que hay dentro antes de creerle.",
++            "COPIAR Y PEGAR VECTORES. Ctrl+C se lleva lo seleccionado al "
++            "portapapeles y Ctrl+V lo pega: en otro dibujo de draw101 vuelve "
++            "entero, con sus capas, sus bloques y sus cotas; en Illustrator, "
++            "Inkscape, Figma o Word se pega como vectores y a tamaño real — una "
++            "pieza de 1 m llega midiendo 1 m, no 100 unidades de nada.",
++            "Viaja un solo texto que los dos lados entienden, y sólo los bloques "
++            "que de verdad se usan: copiar una línea no se lleva las 176 "
++            "definiciones del plano. El comando COPIAR no cambió: sigue "
++            "duplicando dentro del dibujo, como en AutoCAD.",
++            "Pruebas t055 (29 comprobaciones) y t056 (26), las dos con el "
++            "programa de verdad en un navegador, y las dos verificadas rompiendo "
++            "el código a propósito para comprobar que sí avisan.",
++        ],
++    },
+     {
+         "version": "0.22.2",
+         "fecha": "2026-10-01",
+diff --git a/package.json b/package.json
+index 16b10da..d0ea0d5 100644
+--- a/package.json
++++ b/package.json
+@@ -1,8 +1,8 @@
+ {
+   "name": "draw101",
+   "productName": "draw101",
+-  "version": "0.22.2",
+-  "_versionApp": "0.22.2 — la que enseña la app viene de core/version.py; ésta sólo existe porque electron-builder exige semver",
++  "version": "0.23.0",
++  "_versionApp": "0.23.0 — la que enseña la app viene de core/version.py; ésta sólo existe porque electron-builder exige semver",
+   "_notaAsociaciones": "draw101 aparece en «Abrir con» de los DXF y DWG y en Aplicaciones predeterminadas, pero NO se roba la asociación: quién los abre por omisión lo sigue decidiendo el usuario (regla de Mike, 0.11.2). electron-builder registra el ProgID; Windows decide. El .t101d sí es nuestro. Ojo: dentro de «build» electron-builder rechaza cualquier clave que no conozca, aunque empiece con guión bajo (se cazó armando la 0.20.16).",
+   "_notaEmpaque": "asar apagado a propósito: main.js busca server.py junto a electron/, y el motor de Python no puede vivir dentro de un asar. Y electron-builder saca cualquier node_modules de los globs de `files`, así que los dos motores de DWG (dwgjs/node_modules) se copian por extraResources o la app se queda sin leer DWG.",
+   "description": "CAD 2D de Taller 101 — leer, trazar, acotar e imprimir planos",
+@@ -21,7 +21,7 @@
+   "build": {
+     "appId": "mx.taller101.dibujador",
+     "productName": "draw101",
+-    "artifactName": "draw101-0.22.2-setup.${ext}",
++    "artifactName": "draw101-0.23.0-setup.${ext}",
+     "directories": {
+       "output": "dist",
+       "buildResources": "build"
