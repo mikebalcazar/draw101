@@ -1,0 +1,193 @@
+diff --git a/core/importar.py b/core/importar.py
+new file mode 100644
+index 0000000..288eae3
+--- /dev/null
++++ b/core/importar.py
+@@ -0,0 +1,187 @@
++"""Traer OTRO plano al dibujo que ya está abierto  ·  draw101 0.23.0
++
++Mike, 6-oct-2026: «Quiero poder arrastrar un archivo desde mi carpeta sobre la
++ventana de draw y que en automático draw lo abra o pregunte si lo quiere
++importar en el archivo actual o abrirlo».
++
++Abrir ya existía. Traerlo AL dibujo abierto, no: lo único parecido era importar
++una cocina de Taller 101 (`core/t101x.py`, que dibuja muebles) y poner un PDF de
++fondo. Esto es lo otro: un plano ajeno —.t101d, DWG o DXF— metido en el que uno
++está dibujando.
++
++DOS MANERAS, y Mike pidió que se pregunte cuál:
++
++  · COMO BLOQUE. Todo el plano entra como UNA pieza. Se mueve, se escala y se
++    gira completo, y EXPLOTAR lo abre en sus partes el día que haga falta. Es lo
++    que hace AutoCAD con INSERT, y es como ya entran las cocinas de nest101.
++    Aquí sólo se DEFINE el bloque; colocarlo lo hace el comando INSERTAR, que ya
++    existe y ya está medido. Partirlo así evita un segundo camino para lo mismo.
++
++  · SUELTO. Sus entidades se mezclan con las tuyas, cada una en su capa. Sirve
++    para juntar dos mitades del mismo plano. Una vez dentro ya no se distingue
++    qué vino de dónde: por eso la decisión es del dibujante y no nuestra.
++
++LO QUE HAY QUE CUIDAR, y es casi todo el trabajo:
++
++  · LAS UNIDADES. Un plano en metros traído a uno en centímetros tiene que
++    llegar midiendo lo mismo, no cien veces más. Se escala por la razón entre
++    las dos unidades. Es el mismo problema que arregló `core/unidades.py` el
++    6-oct-2026 y la razón de que esto se haya hecho después.
++
++  · LOS NOMBRES QUE CHOCAN. Dos planos distintos tienen los dos una capa «0» y
++    pueden tener los dos un bloque «PUERTA» que no se parecen en nada. La capa
++    que ya existe MANDA —no se le tocan color ni grosor a nadie en su propio
++    dibujo— y el bloque que choca entra renombrado, con las inserciones que lo
++    usaban apuntando al nombre nuevo.
++
++  · SÓLO EL MODELO. Las hojas del otro plano no se traen. Uno importa un dibujo,
++    no el papel en que alguien más lo iba a imprimir.
++
++  · IDS NUEVOS. Los identificadores corren globales; copiar una entidad con su
++    id pisaría la que ya estaba ahí.
++"""
++
++from __future__ import annotations
++
++import re
++
++from . import capas as mod_capas
++from . import unidades as mod_unidades
++from .entidades import Bloque, de_dict
++
++
++def _sin_id(e) -> dict:
++    """El dict de una entidad, sin su id: al construirla se le da uno nuevo."""
++    d = e.a_dict()
++    d.pop("id", None)
++    return d
++
++
++def _nombre_libre(usados, base: str) -> str:
++    """Un nombre que no choque. «PUERTA» → «PUERTA (2)» → «PUERTA (3)»…"""
++    if base not in usados:
++        return base
++    raiz = re.sub(r" \(\d+\)$", "", base)
++    i = 2
++    while f"{raiz} ({i})" in usados:
++        i += 1
++    return f"{raiz} ({i})"
++
++
++def _traer_capas(destino, origen) -> int:
++    """Las capas que faltan. Las que ya existen NO se tocan.
++
++    Pisarle a alguien el color o el grosor de su capa «MUROS» porque el archivo
++    que importó traía otra con el mismo nombre sería cambiarle el dibujo sin
++    pedírselo.
++    """
++    nuevas = 0
++    for nombre, capa in origen.capas.items():
++        if nombre in destino.capas:
++            continue
++        copia = mod_capas.Capa.de_dict(capa.a_dict())
++        # Una capa importada nunca entra bloqueada, apagada ni congelada: el
++        # dibujante acaba de pedir que esto entre, y no vería nada.
++        copia.bloqueada = False
++        copia.visible = True
++        copia.congelada = False
++        destino.capas[nombre] = copia
++        nuevas += 1
++    return nuevas
++
++
++def _traer_bloques(destino, origen, k: float) -> dict:
++    """Las definiciones de bloque del otro plano. Devuelve viejo → nuevo nombre.
++
++    El contenido del bloque NO se escala: igual que en `core/unidades.py`, lo que
++    crece es la `escala` de cada inserción. Así una definición que usan treinta
++    inserciones se copia una vez y no treinta veces reescrita.
++    """
++    renombres = {}
++    for nombre, bl in origen.bloques.items():
++        if nombre in destino.bloques:
++            igual = [e.a_dict() for e in destino.bloques[nombre].entidades] == \
++                    [e.a_dict() for e in bl.entidades]
++            if igual:
++                renombres[nombre] = nombre      # es el mismo: no se duplica
++                continue
++            nuevo = _nombre_libre(destino.bloques, nombre)
++        else:
++            nuevo = nombre
++        renombres[nombre] = nuevo
++        destino.bloques[nuevo] = Bloque(
++            nombre=nuevo, base=list(bl.base), descripcion=bl.descripcion,
++            entidades=[de_dict(_sin_id(e)) for e in bl.entidades])
++    # Las inserciones DENTRO de los bloques también apuntan por nombre.
++    for nuevo in set(renombres.values()):
++        for e in destino.bloques.get(nuevo, Bloque(nombre=nuevo)).entidades:
++            if e.tipo == "insercion" and e.bloque in renombres:
++                e.bloque = renombres[e.bloque]
++    return renombres
++
++
++def _del_modelo(origen):
++    """Las entidades del modelo. Las de las hojas se quedan donde estaban."""
++    return [e for e in origen.entidades.values() if not getattr(e, "espacio", "")]
++
++
++def _preparar(destino, origen, marca: str):
++    """Capas, bloques y las entidades ya escaladas y con id nuevo."""
++    k = origen.mm_por_unidad() / destino.mm_por_unidad()
++    capas = _traer_capas(destino, origen)
++    renombres = _traer_bloques(destino, origen, k)
++
++    copias = []
++    for e in _del_modelo(origen):
++        nueva = de_dict(_sin_id(e))
++        if nueva.tipo == "insercion" and nueva.bloque in renombres:
++            nueva.bloque = renombres[nueva.bloque]
++        if k != 1.0:
++            mod_unidades.escalar_entidad(nueva, k)
++        nueva.origen = marca
++        copias.append(nueva)
++    return copias, capas, k
++
++
++def como_bloque(destino, origen, nombre_archivo: str, marca: str = "") -> dict:
++    """Define un bloque con todo el plano. NO lo inserta: eso es INSERTAR."""
++    copias, capas, k = _preparar(destino, origen, marca)
++    if not copias:
++        raise ValueError("Ese plano no trae nada en el modelo")
++
++    nombre = _nombre_libre(destino.bloques, nombre_archivo)
++    # El punto de agarre es la esquina inferior izquierda de lo que entra, y no
++    # el origen del otro plano: así el plano cuelga del cursor por su esquina y
++    # se ve dónde va a caer. Un plano dibujado lejos del origen colgaría del
++    # vacío, a cien metros del cursor.
++    xs, ys = [], []
++    for e in copias:
++        caja = e.caja()
++        if caja:
++            xs += [caja[0], caja[2]]
++            ys += [caja[1], caja[3]]
++    base = [min(xs), min(ys)] if xs else [0.0, 0.0]
++
++    destino.bloque_agregar(Bloque(nombre=nombre, base=base, entidades=copias,
++                                  descripcion=f"Importado de {nombre_archivo}"))
++    return {"como": "bloque", "bloque": nombre, "entidades": len(copias),
++            "capas": capas, "factor": k}
++
++
++def suelto(destino, origen, nombre_archivo: str, marca: str = "") -> dict:
++    """Mete las entidades del otro plano en el dibujo, cada una en su capa."""
++    copias, capas, k = _preparar(destino, origen, marca)
++    if not copias:
++        raise ValueError("Ese plano no trae nada en el modelo")
++
++    puestas = 0
++    for e in copias:
++        # Una capa bloqueada del dibujo de destino no se fuerza: lo que venía en
++        # ella se pone en la capa activa y se dice cuántas. Reventar la
++        # importación entera por una capa bloqueada sería peor.
++        capa = destino.capas.get(e.capa)
++        if capa is not None and capa.bloqueada:
++            e.capa = destino.capa_activa
++        destino.agregar(e)
++        puestas += 1
++    return {"como": "suelto", "entidades": puestas, "capas": capas, "factor": k}
