@@ -1,0 +1,274 @@
+diff --git a/pruebas/t057_autosave.py b/pruebas/t057_autosave.py
+new file mode 100644
+index 0000000..213ece5
+--- /dev/null
++++ b/pruebas/t057_autosave.py
+@@ -0,0 +1,268 @@
++"""t057 · El autosave: cada 5 minutos, 10 copias, y la nube  ·  0.23.1
++
++Mike, 1-oct-2026: «podemos implementar una función de autosave que por default
++sea cada 5 minutos, incluida actualización del archivo nube. Si se cerró antes
++de guardar, en la siguiente vez que se abra que aparezca un mensaje que ese
++archivo fue recuperado de un autosave en la última sesión». Y después: «que sí
++sea los últimos 10 guardados, no necesitamos versiones. Aún no».
++
++El autoguardado local ya existía (feature 9). Lo nuevo es a 5 minutos, 10
++copias, que SUBA, y que al abrirlo se diga de dónde viene.
++
++LO QUE SE MIDE AQUÍ Y NO SE VE:
++
++  · QUE EL INTERVALO SALGA DE LA CONFIGURACIÓN. Era un error viejo: config.py
++    decía 120 segundos y ui/app.js traía `120000` escrito a mano. Dos números
++    para lo mismo, y el de config.py no servía para nada: cambiarlo no cambiaba
++    el programa, pero quien lo leyera creería que sí. Esta comprobación es la
++    que impide que vuelva a pasar.
++
++  · QUE SIN CAMBIOS NO SE ESCRIBA NI SE SUBA NADA. `doc.sucio` no sirve para
++    esto: autoguardar lo deja encendido a propósito, así que después del primer
++    autoguardado se queda así hasta que el usuario guarde de verdad. Sin la
++    huella del contenido, dejar draw101 abierto sin tocarlo escribiría una copia
++    cada cinco minutos y la subiría: en una hora, doce subidas idénticas y el
++    anillo de diez copias lleno de lo mismo — con el trabajo de hace media hora,
++    que es justo el que uno querría, desplazado por diez copias gemelas.
++
++  · QUE LA MARCA VIAJE DENTRO DEL ARCHIVO. Es lo que hace posible el caso que
++    no se ve venir: el archivo que bajó de la nube y que resultó ser el
++    autoguardado de la OTRA computadora. Sin la marca llegaría como un guardado
++    cualquiera y nadie sabría que son cambios que su dueño nunca guardó. Y va
++    dentro del archivo —no en un campo de la nube— porque el servidor no puede
++    leer nada, y porque así no hay que cambiarle el esquema a la API.
++
++  · QUE UN GUARDADO DE VERDAD LA QUITE. Si no, el aviso saldría para siempre.
++
++  · QUE UN DIBUJO QUE NUNCA SE GUARDÓ NO ACABE EN LA NUBE. `autoguardar` le
++    pone token a lo que no lo traiga, así que podría subir: cada garabato que
++    alguien empieza y abandona aparecería para siempre en «Mis archivos en la
++    nube». El autoguardado local sí se hace; el renglón en la nube, no.
++
++  · QUE EL AUTOGUARDADO NO HABLE. Corre solo y nadie lo pidió.
++
++VERIFICADA ROMPIENDO EL CÓDIGO, una rotura a la vez:
++
++  · que la interfaz vuelva a traer el intervalo escrito a mano → 2 fallos
++  · quitar la huella, que vuelve a autoguardar sin cambios → 1
++  · que el nombre del autoguardado vuelva a tener sólo segundos → 1
++  · que el autoguardado vuelva a hablar → 1
++  · que la marca no se escriba en el archivo → 2
++  · que vuelvan a conservarse 5 copias en vez de 10 → 2
++
++Y una de esas roturas salió VERDE la primera vez: la del autoguardado que
++habla. La prueba lo medía con la nube contestando bien, y por ahí `alGuardar`
++sale antes de llegar al aviso, así que no medía nada. Ahora se mide con la nube
++caída, que es donde el aviso de más sí saldría, y con el control de que un
++guardado de verdad en las mismas condiciones SÍ avisa.
++"""
++
++from __future__ import annotations
++
++import json
++import zipfile
++
++from core import config, proyecto
++from core import entidades as ent
++from core.documento import Documento
++from pruebas import comun, navegador
++
++DESCRIPCION = "el autosave: 5 minutos y 10 copias de la configuración, la marca dentro del archivo, y la nube"
++
++
++def _meta(ruta) -> dict:
++    with zipfile.ZipFile(ruta, "r") as z:
++        return json.loads(z.read("meta.json").decode("utf-8"))
++
++
++def _motor(r: comun.Reporte) -> None:
++    # --- 1. Los números que pidió Mike, en un solo lugar ----------------
++    r.igual(config.AUTOGUARDADO_SEG, 300, "autoguarda cada 5 minutos")
++    r.igual(config.AUTOGUARDADO_MAX, 10, "y conserva las últimas 10 copias")
++
++    with comun.carpeta() as tmp:
++        archivo = tmp / "mesa.t101d"
++        doc = Documento.nuevo()
++        with doc.transaccion("dibujar"):
++            doc.agregar(ent.Linea(p1=[0, 0], p2=[100, 0]))
++        proyecto.guardar(doc, archivo)
++
++        # --- 2. Un guardado de verdad NO lleva la marca ------------------
++        r.igual(_meta(archivo).get("autoguardado"), False,
++                "un guardado normal dice, dentro del archivo, que no es un autoguardado")
++        r.igual(doc.autoguardado, False, "y el documento en memoria tampoco lo cree")
++
++        # --- 3. El autoguardado SÍ ---------------------------------------
++        with doc.transaccion("mover"):
++            doc.agregar(ent.Linea(p1=[0, 0], p2=[0, 50]))
++        copia = proyecto.autoguardar(doc, archivo)
++        r.cierto(copia is not None, "con cambios, el autoguardado escribe su copia")
++        if copia:
++            r.igual(_meta(copia).get("autoguardado"), True,
++                    "y la copia dice por dentro que la escribió el autosave")
++        r.cierto(doc.sucio, "autoguardar no es guardar: el trabajo sigue sucio")
++
++        # --- 4. La marca sobrevive el viaje: se abre y sigue ahí ---------
++        vuelto = proyecto.abrir(copia)
++        r.igual(vuelto.autoguardado, True,
++                "al abrir esa copia, draw101 sabe que viene de un autosave")
++        # ES LO QUE HACE POSIBLE EL CASO DE LA NUBE: la otra computadora baja el
++        # archivo y, sin preguntarle nada al servidor, sabe qué tiene en la mano.
++        r.igual(proyecto.abrir(archivo).autoguardado, False,
++                "CONTROL · y al abrir el guardado de verdad, sabe que NO lo es")
++
++        # --- 5. Un guardado de verdad quita la marca ---------------------
++        proyecto.guardar(vuelto, tmp / "otra.t101d")
++        r.igual(vuelto.autoguardado, False,
++                "guardar de verdad quita la marca: el aviso deja de salir")
++        r.igual(_meta(tmp / "otra.t101d").get("autoguardado"), False, "y también en el archivo")
++
++        # --- 6. SIN CAMBIOS NO SE ESCRIBE NADA ---------------------------
++        # `doc` sigue sucio desde el punto 3, así que esto mide la huella del
++        # contenido y no `sucio`: si se midiera `sucio`, pasaría igual sin el
++        # arreglo, que es como estaba antes.
++        r.cierto(doc.sucio, "CONTROL · el documento sigue marcado como sucio")
++        r.igual(proyecto.autoguardar(doc, archivo), None,
++                "pero sin cambios no escribe otra copia: nada que subir a la nube")
++        with doc.transaccion("otro trazo"):
++            doc.agregar(ent.Linea(p1=[5, 5], p2=[9, 9]))
++        r.cierto(proyecto.autoguardar(doc, archivo) is not None,
++                 "CONTROL · y en cuanto algo cambia, vuelve a escribir")
++
++        # --- 7. El anillo se poda a 10, no a 5 ---------------------------
++        for i in range(14):
++            with doc.transaccion(f"trazo {i}"):
++                doc.agregar(ent.Linea(p1=[i, 0], p2=[i, 1]))
++            proyecto.autoguardar(doc, archivo)
++        base = proyecto._slug(archivo.stem)
++        quedan = list(proyecto.CARPETA_AUTO.glob(f"{base}-*{config.EXT_PROYECTO}"))
++        r.igual(len(quedan), 10, "después de 16 autoguardados quedan las 10 últimas")
++
++
++def _pantalla(r: comun.Reporte) -> None:
++    if not navegador.hay_navegador():
++        r.cierto(True, "(sin Playwright en esta máquina: se salta la parte de pantalla)")
++        return
++
++    with navegador.programa() as (pagina, base):
++        navegador.cerrar_inicio(pagina)
++
++        # --- 8. EL INTERVALO SALE DE LA CONFIGURACIÓN -------------------
++        r.cierto(pagina.evaluate("() => typeof Autoguardado === 'object'"),
++                 "el autoguardado de la interfaz está cargado")
++        r.igual(pagina.evaluate("() => estado.resumen.autoguardado_seg"), 300,
++                "el motor le dice a la interfaz cada cuánto autoguardar")
++        r.igual(pagina.evaluate("() => Autoguardado.cada()"), 300000,
++                "y la interfaz usa ESE número, no uno escrito a mano")
++        # El control que lo convierte en una prueba de verdad: si la interfaz
++        # trajera el número fijo, cambiar el del motor no movería nada.
++        pagina.evaluate("() => { estado.resumen.autoguardado_seg = 60; }")
++        r.igual(pagina.evaluate("() => Autoguardado.cada()"), 60000,
++                "CONTROL · cambiar el del motor cambia el de la interfaz")
++        pagina.evaluate("() => { estado.resumen.autoguardado_seg = 300; }")
++
++        # --- 9. El autoguardado sube a la nube, y callado ---------------
++        pagina.evaluate("""() => {
++            window.espia = { subidas: [], avisos: 0 };
++            window.t101 = window.t101 || {};
++            window.t101.nube = {
++              subir: async (d) => { window.espia.subidas.push(d); return { ok: true, version: 3 }; },
++              encendida: async () => true,
++            };
++            // Se cuenta si HABLA: el autoguardado no debe avisar nada.
++            const deVerdad = window.avisar;
++            window.avisar = (...a) => { window.espia.avisos++; return deVerdad(...a); };
++        }""")
++        pagina.evaluate("""async () => {
++            await Nube.alAutoguardar({ ruta: 'C:/auto/mesa-20261006-143000.t101d',
++                                       token: '01M3T8SAQ0FQ68D9QT1VEGMH3F',
++                                       nombre: 'mesa.t101d', modificado: '2026-10-06T14:30:00' });
++        }""")
++        pagina.wait_for_timeout(300)
++        r.igual(pagina.evaluate("() => window.espia.subidas.length"), 1,
++                "el autoguardado sube a la nube")
++        r.igual(pagina.evaluate("() => (window.espia.subidas[0] || {}).nombre || null"), "mesa.t101d",
++                "con el nombre del DOCUMENTO, no el de la copia: es el mismo archivo de la nube")
++        r.igual(pagina.evaluate("() => Nube.ultimaSubidaFue"), "autoguardado",
++                "y queda dicho que fue un autoguardado y no un guardado")
++
++        # --- 9b. Y CALLADO, QUE ES LO QUE HAY QUE MEDIR DE VERDAD --------
++        #
++        # SE MIDE CON LA NUBE CAÍDA a propósito. La primera versión de esta
++        # prueba lo medía con la nube respondiendo bien, y no medía NADA: por
++        # ahí `alGuardar` sale antes de llegar al aviso, así que pasaba igual
++        # con el silencio quitado. Se cazó rompiendo el código: la rotura «que
++        # el autoguardado vuelva a hablar» salía verde.
++        #
++        # Con la nube caída es donde se nota: un aviso cada cinco minutos toda
++        # la tarde, por algo que el usuario no provocó.
++        pagina.evaluate("""() => {
++            window.espia.avisos = 0;
++            Nube._olvidarAviso();
++            window.t101.nube.subir = async (d) => { window.espia.subidas.push(d);
++                                                    return { sinRed: true }; };
++        }""")
++        pagina.evaluate("""async () => {
++            await Nube.alAutoguardar({ ruta: 'C:/auto/mesa-2.t101d',
++                                       token: '01M3T8SAQ0FQ68D9QT1VEGMH3F',
++                                       nombre: 'mesa.t101d', modificado: '2026-10-06T14:35:00' });
++        }""")
++        pagina.wait_for_timeout(300)
++        r.igual(pagina.evaluate("() => Nube.ultimaSubida"), "sin_red",
++                "CONTROL · la nube está caída y el autoguardado lo sabe")
++        r.igual(pagina.evaluate("() => window.espia.avisos"), 0,
++                "y aun así NO avisa nada: corre solo y nadie lo pidió")
++
++        # Y el control que convierte lo de arriba en una prueba: un GUARDADO de
++        # verdad, con la misma nube caída, SÍ avisa. El silencio es del
++        # autoguardado, no de la nube.
++        pagina.evaluate("""async () => {
++            window.espia.avisos = 0;
++            Nube._olvidarAviso();
++            await Nube.alGuardar({ ruta: 'C:/planos/mesa.t101d',
++                                   token: '01M3T8SAQ0FQ68D9QT1VEGMH3F',
++                                   nombre: 'mesa.t101d', modificado: '2026-10-06T14:36:00' });
++        }""")
++        pagina.wait_for_timeout(300)
++        r.igual(pagina.evaluate("() => window.espia.avisos"), 1,
++                "CONTROL · pero un guardado de verdad sí avisa que la copia no subió")
++
++        pagina.evaluate("""() => {
++            window.espia.avisos = 0;
++            window.t101.nube.subir = async (d) => { window.espia.subidas.push(d);
++                                                    return { ok: true, version: 4 }; };
++        }""")
++
++        # --- 10. Al salir sin guardar, la nube vuelve al último guardado -
++        pagina.evaluate("""() => {
++            window.espia.subidas = [];
++            const fetchDeVerdad = window.fetch;
++            window.fetch = async (url, op) => {
++              if (String(url).includes('/api/nube-devolver-al-guardado')) {
++                // `api()` lee con .text() y luego JSON.parse, no con .json():
++                // un doble de mentiras que sólo trae .json() se lee como {}.
++                return { ok: true, text: async () => JSON.stringify({ devolver: [
++                  { ruta: 'C:/planos/mesa.t101d', token: '01M3T8SAQ0FQ68D9QT1VEGMH3F',
++                    nombre: 'mesa.t101d', modificado: '2026-10-06T10:00:00' }] }) };
++              }
++              return fetchDeVerdad(url, op);
++            };
++        }""")
++        hechos = pagina.evaluate("() => Nube.devolverAlGuardado()")
++        pagina.wait_for_timeout(300)
++        r.igual(hechos, 1, "al salir sin guardar se vuelve a subir el archivo guardado")
++        # Sin `[0]` a pelo: si no subió nada, la comprobación de arriba ya falló
++        # y éstas tienen que DECIRLO, no reventar. Una prueba que lanza una
++        # excepción se come el resto de la corrida en vez de contar qué pasó.
++        r.igual(pagina.evaluate("() => (window.espia.subidas[0] || {}).ruta || null"),
++                "C:/planos/mesa.t101d",
++                "y lo que sube es el archivo del disco, no el autoguardado")
++        r.igual(pagina.evaluate("() => (window.espia.subidas[0] || {}).modificado || null"),
++                "2026-10-06T10:00:00",
++                "con la fecha de DENTRO del archivo, que es la del guardado de verdad")
++        r.igual(pagina.evaluate("() => window.espia.avisos"), 0, "y tampoco habla")
++
++
++def correr(r: comun.Reporte) -> None:
++    _motor(r)
++    _pantalla(r)
