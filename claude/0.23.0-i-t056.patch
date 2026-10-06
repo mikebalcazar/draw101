@@ -1,0 +1,206 @@
+diff --git a/pruebas/t056_portapapeles.py b/pruebas/t056_portapapeles.py
+new file mode 100644
+index 0000000..b59013d
+--- /dev/null
++++ b/pruebas/t056_portapapeles.py
+@@ -0,0 +1,200 @@
++"""t056 · Copiar al portapapeles como vectores, y pegar sin perder nada.
++
++Mike, 6-oct-2026: «Quiero poder copiar bloques y líneas y trazos y que se vayan
++en el portapapeles para pegarlos en otro documento de draw o en algún programa
++que lea vectores».
++
++SON DOS DESTINOS CON NECESIDADES OPUESTAS, y la decisión de diseño es que viajen
++en UN SOLO TEXTO: un SVG, con el formato propio de draw101 escondido dentro, en
++`<metadata>`. Illustrator, Inkscape y Figma leen los vectores y se saltan el
++`metadata` —el estándar se lo manda—; draw101 lee el `metadata` y recupera las
++capas, los bloques y las cotas tal como eran.
++
++La alternativa era poner dos cosas distintas en el portapapeles y pelearse con
++los formatos a medida de cada sistema operativo. Un solo texto no se puede
++desincronizar, y lo que se pega en Word también sirve.
++
++LO QUE SE MIDE AQUÍ Y NO SE VE:
++
++  · QUE LAS MEDIDAS SALGAN EN MILÍMETROS DE VERDAD. Lo que se pega en Illustrator
++    tiene que medir lo que mide la pieza; allá nadie sabe que este plano estaba
++    en centímetros. Es lo que convierte «pegué el mueble» en «pegué el mueble a
++    tamaño».
++  · QUE EL SVG VENGA RECORTADO a lo copiado. Uno del tamaño del plano entero,
++    con la pieza en una esquina, se pega como un cuadro gigante y vacío.
++  · QUE SÓLO VIAJEN LOS BLOQUES QUE SE USAN. Llevarse las 176 definiciones de un
++    plano de arquitectura por copiar una línea es un portapapeles de megabytes.
++  · QUE UN SVG AJENO NO SE INVENTE NADA. Si lo que hay en el portapapeles no es
++    de draw101, se dice; adivinar capas y cotas a partir de unos vectores sería
++    inventarse un dibujo que nadie hizo.
++  · QUE CTRL+C NO LE ROBE EL COPIAR A UN CAMPO DE TEXTO. Quien está escribiendo
++    el nombre de una capa y copia tres letras espera tres letras.
++
++Y POR QUÉ EL COMANDO `COPIAR` NO CAMBIA: en AutoCAD, COPY duplica dentro del
++dibujo y Ctrl+C va al portapapeles. Cambiarle el significado a COPIAR haría que
++media oficina pegara donde quería duplicar.
++
++VERIFICADA ROMPIENDO EL CÓDIGO, una rotura a la vez:
++
++  · que viajen todos los bloques y no sólo los usados → 2 fallos
++  · medir el SVG en unidades del dibujo en vez de milímetros → 2 fallos
++  · que el guardia de los campos de texto siempre diga que no hay campo → 1
++  · pegar sin dejar lo pegado seleccionado → 1
++
++Y restaurado el código, verde otra vez: 26 comprobaciones.
++"""
++
++from __future__ import annotations
++
++from core import entidades as ent
++from core import svg as mod_svg
++from core.documento import Documento
++from pruebas import comun, navegador
++
++DESCRIPCION = "copiar como vectores lleva dos lectores en un solo texto, y pegar no pierde nada"
++
++
++def _motor(r: comun.Reporte) -> None:
++    import re
++
++    doc = Documento.nuevo()                 # centímetros
++    doc.bloque_agregar(ent.Bloque(nombre="SILLA", base=[0, 0],
++                                  entidades=[ent.Linea(p1=[0, 0], p2=[45, 0])]))
++    doc.bloque_agregar(ent.Bloque(nombre="NO-SE-USA", base=[0, 0],
++                                  entidades=[ent.Linea(p1=[0, 0], p2=[1, 0])]))
++    with doc.transaccion("dibujar"):
++        linea = doc.agregar(ent.Linea(p1=[0, 0], p2=[100, 0]))      # 100 cm = 1 m
++        silla = doc.agregar(ent.Insercion(bloque="SILLA", p=[20, 20]))
++
++    ids = [linea.id, silla.id]
++    carga = mod_svg.carga_de_seleccion(doc, ids)
++    usados = [b["nombre"] for b in carga["bloques"]]
++    texto = mod_svg.seleccion_svg(doc, ids, carga)
++
++    # --- 1. Un texto, dos lectores -------------------------------------
++    r.cierto(texto.startswith("<svg") and texto.rstrip().endswith("</svg>"),
++             "lo que se copia es un SVG de verdad, de principio a fin")
++    r.cierto('<metadata id="draw101">' in texto,
++             "y lleva el formato propio de draw101 escondido dentro")
++
++    vuelta = mod_svg.carga_de(texto)
++    r.cierto(vuelta is not None, "que se recupera entero al pegar")
++    r.igual(vuelta["unidades"], "cm",
++            "con la unidad en que estaba el dibujo de origen")
++    r.igual(len(vuelta["entidades"]), 2, "y las dos entidades copiadas")
++
++    # --- 2. Sólo los bloques que se usan -------------------------------
++    r.igual(sorted(usados), ["SILLA"],
++            "viaja la definición del bloque que se copió")
++    # Sin este control, la de arriba pasaría igual en un documento de un bloque.
++    r.cierto("NO-SE-USA" in doc.bloques,
++             "CONTROL · el dibujo sí tenía otro bloque que no se usó")
++    r.igual([b["nombre"] for b in vuelta["bloques"]], ["SILLA"],
++            "y el que nadie usó se queda: el portapapeles no carga el plano entero")
++
++    # --- 3. Las medidas, en milímetros de verdad ------------------------
++    m = re.search(r'width="([\d.]+)mm" height="([\d.]+)mm"', texto)
++    r.cierto(m is not None, "el SVG declara su tamaño en milímetros")
++    if m:
++        ancho = float(m.group(1))
++        # La línea mide 100 cm = 1 000 mm, más 2 mm de margen por lado. Si las
++        # medidas salieran en unidades del dibujo, aquí diría 104.
++        r.casi(ancho, 1004, "una línea de 100 cm sale midiendo 1 000 mm, no 100", 0.5)
++
++    # --- 4. Recortado a lo copiado --------------------------------------
++    lejos = Documento.nuevo()
++    with lejos.transaccion("lejos"):
++        a = lejos.agregar(ent.Linea(p1=[10000, 10000], p2=[10100, 10000]))
++    chico = mod_svg.seleccion_svg(lejos, [a.id])
++    m2 = re.search(r'width="([\d.]+)mm"', chico)
++    r.casi(float(m2.group(1)), 1004,
++           "un trazo dibujado lejos del origen sale recortado a su tamaño, no al del plano", 0.5)
++
++    # --- 5. Lo ajeno no se inventa --------------------------------------
++    r.igual(mod_svg.carga_de('<svg><path d="M0 0 L10 10"/></svg>'), None,
++            "un SVG de otro programa no trae nada de draw101, y se dice")
++    r.igual(mod_svg.carga_de("una nota cualquiera"), None, "ni un texto cualquiera")
++    r.igual(mod_svg.carga_de(texto[:len(texto) // 2]), None,
++            "ni un SVG de draw101 cortado a la mitad")
++
++
++def _pantalla(r: comun.Reporte) -> None:
++    if not navegador.hay_navegador():
++        r.cierto(True, "(sin Playwright en esta máquina: se salta la parte de pantalla)")
++        return
++
++    with navegador.programa() as (pagina, base):
++        navegador.cerrar_inicio(pagina)
++        r.cierto(pagina.evaluate("() => typeof Portapapeles === 'object'"),
++                 "el módulo del portapapeles está cargado")
++
++        # El portapapeles de verdad no se puede tocar sin foco ni permisos en un
++        # navegador de pruebas: se espía, que es lo que se quiere medir.
++        pagina.evaluate("""() => {
++            window.copiado = null;
++            navigator.clipboard.writeText = async (t) => { window.copiado = t; };
++            navigator.clipboard.readText = async () => window.enElPortapapeles || "";
++        }""")
++
++        # --- 1. Sin selección se dice, no se copia un SVG vacío ----------
++        pagina.evaluate("() => { estado.sel.clear(); window.copiado = null; }")
++        pagina.evaluate("() => Portapapeles.copiar()")
++        pagina.wait_for_timeout(260)
++        r.igual(pagina.evaluate("() => Portapapeles._ultimo()"), "sin_seleccion",
++                "con nada seleccionado se dice, en vez de copiar un dibujo vacío")
++        r.igual(pagina.evaluate("() => window.copiado"), None, "y no se toca el portapapeles")
++
++        # --- 2. Copiar de verdad -----------------------------------------
++        navegador.comando(pagina, "LINEA")
++        navegador.comando(pagina, "0,0")
++        navegador.comando(pagina, "100,0")
++        pagina.keyboard.press("Escape")
++        pagina.wait_for_timeout(200)
++        ids = pagina.evaluate("estado.trazos.map((t) => t.id)")
++        r.cierto(len(ids) > 0, "hay algo dibujado que copiar")
++        pagina.evaluate("(ids) => { estado.sel.clear(); ids.forEach((i) => estado.sel.add(i)); }", ids)
++
++        pagina.evaluate("() => Portapapeles.copiar()")
++        pagina.wait_for_timeout(500)
++        copiado = pagina.evaluate("() => window.copiado") or ""
++        r.cierto(copiado.startswith("<svg"), "copiar deja un SVG en el portapapeles")
++        r.cierto('<metadata id="draw101">' in copiado,
++                 "con el formato de draw101 dentro, para pegarlo sin perder nada")
++        r.igual(pagina.evaluate("() => Portapapeles._ultimo()"), "copio",
++                "y se avisa que se copió")
++
++        # --- 3. Pegar algo que no es de draw101 --------------------------
++        pagina.evaluate("""() => { window.enElPortapapeles = '<svg><path d="M0 0"/></svg>'; }""")
++        pagina.evaluate("() => Portapapeles.pegar()")
++        pagina.wait_for_timeout(400)
++        r.igual(pagina.evaluate("() => Portapapeles._ultimo()"), "ajeno",
++                "pegar un SVG de otro programa se dice, y no se inventa un dibujo")
++
++        # --- 3b. Pegar lo propio: vuelve entero y queda seleccionado ------
++        antes = pagina.evaluate("() => estado.trazos.length")
++        pagina.evaluate("(t) => { window.enElPortapapeles = t; }", copiado)
++        pagina.evaluate("() => Portapapeles.pegar()")
++        pagina.wait_for_timeout(700)
++        r.igual(pagina.evaluate("() => Portapapeles._ultimo()"), "pego",
++                "pegar lo copiado por draw101 sí entra")
++        r.igual(pagina.evaluate("() => estado.trazos.length"), antes + len(ids),
++                "y entra completo: lo que se copió es lo que llegó")
++        r.igual(pagina.evaluate("() => estado.sel.size"), len(ids),
++                "y queda seleccionado, listo para moverlo a su lugar")
++
++        # --- 4. Ctrl+C NO le roba el copiar a un campo de texto ----------
++        pagina.evaluate("""() => {
++            window.copiado = null;
++            const i = document.createElement("input");
++            i.id = "campito"; document.body.appendChild(i); i.focus();
++        }""")
++        pagina.keyboard.press("Control+c")
++        pagina.wait_for_timeout(260)
++        r.igual(pagina.evaluate("() => window.copiado"), None,
++                "escribiendo en un campo, Ctrl+C sigue siendo el del texto")
++        pagina.evaluate("() => { const i = document.getElementById('campito'); i && i.remove(); }")
++
++
++def correr(r: comun.Reporte) -> None:
++    _motor(r)
++    _pantalla(r)
