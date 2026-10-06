@@ -1,0 +1,59 @@
+diff --git a/server.py b/server.py
+index c0e4f7c..2ee2dae 100644
+--- a/server.py
++++ b/server.py
+@@ -1308,6 +1308,54 @@ def papel_trazos(i: int):
+     return _json({**hoja, "layout": L, "indice": i, "geometria_ventanas": geo})
+ 
+ 
++class VentanaAImprimir(BaseModel):
++    x1: float
++    y1: float
++    x2: float
++    y2: float
++    formato: str = "A3"
++
++
++@app.post("/api/imprimir-ventana")
++def imprimir_ventana(entrada: VentanaAImprimir):
++    """Imprimir un pedazo del MODELO, sin crear una hoja  ·  0.24.0
++
++    Mike, 6-oct-2026: «quiero poder imprimir directo una ventana de la pantalla
++    de model… que cuando le de Ctrl+P me abra un diálogo de seleccionar la
++    ventana. Pueda trazar una ventana del área que quiero imprimir y al dar
++    enter me abra un preview de cómo queda en el tamaño de hoja seleccionado».
++
++    Hasta hoy Ctrl+P en el modelo contestaba «no hay ninguna hoja que imprimir,
++    crea una con PLANO»: para sacar un pedazo del dibujo había que hacer una
++    hoja, ponerle una ventana, acomodarla, imprimir y luego decidir si la hoja
++    se queda estorbando en las pestañas o se borra.
++
++    LA HOJA SE ARMA EN MEMORIA Y NO SE GUARDA EN NINGUNA PARTE (ver
++    `papel.hoja_de_ventana`). Imprimir no modifica el dibujo: ni una hoja de
++    más, ni un paso en el historial, ni el punto de «sin guardar».
++
++    Devuelve el SVG ya dibujado, las medidas del papel y LA ESCALA A LA QUE
++    QUEDÓ. Lo último no es un adorno: Mike escogió llenar la hoja, así que la
++    escala sale el número que salga y el rótulo dice S/E —por lo que explica
++    `core/papel.py`—, pero él tiene que poder VER a cuánto quedó antes de
++    mandarlo a la impresora.
++    """
++    from core import svg as mod_svg
++    try:
++        with S.candado:
++            r = papel.hoja_de_ventana(S.doc, entrada.x1, entrada.y1,
++                                      entrada.x2, entrada.y2, entrada.formato)
++            L = r["layout"]
++            texto = mod_svg.hoja_svg(S.doc, L)
++            ancho, alto = papel.medidas(L)
++    except Exception as exc:
++        _error(exc)
++    return {"svg": texto, "ancho": ancho, "alto": alto,
++            "escala": r["escala"], "vertical": r["vertical"],
++            "formato": L["formato"],
++            "ancho_modelo": r["ancho_modelo"], "alto_modelo": r["alto_modelo"]}
++
++
+ @app.get("/api/papel/{i}/svg")
+ def papel_svg(i: int):
+     """La hoja como SVG en milímetros: es lo que se imprime y lo que enseña la

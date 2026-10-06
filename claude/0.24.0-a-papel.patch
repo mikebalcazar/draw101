@@ -1,0 +1,94 @@
+diff --git a/core/papel.py b/core/papel.py
+index c60cc08..cc0b05e 100644
+--- a/core/papel.py
++++ b/core/papel.py
+@@ -81,6 +81,89 @@ def area_util(layout: dict) -> tuple[float, float, float, float]:
+     ancho, alto = medidas(layout)
+     return (MARGEN + 5, MARGEN + 5, ancho - MARGEN - barra_ancho(ancho) - 5, alto - MARGEN - 5)
+ 
++
++def hoja_de_ventana(doc, x1: float, y1: float, x2: float, y2: float,
++                    formato: str = "A3") -> dict:
++    """UNA hoja con UNA ventana: el pedazo del modelo que se trazó  ·  0.24.0
++
++    Mike, 6-oct-2026: «quiero poder imprimir directo una ventana de la pantalla
++    de model… pueda trazar una ventana del área que quiero imprimir y al dar
++    enter me abra un preview de cómo queda en el tamaño de hoja seleccionado».
++
++    NO TOCA EL DOCUMENTO, y eso es la mitad del diseño. La hoja se arma aquí, se
++    dibuja, se imprime y se tira. Lo otro —crear una hoja de verdad, imprimirla
++    y borrarla— dejaría un paso en el historial de deshacer, una hoja de más en
++    las pestañas si algo truena a medio camino, y un dibujo «sucio» por haber
++    impreso. Imprimir no cambia el plano.
++
++    LLENA EL ÁREA ÚTIL, no el papel entero: dentro del marco y a la izquierda
++    del pie de plano (`area_util`). Es lo que Mike escogió con botones el
++    6-oct-2026, y es lo que un plano parece; un dibujo pisando el pie de plano
++    no es «aprovechar el papel», es un plano mal hecho.
++
++    Y POR ESO VA MARCADO `sin_escala`. Encajar da la escala que dé —1:37.4— y
++    este módulo ya tiene escrito por qué eso no se puede llamar 1:N: «un plano
++    que dice 1:20 y no lo está es peor que uno que no dice escala; el primero se
++    mide con escalímetro y sale mal». El rótulo dice S/E, y quien llama recibe
++    la escala de verdad para poder enseñarla.
++
++    LA ORIENTACIÓN SE ESCOGE SOLA. Los formatos de la tabla son horizontales; si
++    lo que se trazó es más alto que ancho, la hoja se voltea (como CUSTOM, que
++    ya existe para hojas a la medida). Llenar la hoja y luego dejar media en
++    blanco porque el papel estaba acostado sería no haber llenado nada.
++    """
++    x0, y0 = min(x1, x2), min(y1, y2)
++    ancho_m = abs(x2 - x1)
++    alto_m = abs(y2 - y1)
++    if ancho_m <= 0 or alto_m <= 0:
++        raise ValueError("Esa ventana no tiene área: traza un rectángulo")
++
++    papel_ancho, papel_alto = FORMATOS.get(formato, FORMATOS["A3"])
++    L = layout_nuevo("Ventana", formato if formato in FORMATOS else "A3")
++
++    # ¿Acostada o parada? Se prueba de las dos maneras y gana la que deja la
++    # ventana más grande. Se compara contra el ÁREA ÚTIL de cada una y no contra
++    # el papel, porque el pie de plano no mide lo mismo en las dos: la barra se
++    # ancha a partir de 500 mm de ancho de papel (`barra_ancho`).
++    mejor = None
++    for vertical in (False, True):
++        if vertical:
++            prueba = dict(L, formato=CUSTOM, ancho=papel_alto, alto=papel_ancho)
++        else:
++            prueba = L
++        ux0, uy0, ux1, uy1 = area_util(prueba)
++        libre_x, libre_y = ux1 - ux0, uy1 - uy0
++        if libre_x <= 0 or libre_y <= 0:
++            continue
++        # mm de papel por unidad de dibujo, encajando por el lado que aprieta.
++        k = min(libre_x / (ancho_m * doc.mm_por_unidad()),
++                libre_y / (alto_m * doc.mm_por_unidad()))
++        area = (ancho_m * doc.mm_por_unidad() * k) * (alto_m * doc.mm_por_unidad() * k)
++        if mejor is None or area > mejor[0]:
++            mejor = (area, vertical, prueba, (ux0, uy0, libre_x, libre_y), k)
++
++    if mejor is None:
++        raise ValueError(f"En {formato} no cabe el marco: escoge una hoja más grande")
++
++    _area, vertical, L, (ux0, uy0, libre_x, libre_y), k = mejor
++
++    # `escala` es el DENOMINADOR: 20 significa 1:20, o sea que 20 mm de mueble
++    # ocupan 1 mm de papel. `k` es lo contrario (mm de papel por mm de mueble),
++    # así que se invierte.
++    escala = 1.0 / k
++    centro = [x0 + ancho_m / 2.0, y0 + alto_m / 2.0]
++
++    # La ventana ocupa el área útil completa y el dibujo queda centrado en ella.
++    # Así el papel sobrante —el del lado que no apretó— queda repartido a los
++    # dos lados en vez de todo junto en una orilla.
++    v = ventana_nueva(ux0, uy0, libre_x, libre_y, centro, escala)
++    v["sin_escala"] = True
++    L["ventanas"] = [v]
++    L["rotulo"]["dibujo"] = getattr(doc, "nombre", "") or ""
++    return {"layout": L, "escala": escala, "vertical": vertical,
++            "ancho_modelo": ancho_m, "alto_modelo": alto_m}
++
++
+ # Escalas que se usan en el taller. La lista existe para que nadie invente una
+ # 1:37 sin querer: un plano a escala rara no se puede medir con escalímetro.
+ ESCALAS = [1, 2, 5, 10, 20, 25, 50, 75, 100, 200]
