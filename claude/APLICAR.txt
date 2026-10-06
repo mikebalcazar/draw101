@@ -68,3 +68,13 @@ B19-t035-al-dia.patch
 0.22.2-c-estilos.patch
 0.22.2-d-t050.patch
 0.22.2-f-version.patch
+0.23.0-a-unidades.patch
+0.23.0-b-importar.patch
+0.23.0-c-svg.patch
+0.23.0-d-servidor.patch
+0.23.0-e-soltar.patch
+0.23.0-f-portapapeles.patch
+0.23.0-g-interfaz.patch
+0.23.0-h-t055.patch
+0.23.0-i-t056.patch
+0.23.0-j-version.patch
