@@ -1,0 +1,256 @@
+diff --git a/pruebas/t058_imprimir_ventana.py b/pruebas/t058_imprimir_ventana.py
+new file mode 100644
+index 0000000..313c406
+--- /dev/null
++++ b/pruebas/t058_imprimir_ventana.py
+@@ -0,0 +1,251 @@
++"""t058 · Imprimir una ventana del modelo, sin crear una hoja  ·  0.24.0
++
++Mike, 6-oct-2026: «Quiero poder imprimir directo una ventana de la pantalla de
++model. Que cuando le de Ctrl+P me abra un diálogo de seleccionar la ventana.
++Pueda trazar una ventana del área que quiero imprimir y al dar enter me abra un
++preview de cómo queda en el tamaño de hoja seleccionado para mandar a imprimir».
++
++Hasta hoy Ctrl+P en el modelo contestaba «no hay ninguna hoja que imprimir, crea
++una con PLANO»: cierto, y nada útil cuando lo único que uno quiere es sacar un
++pedazo del dibujo. Había que hacer una hoja, ponerle una ventana, acomodarla,
++imprimir, y luego decidir si la hoja se queda estorbando en las pestañas.
++
++LO QUE SE MIDE AQUÍ Y NO SE VE:
++
++  · QUE IMPRIMIR NO MODIFIQUE EL DIBUJO. La hoja se arma en memoria y se tira.
++    Ni una hoja de más, ni un paso en el historial, ni el punto de «sin
++    guardar». Es la mitad del diseño, y es justo lo que NO se nota: un
++    autoguardado o una subida a la nube disparados por haber impreso serían un
++    cambio que nadie hizo.
++
++  · QUE LLENE EL ÁREA ÚTIL Y NO EL PAPEL. Dentro del marco y a la izquierda del
++    pie de plano. Un dibujo encima del pie de plano no es «aprovechar el
++    papel», es un plano mal hecho.
++
++  · QUE EL CENTRO DE LO IMPRESO SEA EL CENTRO DE LO TRAZADO. Si se corre, uno
++    traza alrededor de la pieza y sale otra cosa.
++
++  · QUE LA HOJA SE VOLTEE SOLA. Los formatos son horizontales; un área alta en
++    una hoja acostada deja media hoja en blanco, que es lo contrario de
++    llenarla. Se compara contra lo que habría salido sin voltear.
++
++  · QUE VAYA MARCADA S/E. Encajar da la escala que dé —1:11.5— y este proyecto
++    tiene escrito por qué eso no se puede llamar 1:N: «un plano que dice 1:20 y
++    no lo está es peor que uno que no dice escala; el primero se mide con
++    escalímetro y sale mal». Pero la escala de verdad se devuelve, para poder
++    enseñarla: que no se pueda medir no quiere decir que haya que esconderla.
++
++  · QUE CTRL+P SIGA SIENDO EL DE SIEMPRE EN UNA HOJA. Cambiarle el significado
++    en los dos lados habría roto lo que ya funcionaba.
++
++VERIFICADA ROMPIENDO EL CÓDIGO, una rotura a la vez:
++
++  · llenar el papel entero en vez del área útil → 4 fallos
++  · que la hoja nunca se voltee → 3
++  · quitar la marca S/E → 2, y entonces el rótulo escribe «1:11.4943», que es
++    exactamente el plano que no se puede medir y que este diseño evita
++  · centrar en el dibujo en vez de en lo trazado → 1
++  · que Ctrl+P vuelva a mandar siempre a la hoja → 1
++  · que la hoja de imprimir SÍ se guarde en el documento → 2
++
++Y DOS COMPROBACIONES DE ESTA PRUEBA NO MEDÍAN NADA la primera vez; las dos se
++cazaron viendo una rotura salir verde:
++
++  · la del rótulo decía `papel.escala_del_rotulo(L) if hasattr(...) else "S/E"`,
++    con un nombre de función que no existe: comparaba "S/E" contra "S/E".
++  · la del centro trazaba un rectángulo cuyo centro era, por casualidad, el
++    mismo que el del dibujo de la prueba, así que no distinguía entre centrar
++    en lo trazado y centrar en el dibujo.
++"""
++
++from __future__ import annotations
++
++from core import papel
++from core import entidades as ent
++from core.documento import Documento
++from pruebas import comun, navegador
++
++DESCRIPCION = "imprimir una ventana del modelo: llena la hoja, se voltea sola y no toca el dibujo"
++
++
++def _doc():
++    d = Documento.nuevo()                      # centímetros
++    with d.transaccion("dibujar"):
++        d.agregar(ent.Linea(p1=[0, 0], p2=[400, 0]))
++        d.agregar(ent.Linea(p1=[0, 0], p2=[0, 200]))
++    d.sucio = False
++    return d
++
++
++def _motor(r: comun.Reporte) -> None:
++    doc = _doc()
++
++    # --- 1. IMPRIMIR NO MODIFICA EL DIBUJO ------------------------------
++    antes = (len(doc.layouts or []), doc.sucio, len(doc.entidades),
++             doc.historial.nombre_deshacer())
++    papel.hoja_de_ventana(doc, 0, 0, 400, 200, "A3")
++    papel.hoja_de_ventana(doc, 10, 10, 60, 300, "A4")
++    despues = (len(doc.layouts or []), doc.sucio, len(doc.entidades),
++               doc.historial.nombre_deshacer())
++    r.igual(despues, antes,
++            "imprimir no deja hoja, ni paso en el historial, ni el dibujo sucio")
++    # Sin este control, lo de arriba pasaría igual en un documento que no tenía
++    # nada que ensuciar.
++    r.igual(antes[2], 2, "CONTROL · el dibujo sí tenía entidades que ensuciar")
++
++    # --- 2. LLENA EL ÁREA ÚTIL, NO EL PAPEL -----------------------------
++    res = papel.hoja_de_ventana(doc, 0, 0, 400, 200, "A3")
++    L = res["layout"]
++    v = L["ventanas"][0]
++    ux0, uy0, ux1, uy1 = papel.area_util(L)
++    r.casi(v["ancho"], ux1 - ux0, "la ventana ocupa el área útil de ancho", 1e-6)
++    r.casi(v["alto"], uy1 - uy0, "y de alto", 1e-6)
++    # Y el área útil NO es el papel: el pie de plano se queda su barra.
++    pa, pal = papel.medidas(L)
++    r.cierto((ux1 - ux0) < pa - 40,
++             "CONTROL · el área útil es más angosta que el papel: ahí va el pie de plano")
++
++    # El lado que aprieta toca el borde; el otro sobra. Eso es encajar.
++    f = doc.mm_por_unidad() / v["escala"]
++    dib_x, dib_y = 400 * f, 200 * f
++    r.cierto(abs(dib_x - (ux1 - ux0)) < 1e-6 or abs(dib_y - (uy1 - uy0)) < 1e-6,
++             "lo dibujado toca el borde por el lado que aprieta")
++    r.cierto(dib_x <= (ux1 - ux0) + 1e-6 and dib_y <= (uy1 - uy0) + 1e-6,
++             "y no se sale por ninguno: nada se imprime encima del pie de plano")
++
++    # --- 3. EL CENTRO ---------------------------------------------------
++    #
++    # SE TRAZA UN RECTÁNGULO FUERA DEL CENTRO DEL DIBUJO, a propósito. La
++    # primera versión trazaba de (100,50) a (300,150), cuyo centro es [200,100]
++    # … que es también el centro del dibujo de esta prueba. O sea que la
++    # comprobación pasaba igual si el código centraba en el dibujo en vez de en
++    # lo trazado: se cazó rompiendo el código y viendo la rotura salir VERDE.
++    #
++    # El dibujo va de (0,0) a (400,200) —centro [200,100]—, así que esta ventana
++    # tiene que dar [50,25] y de ninguna manera [200,100].
++    res2 = papel.hoja_de_ventana(doc, 0, 0, 100, 50, "A3")
++    r.punto(res2["layout"]["ventanas"][0]["centro"], [50.0, 25.0],
++            "el centro de lo impreso es el centro de lo TRAZADO, no el del dibujo", 1e-9)
++    ext = doc.extension()
++    r.punto([(ext[0] + ext[2]) / 2, (ext[1] + ext[3]) / 2], [200.0, 100.0],
++            "CONTROL · y el centro del dibujo es otro, así que la de arriba sí distingue", 1e-9)
++
++    # --- 4. LA HOJA SE VOLTEA SOLA --------------------------------------
++    alta = papel.hoja_de_ventana(doc, 0, 0, 100, 500, "A3")
++    r.cierto(alta["vertical"], "un área más alta que ancha escoge la hoja parada")
++    pa2, pal2 = papel.medidas(alta["layout"])
++    r.cierto(pal2 > pa2, "y el papel de esa hoja de verdad está parado")
++    # El control que lo vuelve una medición: acostada habría salido MÁS CHICO.
++    acostada = papel.layout_nuevo("x", "A3")
++    ax0, ay0, ax1, ay1 = papel.area_util(acostada)
++    k_acostada = min((ax1 - ax0) / (100 * doc.mm_por_unidad()),
++                     (ay1 - ay0) / (500 * doc.mm_por_unidad()))
++    r.cierto(alta["escala"] < 1.0 / k_acostada,
++             "CONTROL · y parada queda a mejor escala que acostada, que es por qué se voltea")
++
++    ancha = papel.hoja_de_ventana(doc, 0, 0, 500, 100, "A3")
++    r.cierto(not ancha["vertical"], "y un área más ancha que alta se queda acostada")
++
++    # --- 5. S/E, PERO LA ESCALA SE DEVUELVE -----------------------------
++    r.cierto(v["sin_escala"],
++             "la ventana va marcada S/E: la escala salió un número cualquiera")
++    # Se llama a la función DE VERDAD (`_escala_principal`, la que escribe el
++    # rótulo). La primera versión de esta comprobación decía
++    # `papel.escala_del_rotulo(L) if hasattr(...) else "S/E"`, con un nombre que
++    # no existe: comparaba "S/E" contra "S/E" y pasaba siempre, midiendo nada.
++    r.igual(papel._escala_principal(L), "S/E",
++            "y el rótulo escribe S/E, no un 1:N que no se puede medir")
++    # El control: una ventana normal SÍ escribe su 1:N, o sea que el S/E de
++    # arriba es de la marca y no de que la función siempre diga S/E.
++    normal = papel.layout_nuevo("x", "A3")
++    normal["ventanas"] = [papel.ventana_nueva(20, 20, 100, 80, [0, 0], 50)]
++    r.igual(papel._escala_principal(normal), "1:50",
++            "CONTROL · y una ventana con escala de la lista sí escribe su 1:N")
++    r.cierto(res["escala"] > 1, "pero la escala de verdad se devuelve, para poder enseñarla")
++
++    # --- 6. Una ventana sin área se dice, no se imprime -----------------
++    for x2, y2, que in ((0, 200, "sin ancho"), (400, 0, "sin alto")):
++        try:
++            papel.hoja_de_ventana(doc, 0, 0, x2, y2, "A3")
++            r.cierto(False, f"una ventana {que} tiene que quejarse")
++        except ValueError as e:
++            r.cierto("área" in str(e), f"una ventana {que} se dice, no se imprime en blanco")
++
++
++def _pantalla(r: comun.Reporte) -> None:
++    if not navegador.hay_navegador():
++        r.cierto(True, "(sin Playwright en esta máquina: se salta la parte de pantalla)")
++        return
++
++    with navegador.programa() as (pagina, base):
++        navegador.cerrar_inicio(pagina)
++
++        # Algo que imprimir.
++        navegador.comando(pagina, "LINEA")
++        navegador.comando(pagina, "0,0")
++        navegador.comando(pagina, "400,0")
++        pagina.keyboard.press("Escape")
++        pagina.wait_for_timeout(200)
++
++        # --- 7. CTRL+P DEPENDE DE DÓNDE ESTÉS ---------------------------
++        pagina.evaluate("""() => {
++            window.corridos = [];
++            const deVerdad = Comandos.correr;
++            Comandos.correr = (n, ...r) => { window.corridos.push(n); return undefined; };
++            window._correrDeVerdad = deVerdad;
++        }""")
++        pagina.evaluate("() => { estado.modo = 'modelo'; }")
++        pagina.keyboard.press("Control+p")
++        pagina.wait_for_timeout(200)
++        r.igual(pagina.evaluate("() => window.corridos"), ["IMPRIMIRVENTANA"],
++                "en el modelo, Ctrl+P pide el área a imprimir")
++
++        pagina.evaluate("() => { window.corridos = []; estado.modo = 'papel'; }")
++        pagina.keyboard.press("Control+p")
++        pagina.wait_for_timeout(200)
++        r.igual(pagina.evaluate("() => window.corridos"), ["IMPRIMIRFISICO"],
++                "CONTROL · en una hoja sigue imprimiendo la hoja, como siempre")
++        pagina.evaluate("() => { Comandos.correr = window._correrDeVerdad; estado.modo = 'modelo'; }")
++
++        # --- 8. La vista previa enseña una hoja que NO está en el documento
++        hoja = pagina.evaluate("""async () => {
++            const r = await (await fetch('/api/imprimir-ventana', {
++              method: 'POST', headers: { 'Content-Type': 'application/json' },
++              body: JSON.stringify({ x1: 0, y1: 0, x2: 400, y2: 200, formato: 'A3' }),
++            })).json();
++            return { ancho: r.ancho, alto: r.alto, escala: r.escala, bytes: (r.svg || '').length };
++        }""")
++        r.igual([hoja["ancho"], hoja["alto"]], [420.0, 297.0], "el motor devuelve la hoja en A3")
++        r.cierto(hoja["bytes"] > 1000, "con su SVG ya dibujado")
++
++        cuantas = pagina.evaluate("async () => (await (await fetch('/api/layouts')).json()).layouts.length")
++        r.igual(cuantas, 0,
++                "y el documento sigue SIN hojas: la de imprimir no se guardó en ninguna parte")
++
++        previa = pagina.evaluate("""async () => {
++            const r = await (await fetch('/api/imprimir-ventana', {
++              method: 'POST', headers: { 'Content-Type': 'application/json' },
++              body: JSON.stringify({ x1: 0, y1: 0, x2: 400, y2: 200, formato: 'A3' }),
++            })).json();
++            const v = await Papel.vistaPrevia({
++              papel: 'A3', impresora: '',
++              hojas: [{ ancho: r.ancho, alto: r.alto, svg: r.svg }],
++              detalle: 'queda a 1:11.5',
++            });
++            const capa = document.querySelector('.previa-imp');
++            const nota = capa ? capa.querySelector('.nota').textContent : '';
++            const svgs = capa ? capa.querySelectorAll('.hoja svg').length : 0;
++            return { abrio: !!capa, nota, svgs, escala: v && v.calculo.escala };
++        }""")
++        r.cierto(previa["abrio"], "la vista previa abre con una hoja armada en memoria")
++        r.igual(previa["svgs"], 1, "y pinta la hoja")
++        r.cierto("1:11.5" in previa["nota"],
++                 "y dice a qué escala quedó: llenar la hoja no es excusa para esconderlo")
++        r.casi(previa["escala"], 1.0, "y sale a tamaño real en su propio papel", 1e-6)
++        pagina.evaluate("() => { const c = document.querySelector('.previa-imp'); c && c.remove(); }")
++
++
++def correr(r: comun.Reporte) -> None:
++    _motor(r)
++    _pantalla(r)
