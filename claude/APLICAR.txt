@@ -84,3 +84,8 @@ B19-t035-al-dia.patch
 0.23.1-d-electron.patch
 0.23.1-e-t057.patch
 0.23.1-f-version.patch
+0.24.0-a-papel.patch
+0.24.0-b-servidor.patch
+0.24.0-c-interfaz.patch
+0.24.0-d-t058.patch
+0.24.0-e-version.patch
