@@ -2,7 +2,9 @@ diff --git a/core/config.py b/core/config.py
 index 118dc3e..91765d1 100644
 --- a/core/config.py
 +++ b/core/config.py
-@@ -79,8 +79,15 @@ GROSOR_POR_BLOQUE = -2
+@@ -77,12 +77,19 @@ GROSORES = [0, 5, 9, 13, 15, 18, 20, 25, 30, 35, 40, 50, 53, 60, 70, 80,
+ GROSOR_POR_CAPA = -1
+ GROSOR_POR_BLOQUE = -2
  GROSOR_OMISION = -3
  
  # --- Autoguardado ----------------------------------------------------------
@@ -20,11 +22,15 @@ index 118dc3e..91765d1 100644
  
  # --- Historial -------------------------------------------------------------
  HISTORIAL_MAX = 500  # operaciones de deshacer
+ 
+ # Unidad de trabajo de un dibujo **nuevo** (Mike, 9-sep-2026: «quiero que las
 diff --git a/core/documento.py b/core/documento.py
 index 9b7f524..20e217f 100644
 --- a/core/documento.py
 +++ b/core/documento.py
-@@ -94,6 +94,15 @@ class Documento:
+@@ -92,10 +92,19 @@ class Documento:
+         self.token = ""
+         # Cuándo se guardó el archivo del que salió, según el reloj de quien lo
          # guardó. Como `token`, NO va en `a_dict()`: es del archivo, no de lo
          # dibujado, y en un DXF o en un copiar-y-pegar no significa nada.
          self.guardado_en = ""
@@ -40,11 +46,15 @@ index 9b7f524..20e217f 100644
          # Referencias externas del archivo: nombre del bloque → ruta que dice
          # el DWG. Es lo que permite ir a buscar el archivo y montar su dibujo
          # (ver `core/dxf_lector.py`, `_resolver_xrefs`).
+         self.xrefs: dict[str, str] = {}
+         # El DXF del que se abrió, si se abrió de uno. Es lo que permite
 diff --git a/core/proyecto.py b/core/proyecto.py
 index 40110d5..f19c9cc 100644
 --- a/core/proyecto.py
 +++ b/core/proyecto.py
-@@ -13,6 +13,7 @@ huérfanos los archivos ya guardados.
+@@ -11,10 +11,11 @@ huérfanos los archivos ya guardados.
+ """
+ 
  from __future__ import annotations
  
  import datetime as dt
@@ -52,7 +62,11 @@ index 40110d5..f19c9cc 100644
  import json
  import os
  import pathlib
-@@ -37,11 +38,21 @@ def _slug(texto: str) -> str:
+ import re
+ import tempfile
+@@ -35,15 +36,25 @@ def _slug(texto: str) -> str:
+     return s or "sin-titulo"
+ 
  
  # --- Guardar / abrir -------------------------------------------------------
  
@@ -75,7 +89,11 @@ index 40110d5..f19c9cc 100644
      """
      ruta = pathlib.Path(ruta)
      if ruta.suffix.lower() != config.EXT_PROYECTO:
-@@ -64,6 +75,8 @@ def guardar(doc: Documento, ruta: str | pathlib.Path) -> pathlib.Path:
+         ruta = ruta.with_suffix(config.EXT_PROYECTO)
+     ruta.parent.mkdir(parents=True, exist_ok=True)
+@@ -62,19 +73,22 @@ def guardar(doc: Documento, ruta: str | pathlib.Path) -> pathlib.Path:
+         "formato": FORMATO,
+         "app": config.APP_NOMBRE,
          "guardado": dt.datetime.now().isoformat(timespec="seconds"),
          "unidad": doc.unidad,
          "token": doc.token,
@@ -84,7 +102,8 @@ index 40110d5..f19c9cc 100644
      }
      tmp = tempfile.NamedTemporaryFile(
          delete=False, dir=str(ruta.parent), suffix=".tmp")
-@@ -72,7 +85,8 @@ def guardar(doc: Documento, ruta: str | pathlib.Path) -> pathlib.Path:
+     tmp.close()
+     try:
          with zipfile.ZipFile(tmp.name, "w", zipfile.ZIP_DEFLATED) as z:
              z.writestr("meta.json", json.dumps(meta, ensure_ascii=False, indent=1))
              z.writestr("documento.json",
@@ -94,7 +113,11 @@ index 40110d5..f19c9cc 100644
          os.replace(tmp.name, ruta)
      finally:
          if os.path.exists(tmp.name):
-@@ -91,9 +105,35 @@ def guardar(doc: Documento, ruta: str | pathlib.Path) -> pathlib.Path:
+             os.unlink(tmp.name)
+ 
+@@ -89,13 +103,39 @@ def guardar(doc: Documento, ruta: str | pathlib.Path) -> pathlib.Path:
+     # ofrece la copia nueva. Falla en silencio, que es la peor manera.
+     # Medido el 30-sep-2026 con el primer plano real que subió Mike: llegó
      # fechado seis días antes de cuando lo guardó.
      doc.guardado_en = meta["guardado"]
      doc.sucio = False
@@ -130,7 +153,11 @@ index 40110d5..f19c9cc 100644
  def abrir(ruta: str | pathlib.Path) -> Documento:
      ruta = pathlib.Path(ruta)
      with zipfile.ZipFile(ruta, "r") as z:
-@@ -117,6 +157,11 @@ def abrir(ruta: str | pathlib.Path) -> Documento:
+         meta = json.loads(z.read("meta.json").decode("utf-8"))
+         if int(meta.get("formato", 1)) > FORMATO:
+@@ -115,10 +155,15 @@ def abrir(ruta: str | pathlib.Path) -> Documento:
+     # es el reloj de quien guardó— para saber cuál copia es más nueva. No se usa
+     # la fecha del archivo en el disco a propósito: copiar un archivo con una
      # memoria USB la cambia, y entonces una copia vieja parecería la más nueva.
      doc.guardado_en = str(meta.get("guardado") or "")
  
@@ -142,7 +169,11 @@ index 40110d5..f19c9cc 100644
      # La capa COTAS pasó a llamarse ANOTACIONES el 29-sep-2026. Éste es NUESTRO
      # archivo, así que la capa es nuestra y se renombra sin preguntar: si no,
      # cada dibujo viejo seguiría con su COTAS y las anotaciones nuevas nacerían
-@@ -138,14 +183,63 @@ def autoguardar(doc: Documento, ruta_original: str | pathlib.Path | None) -> pat
+     # en otra capa, que es justo el reguero que la capa existe para evitar.
+     mod_capas.migrar_anotaciones(doc, propio=True)
+@@ -136,18 +181,67 @@ def autoguardar(doc: Documento, ruta_original: str | pathlib.Path | None) -> pat
+     el dibujo a medias, la recuperación es una **opción**, no un hecho
+     consumado.
      """
      if not doc.sucio:
          return None
@@ -207,3 +238,6 @@ index 40110d5..f19c9cc 100644
 +
      marca = destino.with_suffix(".origen")
      marca.write_text(str(ruta_original or ""), encoding="utf-8")
+ 
+     _podar(base)
+     return destino
