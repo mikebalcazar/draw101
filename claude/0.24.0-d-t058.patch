@@ -1,9 +1,9 @@
 diff --git a/pruebas/t058_imprimir_ventana.py b/pruebas/t058_imprimir_ventana.py
 new file mode 100644
-index 0000000..313c406
+index 0000000..1b192f1
 --- /dev/null
 +++ b/pruebas/t058_imprimir_ventana.py
-@@ -0,0 +1,251 @@
+@@ -0,0 +1,250 @@
 +"""t058 · Imprimir una ventana del modelo, sin crear una hoja  ·  0.24.0
 +
 +Mike, 6-oct-2026: «Quiero poder imprimir directo una ventana de la pantalla de
