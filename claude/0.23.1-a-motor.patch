@@ -1,0 +1,209 @@
+diff --git a/core/config.py b/core/config.py
+index 118dc3e..91765d1 100644
+--- a/core/config.py
++++ b/core/config.py
+@@ -79,8 +79,15 @@ GROSOR_POR_BLOQUE = -2
+ GROSOR_OMISION = -3
+ 
+ # --- Autoguardado ----------------------------------------------------------
+-AUTOGUARDADO_SEG = 120
+-AUTOGUARDADO_MAX = 5  # cuántas copias se conservan por proyecto
++# Mike, 1-oct-2026: «que por default sea cada 5 minutos» y «que sí sea los
++# últimos 10 guardados». Antes eran 120 s y 5 copias.
++#
++# OJO, Y ESTO ERA UN ERROR: hasta la 0.23.1 este número no servía para nada. La
++# interfaz traía el intervalo escrito a mano (`120000` en ui/app.js), así que
++# cambiar aquí no cambiaba nada y quien lo leyera creería que sí. Ahora el
++# intervalo sale del resumen del motor, y este renglón es el único que manda.
++AUTOGUARDADO_SEG = 300
++AUTOGUARDADO_MAX = 10  # cuántas copias se conservan por proyecto
+ 
+ # --- Historial -------------------------------------------------------------
+ HISTORIAL_MAX = 500  # operaciones de deshacer
+diff --git a/core/documento.py b/core/documento.py
+index 9b7f524..20e217f 100644
+--- a/core/documento.py
++++ b/core/documento.py
+@@ -94,6 +94,15 @@ class Documento:
+         # guardó. Como `token`, NO va en `a_dict()`: es del archivo, no de lo
+         # dibujado, y en un DXF o en un copiar-y-pegar no significa nada.
+         self.guardado_en = ""
++        # ¿El archivo del que salió era un AUTOGUARDADO?  ·  0.23.1
++        #
++        # Viaja dentro del `.t101d` (en `meta.json`), y por eso vale también
++        # para un archivo que bajó de la nube: la otra computadora puede decir
++        # «esto no lo guardaste, lo salvó el autosave» sin que el servidor —que
++        # no puede leer nada— tenga que saberlo, y sin cambiarle el esquema a la
++        # API. Como `token` y `guardado_en`, NO va en `a_dict()`: es del
++        # archivo, no de lo dibujado.
++        self.autoguardado = False
+         # Referencias externas del archivo: nombre del bloque → ruta que dice
+         # el DWG. Es lo que permite ir a buscar el archivo y montar su dibujo
+         # (ver `core/dxf_lector.py`, `_resolver_xrefs`).
+diff --git a/core/proyecto.py b/core/proyecto.py
+index 40110d5..f19c9cc 100644
+--- a/core/proyecto.py
++++ b/core/proyecto.py
+@@ -13,6 +13,7 @@ huérfanos los archivos ya guardados.
+ from __future__ import annotations
+ 
+ import datetime as dt
++import hashlib
+ import json
+ import os
+ import pathlib
+@@ -37,11 +38,21 @@ def _slug(texto: str) -> str:
+ 
+ # --- Guardar / abrir -------------------------------------------------------
+ 
+-def guardar(doc: Documento, ruta: str | pathlib.Path) -> pathlib.Path:
++def guardar(doc: Documento, ruta: str | pathlib.Path, *,
++            autoguardado: bool = False, cuerpo: str | None = None) -> pathlib.Path:
+     """Escribe el `.t101d`. Primero a un temporal, luego se reemplaza.
+ 
+     Un guardado que truena a la mitad no debe dejar el archivo anterior roto:
+     es la forma más tonta y más común de perder un día de trabajo.
++
++    `autoguardado=True` deja la marca dentro del archivo (ver `meta.json` abajo).
++    Sólo la pone `autoguardar`; un guardado de verdad la QUITA, y por eso se
++    escribe siempre y no sólo cuando es cierta: si se escribiera nada más al
++    autoguardar, un archivo que fue autoguardado y luego se guardó de verdad se
++    quedaría con la marca para siempre.
++
++    `cuerpo` es el contenido ya serializado, para no serializarlo dos veces.
++    Lo usa `autoguardar`, que necesita su huella ANTES de decidir si escribe.
+     """
+     ruta = pathlib.Path(ruta)
+     if ruta.suffix.lower() != config.EXT_PROYECTO:
+@@ -64,6 +75,8 @@ def guardar(doc: Documento, ruta: str | pathlib.Path) -> pathlib.Path:
+         "guardado": dt.datetime.now().isoformat(timespec="seconds"),
+         "unidad": doc.unidad,
+         "token": doc.token,
++        # Ver el docstring: va siempre, no sólo cuando es cierta.
++        "autoguardado": bool(autoguardado),
+     }
+     tmp = tempfile.NamedTemporaryFile(
+         delete=False, dir=str(ruta.parent), suffix=".tmp")
+@@ -72,7 +85,8 @@ def guardar(doc: Documento, ruta: str | pathlib.Path) -> pathlib.Path:
+         with zipfile.ZipFile(tmp.name, "w", zipfile.ZIP_DEFLATED) as z:
+             z.writestr("meta.json", json.dumps(meta, ensure_ascii=False, indent=1))
+             z.writestr("documento.json",
+-                       json.dumps(doc.a_dict(), ensure_ascii=False))
++                       cuerpo if cuerpo is not None
++                       else json.dumps(doc.a_dict(), ensure_ascii=False))
+         os.replace(tmp.name, ruta)
+     finally:
+         if os.path.exists(tmp.name):
+@@ -91,9 +105,35 @@ def guardar(doc: Documento, ruta: str | pathlib.Path) -> pathlib.Path:
+     # fechado seis días antes de cuando lo guardó.
+     doc.guardado_en = meta["guardado"]
+     doc.sucio = False
++    # Lo que acabó de quedar en el archivo, también en memoria. Un guardado de
++    # verdad limpia la marca: es lo que hace que el aviso de «esto viene de un
++    # autosave» deje de salir en cuanto el usuario guarda.
++    doc.autoguardado = bool(autoguardado)
+     return ruta
+ 
+ 
++def meta_de(ruta: str | pathlib.Path) -> dict:
++    """El SOBRE del `.t101d` (meta.json), sin abrir el dibujo  ·  0.23.1
++
++    Hace falta para saber qué dice el archivo que está EN EL DISCO cuando lo
++    que hay en memoria dice otra cosa: después de un autoguardado,
++    `doc.guardado_en` es la fecha del autoguardado, no la del último guardado
++    de verdad. Volver a subir el archivo guardado con la fecha de memoria lo
++    mandaría a la nube fechado más nuevo de lo que es, que es el mismo error
++    del 30-sep-2026 —el que no se ve hasta que ya se perdió trabajo— puesto al
++    revés.
++
++    Devuelve {} si el archivo no está o no se puede leer: quien llama decide, y
++    ninguno de los dos casos merece tumbar nada.
++    """
++    try:
++        with zipfile.ZipFile(pathlib.Path(ruta), "r") as z:
++            d = json.loads(z.read("meta.json").decode("utf-8"))
++        return d if isinstance(d, dict) else {}
++    except Exception:
++        return {}
++
++
+ def abrir(ruta: str | pathlib.Path) -> Documento:
+     ruta = pathlib.Path(ruta)
+     with zipfile.ZipFile(ruta, "r") as z:
+@@ -117,6 +157,11 @@ def abrir(ruta: str | pathlib.Path) -> Documento:
+     # memoria USB la cambia, y entonces una copia vieja parecería la más nueva.
+     doc.guardado_en = str(meta.get("guardado") or "")
+ 
++    # ¿Este archivo lo escribió el autosave?  ·  0.23.1
++    # Un `.t101d` de antes de 0.23.1 no trae la llave, y entonces es `False`:
++    # lo viejo se trata como un guardado normal, que es lo que era.
++    doc.autoguardado = bool(meta.get("autoguardado"))
++
+     # La capa COTAS pasó a llamarse ANOTACIONES el 29-sep-2026. Éste es NUESTRO
+     # archivo, así que la capa es nuestra y se renombra sin preguntar: si no,
+     # cada dibujo viejo seguiría con su COTAS y las anotaciones nuevas nacerían
+@@ -138,14 +183,63 @@ def autoguardar(doc: Documento, ruta_original: str | pathlib.Path | None) -> pat
+     """
+     if not doc.sucio:
+         return None
++
++    # SI NADA CAMBIÓ DESDE EL AUTOGUARDADO ANTERIOR, NO SE ESCRIBE NADA  ·  0.23.1
++    #
++    # `doc.sucio` NO sirve para esto: autoguardar lo deja en True a propósito
++    # (abajo), así que después del primer autoguardado se queda encendido hasta
++    # que el usuario guarde de verdad. Sin esta huella, dejar draw101 abierto
++    # sin tocarlo escribiría una copia cada cinco minutos y —desde 0.23.1, que
++    # el autoguardado también sube— la mandaría a la nube. En una hora, doce
++    # subidas idénticas, y el anillo de diez copias lleno de lo mismo: el
++    # trabajo de hace media hora, que es justo el que uno querría recuperar,
++    # desplazado por diez copias gemelas del de ahora.
++    #
++    # Se compara el CONTENIDO (`documento.json`) y no el archivo entero, porque
++    # `meta.json` lleva la fecha y cambia siempre: hashear el zip completo
++    # nunca daría dos huellas iguales y esto no serviría de nada.
++    #
++    # La huella vive en memoria y no en el disco a propósito: si draw101 se
++    # reinicia, lo que hay es una sesión nueva sin con qué comparar, y escribir
++    # un autoguardado de más al arrancar es el lado barato del error.
++    cuerpo = json.dumps(doc.a_dict(), ensure_ascii=False)
++    huella = hashlib.sha256(cuerpo.encode("utf-8")).hexdigest()
++    if huella == getattr(doc, "_huella_auto", None):
++        return None
++
+     CARPETA_AUTO.mkdir(parents=True, exist_ok=True)
+     base = _slug(pathlib.Path(ruta_original).stem if ruta_original else doc.nombre)
+-    sello = dt.datetime.now().strftime("%Y%m%d-%H%M%S")
++    # CON MILÉSIMAS, Y NO SÓLO SEGUNDOS  ·  0.23.1
++    #
++    # Con segundos, dos autoguardados del mismo segundo caen en el MISMO nombre
++    # y el segundo pisa al primero: el anillo de copias pierde una sin decir
++    # nada. Con cinco minutos de intervalo eso no pasa nunca… hasta que algo
++    # llame a autoguardar dos veces seguidas, y entonces se pierde una copia y
++    # nadie se entera. Se cazó escribiendo t057, que hace dieciséis seguidos y
++    # se quedaba con uno.
++    #
++    # El formato es de ancho fijo a propósito: `_podar` y `recuperables`
++    # ordenan por NOMBRE, así que el nombre tiene que ordenar como el tiempo.
++    ahora = dt.datetime.now()
++    sello = ahora.strftime("%Y%m%d-%H%M%S-") + f"{ahora.microsecond // 1000:03d}"
+     destino = CARPETA_AUTO / f"{base}-{sello}{config.EXT_PROYECTO}"
+ 
+-    guardar(doc, destino)
++    guardar(doc, destino, autoguardado=True, cuerpo=cuerpo)
++    doc._huella_auto = huella
+     doc.sucio = True          # autoguardar no es guardar: el trabajo sigue sucio
+ 
++    # Y `guardado_en` SÍ se queda con la fecha del autoguardado, a propósito.
++    #
++    # Es la fecha que la interfaz le manda a la nube como «modificado», y lo que
++    # acaba de subir es este autoguardado: ponerle la del último guardado de
++    # verdad sería mentirle a la nube, y la otra computadora compararía dos
++    # fechas iguales y nunca ofrecería la copia nueva — exactamente el error que
++    # se arregló el 30-sep-2026 y que no se ve hasta que ya se perdió trabajo.
++    #
++    # El efecto de lado es que, en ESTA máquina, la nube y el documento quedan
++    # con la misma fecha, así que tampoco se ofrece bajar lo que uno mismo
++    # acaba de subir. Que es lo que se quiere.
++
+     marca = destino.with_suffix(".origen")
+     marca.write_text(str(ruta_original or ""), encoding="utf-8")

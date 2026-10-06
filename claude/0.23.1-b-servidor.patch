@@ -1,0 +1,99 @@
+diff --git a/server.py b/server.py
+index 00274ef..b45bc77 100644
+--- a/server.py
++++ b/server.py
+@@ -76,6 +76,15 @@ class Sesion:
+             # pestañas, y el token identifica al archivo, no a lo dibujado.
+             "token": getattr(d, "token", "") or "",
+             "guardado_en": getattr(d, "guardado_en", "") or "",
++            # ¿Lo que está abierto salió de un AUTOGUARDADO?  ·  0.23.1
++            # Sirve para los dos caminos: la recuperación local de siempre y un
++            # archivo que bajó de la nube y resultó ser el autoguardado de otra
++            # máquina. Ver `core/proyecto.py`.
++            "autoguardado": bool(getattr(d, "autoguardado", False)),
++            # Cada cuánto autoguarda, en segundos. VIAJA AQUÍ a propósito: antes
++            # la interfaz lo traía escrito a mano y `config.AUTOGUARDADO_SEG` no
++            # servía para nada, así que había dos números y uno era mentira.
++            "autoguardado_seg": config.AUTOGUARDADO_SEG,
+             "sucio": d.sucio,
+             "unidad": d.unidad,
+             "capa_activa": d.capa_activa,
+@@ -1750,7 +1759,77 @@ def autoguardar():
+         return {"copia": None, "sin_licencia": True}
+     with S.candado:
+         copia = proyecto.autoguardar(S.doc, S.ruta)
+-    return {"copia": str(copia) if copia else None}
++        # Lo que la interfaz necesita para subirlo a la nube (0.23.1). Se saca
++        # aquí dentro, con el candado puesto: pedirlo en una segunda llamada
++        # podría leer un documento que ya cambió, y entonces se subiría un
++        # archivo con el token o el nombre de otro.
++        #
++        # `copia` es None cuando no había nada que guardar o cuando nada cambió
++        # desde el autoguardado anterior; en los dos casos no hay nada que subir
++        # y la interfaz ni lo intenta.
++        #
++        # Y SÓLO SUBE SI EL DIBUJO YA TIENE ARCHIVO EN EL DISCO.
++        #
++        # `autoguardar` le pone token a lo que no lo traiga, así que un dibujo
++        # recién abierto en blanco TAMBIÉN podría subir. No debe: cada garabato
++        # que alguien empieza, mira cinco minutos y abandona aparecería para
++        # siempre en «Mis archivos en la nube», con un nombre de autoguardado,
++        # sin que nadie lo haya pedido. Mike pidió actualizar el archivo de la
++        # nube; un dibujo que nunca se guardó no tiene archivo que actualizar.
++        #
++        # El autoguardado LOCAL sí se hace igual: si se va la luz, el garabato
++        # se recupera. Lo único que no pasa es crearle un renglón en la nube.
++        datos = {
++            "copia": str(copia) if copia else None,
++            "subir": bool(copia and S.ruta),
++            "token": getattr(S.doc, "token", "") or "",
++            "nombre": pathlib.Path(S.ruta).name if S.ruta else "",
++            "modificado": getattr(S.doc, "guardado_en", "") or "",
++        }
++    return datos
++
++
++@app.post("/api/nube-devolver-al-guardado")
++def nube_devolver_al_guardado():
++    """Qué volver a subir para que la nube no se quede con lo que se tiró  ·  0.23.1
++
++    Mike lo escogió con botones el 6-oct-2026: «al salir sin guardar, devolver
++    la nube al último guardado».
++
++    EL PROBLEMA QUE RESUELVE. Desde 0.23.1 el autoguardado sube a la nube, así
++    que la copia de allá puede ser trabajo SIN guardar. Eso es lo que se quería
++    —si se muere la máquina, el trabajo está—, pero si el usuario sale con
++    «Salir sin guardar» está diciendo que esos cambios NO los quiere. Dejarlos
++    como la copia más nueva de la nube haría que la otra computadora los abriera
++    mañana como si fueran el archivo.
++
++    Así que se devuelve: se vuelve a subir el archivo guardado. Esto sólo dice
++    QUÉ subir; subirlo es de la interfaz, que es la que habla con la nube.
++
++    LA FECHA SALE DE DENTRO DEL ARCHIVO y no de memoria, a propósito: ver
++    `proyecto.meta_de`.
++
++    Sólo entran los dibujos que de verdad tienen algo que devolver: con archivo
++    en el disco, autoguardados en esta sesión (si no, la nube ya tiene el
++    guardado y no hay nada que hacer), y cuyo archivo del disco sea un guardado
++    de verdad y no otro autoguardado.
++    """
++    salida = []
++    for s_ in ESCRITORIO.sesiones:
++        if not s_.ruta or not getattr(s_.doc, "autoguardado", False):
++            continue
++        ruta = pathlib.Path(s_.ruta)
++        if not ruta.exists():
++            continue
++        meta = proyecto.meta_de(ruta)
++        if not meta or meta.get("autoguardado"):
++            continue
++        token = meta.get("token")
++        if not mod_nube.token_valido(token):
++            continue
++        salida.append({"ruta": str(ruta), "token": token, "nombre": ruta.name,
++                       "modificado": str(meta.get("guardado") or "")})
++    return {"devolver": salida}
+ 
+ 
+ @app.get("/api/recuperables")
