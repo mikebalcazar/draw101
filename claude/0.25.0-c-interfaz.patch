@@ -1,0 +1,215 @@
+diff --git a/ui/seleccion.js b/ui/seleccion.js
+index 42bd5db..fd7d25b 100644
+--- a/ui/seleccion.js
++++ b/ui/seleccion.js
+@@ -184,10 +184,15 @@ const Seleccion = (() => {
+     const g = id && Indice.grupoDe(id);
+     if (!g || (e && e.altKey)) return [id];
+     return Indice.delGrupo(g);
+   }
+ 
++  /* Dónde se picó la última entidad. Hay herramientas que necesitan el punto,
++   * no sólo el id: en EMPALME es el punto el que decide cuál de las cuatro
++   * soluciones posibles se construye y qué lado de cada curva se conserva. */
++  let ultimoPick = null;
++
+   function alternar(id, sumar, e = null) {
+     if (!sumar) estado.sel.clear();
+     const ids = conGrupo(id, e);
+     if (estado.sel.has(id) && sumar) { for (const i of ids) estado.sel.delete(i); }
+     else if (id) { for (const i of ids) estado.sel.add(i); }
+@@ -216,17 +221,20 @@ const Seleccion = (() => {
+       pintar();
+     });
+   }
+ 
+   async function pedirUna({ mensaje = "Elige una entidad", filtro = null,
+-                            queja = "Esa entidad no sirve para esto.", icono = null } = {}) {
++                            queja = "Esa entidad no sirve para esto.", icono = null,
++                            conPunto = false } = {}) {
+     // Selección previa (Mike, 9-sep-2026): «si hay un elemento seleccionado y
+     // se entra un comando, en automático el comando aplica para el elemento
+     // seleccionado». Con **una** cosa seleccionada que pase el filtro, es
+     // ésa, sin volver a pedirla. Se consume: la siguiente vuelta de la
+     // herramienta vuelve a preguntar.
+-    if (estado.sel.size === 1) {
++    // Con `conPunto` la selección previa NO sirve: se sabe qué se escogió pero
++    // no en qué parte, y el punto es justo el dato que hace falta.
++    if (estado.sel.size === 1 && !conPunto) {
+       const id = [...estado.sel][0];
+       estado.sel.clear();
+       refrescarPie();
+       let sirve = true;
+       if (filtro) {
+@@ -237,12 +245,13 @@ const Seleccion = (() => {
+     estado.sel.clear();
+     // `icono`: la herramienta se dibuja junto al cursor (tijera en RECORTAR)
+     // con la caja de selección bien marcada. Mike, 7-sep-2026. Lo pinta
+     // vista.js → pintarMira; se quita al terminar o cancelar.
+     if (icono) estado.cursorIcono = icono;
++    ultimoPick = null;        // que no se cuele el clic de la pregunta anterior
+     return new Promise((resolver, rechazar) => {
+-      pendiente = { resolver, rechazar, filtro, queja, una: true };
++      pendiente = { resolver, rechazar, filtro, queja, una: true, conPunto };
+       Comandos.pedir(mensaje);
+       pintar();
+     });
+   }
+ 
+@@ -256,18 +265,29 @@ const Seleccion = (() => {
+     return false;
+   }
+ 
+   function terminarPeticion() {
+     const q = pendiente;
++    // Una selección por ventana no trae punto. Para quien pidió `conPunto` eso
++    // no vale, y inventar un punto —el centro de la caja, digamos— daría un
++    // empalme en un lado al azar. Se pide el clic y se sigue esperando.
++    if (q && q.conPunto && !ultimoPick) {
++      estado.sel.clear();
++      refrescarPie();
++      Comandos.eco("Pícala con un clic: hace falta saber en qué parte.", "malo");
++      pintar();
++      return;
++    }
+     pendiente = null;
+     Comandos.terminar();
+     if (!q) return;
+     const ids = [...estado.sel];
+     // Lo picado para «una» se consume: si se quedara seleccionado, la
+     // siguiente pregunta lo tomaría como selección previa (EMPALME: «son la
+     // misma línea»).
+     if (q.una) { estado.sel.clear(); refrescarPie(); }
++    if (q.una && q.conPunto) return q.resolver({ id: ids[0], punto: ultimoPick });
+     q.resolver(q.una ? ids[0] : ids);
+   }
+ 
+   function cancelarPeticion() {
+     const q = pendiente;
+@@ -458,10 +478,11 @@ const Seleccion = (() => {
+       if (conMenu) {
+         id = await elegirEntre(lista, e.clientX, e.clientY);
+         if (!id) return;                    // se cerró sin elegir
+       }
+       if (pendiente && !(await aceptable(id))) { pintar(); return; }
++      ultimoPick = p;             // el punto del clic, para quien pidió `conPunto`
+       alternar(id, sumar, e);
+       return;
+     }
+ 
+     const cruce = p[0] < cajaSel.a[0];      // de derecha a izquierda = cruce
+@@ -477,10 +498,11 @@ const Seleccion = (() => {
+     }
+     cajaSel = null;
+     estado.hule = null;
+     refrescarPie();
+     Comandos.eco(`${estado.sel.size} entidad(es) por ${cruce ? "cruce" : "ventana"}.`);
++    ultimoPick = null;           // una ventana no dice en qué parte de la curva
+     if (pendiente && pendiente.una && estado.sel.size) terminarPeticion();
+     pintar();
+   }
+ 
+   function alMover(p) {
+diff --git a/ui/editar.js b/ui/editar.js
+index 7b4029c..08669a2 100644
+--- a/ui/editar.js
++++ b/ui/editar.js
+@@ -1215,50 +1215,68 @@ function ladoLibre(ent, esquina) {
+   const campo = d1 >= d2 ? "p2" : "p1";
+   const L = Math.hypot(lejos[0] - esquina[0], lejos[1] - esquina[1]) || 1;
+   return { campo, dir: [(lejos[0] - esquina[0]) / L, (lejos[1] - esquina[1]) / L] };
+ }
+ 
++/** Pide dos curvas —línea, arco o polilínea— y CON QUÉ PUNTO se picó cada una.
++ *  El punto no es adorno: entre dos curvas caben hasta cuatro empalmes de un
++ *  mismo radio, y es el lado que se picó el que dice cuál se quiere y qué
++ *  pedazo de cada curva sobrevive. */
++async function dosCurvas(mensaje) {
++  const sirve = (e) => ["linea", "arco", "polilinea"].includes(e.tipo);
++  const queja = "Tiene que ser una línea, un arco o una polilínea.";
++  const a = await Seleccion.pedirUna({ conPunto: true, filtro: sirve, queja,
++    mensaje: mensaje + " — pica la primera curva del lado que se queda" });
++  const b = await Seleccion.pedirUna({ conPunto: true, filtro: sirve, queja,
++    mensaje: mensaje + " — pica la segunda curva del lado que se queda" });
++  if (a.id === b.id) { Comandos.eco("Es la misma curva.", "malo"); return null; }
++  return { a, b };
++}
++
+ Comandos.registrar({
+   nombre: "EMPALME", alias: ["EM", "F"],
+-  ayuda: "Redondea la esquina entre dos líneas con un radio",
++  ayuda: "Redondea con un radio la esquina entre dos curvas: líneas, arcos o polilíneas",
+   correr: async () => {
+     const r = await Entrada.pedirNumero({ mensaje: "Radio del empalme", valor: 0, minimo: 0 });
+-    const d = await dosLineas("Empalme");
+-    if (!d) return;
+-    const la = ladoLibre(d.a, d.esquina), lb = ladoLibre(d.b, d.esquina);
++
++    // Radio 0 no es un empalme, es juntar en la esquina, y eso sólo tiene
++    // sentido entre dos rectas: se queda con el camino viejo.
+     if (r < 1e-9) {
+-      // radio 0 = simplemente juntarlas en la esquina
++      const d = await dosLineas("Empalme");
++      if (!d) return;
++      const la = ladoLibre(d.a, d.esquina), lb = ladoLibre(d.b, d.esquina);
+       await aplicarOperacion({ accion: "Empalme",
+         cambios: { [d.a.id]: { [la.campo]: d.esquina }, [d.b.id]: { [lb.campo]: d.esquina } } });
+       return Comandos.eco("Esquina a escuadra.");
+     }
+-    // La tangente cae a distancia r / tan(mitad del ángulo) de la esquina.
+-    const cos = la.dir[0] * lb.dir[0] + la.dir[1] * lb.dir[1];
+-    const ang = Math.acos(Math.max(-1, Math.min(1, cos)));
+-    if (ang < 1e-6 || Math.abs(ang - Math.PI) < 1e-6) {
+-      return Comandos.eco("Las líneas están alineadas: no hay esquina que redondear.", "malo");
++
++    const d = await dosCurvas("Empalme");
++    if (!d) return;
++    // La geometría la hace el servidor (`core/empalme.py`). Antes se calculaba
++    // aquí con la bisectriz del ángulo, y por eso sólo servía entre dos rectas:
++    // un arco no tiene una sola dirección que bisecar. Ver el comentario de
++    // arriba de ese módulo.
++    let res;
++    try {
++      res = await post("/api/empalme", {
++        id1: d.a.id, pick1: d.a.punto,
++        id2: d.b.id, pick2: d.b.punto, radio: r });
++    } catch (e) {
++      return Comandos.eco(e.message, "malo");
++    }
++    aplicar(res);
++    if (!aplicarParche(res)) await recargarTrazos();
++
++    let msg = `Empalme de radio ${mm(r)} ${U()}.`;
++    // Decirlo: una polilínea cerrada no se puede recortar y seguir cerrada, y
++    // el dibujante tiene que saber que su rectángulo ya es un contorno abierto.
++    if (res.abiertas && res.abiertas.length) {
++      msg += ` ${res.abiertas.length === 1 ? "La polilínea quedó abierta" :
++                 "Las polilíneas quedaron abiertas"}: un contorno cerrado no puede recortarse y seguir cerrado.`;
+     }
+-    const t = r / Math.tan(ang / 2);
+-    const pa = [d.esquina[0] + la.dir[0] * t, d.esquina[1] + la.dir[1] * t];
+-    const pb = [d.esquina[0] + lb.dir[0] * t, d.esquina[1] + lb.dir[1] * t];
+-    // centro del arco: sobre la bisectriz
+-    const bis = [la.dir[0] + lb.dir[0], la.dir[1] + lb.dir[1]];
+-    const Lb = Math.hypot(bis[0], bis[1]) || 1;
+-    const dc = r / Math.sin(ang / 2);
+-    const c = [d.esquina[0] + bis[0] / Lb * dc, d.esquina[1] + bis[1] / Lb * dc];
+-    const angA = (deg(Math.atan2(pa[1] - c[1], pa[0] - c[0])) + 360) % 360;
+-    const angB = (deg(Math.atan2(pb[1] - c[1], pb[0] - c[0])) + 360) % 360;
+-    const barrido = (angB - angA + 360) % 360;
+-    await aplicarOperacion({
+-      accion: "Empalme",
+-      cambios: { [d.a.id]: { [la.campo]: pa }, [d.b.id]: { [lb.campo]: pb } },
+-      agregar: [{ tipo: "arco", centro: c, radio: r,
+-                  ang_ini: barrido <= 180 ? angA : angB,
+-                  ang_fin: barrido <= 180 ? angB : angA,
+-                  capa: d.a.capa }],
+-    });
+-    Comandos.eco(`Empalme de radio ${mm(r)} ${U()}.`);
++    if (res.alargadas && res.alargadas.length) msg += " Se alargó para alcanzar la tangencia.";
++    Comandos.eco(msg);
+   },
+ });
+ 
+ Comandos.registrar({
+   nombre: "CHAFLAN", alias: ["CH", "CHA"],
