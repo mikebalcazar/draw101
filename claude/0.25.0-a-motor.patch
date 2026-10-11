@@ -1,0 +1,419 @@
+diff --git a/core/empalme.py b/core/empalme.py
+new file mode 100644
+index 0000000..ddc7f77
+--- /dev/null
++++ b/core/empalme.py
+@@ -0,0 +1,413 @@
++"""El empalme (fillet) entre DOS CURVAS, no entre dos líneas  ·  draw101 0.25.0
++
++Mike, 11-oct-2026, con un arco cruzando un rectángulo: «quiero hacer un fillet
++aquí pero me indica que tiene que ser una línea… necesito que calcule el fillet
++entre la intersección del arco y el rectángulo y haga las operaciones
++necesarias… probablemente haya que recortar el rectángulo… y el arco debe quedar
++igual con el fillet tangente a la curva del arco».
++
++Hasta hoy EMPALME sólo aceptaba `tipo === "linea"`: ni arcos, ni polilíneas —y
++un rectángulo ES una polilínea—, así que rebotaba antes de calcular nada. Y la
++geometría vivía en la interfaz, resuelta con la bisectriz del ángulo, que es un
++truco que SÓLO sirve para dos rectas: un arco no tiene bisectriz.
++
++CÓMO SE RESUELVE EN GENERAL. El centro del empalme es un punto que está a
++distancia `r` de las dos curvas. El lugar geométrico de los puntos a distancia r
++de una curva es su PARALELA a esa distancia:
++
++  · de un segmento salen DOS rectas paralelas, una de cada lado;
++  · de un arco salen DOS círculos con su mismo centro, de radio R+r y |R−r|
++    (el de R−r no existe si el empalme es más grande que el arco).
++
++Así que el centro es uno de los cruces entre una paralela de la primera curva y
++una de la segunda: hasta ocho candidatos. De cada centro salen los dos puntos de
++tangencia —el pie de la perpendicular en un segmento, y el punto donde el radio
++que pasa por el centro corta la curva en un arco—, y con eso está todo.
++
++CUÁL DE LOS OCHO. El que cae más cerca de DONDE SE PICÓ. Es la regla de AutoCAD
++y no es un desempate arbitrario: se pica cada curva del lado que se quiere
++conservar, así que el punto donde se picó dice a la vez qué solución se quiere y
++qué pedazo se queda. Un empalme no tiene una respuesta «correcta»: tiene cuatro
++esquinas, y es el dibujante quien escoge.
++
++LO QUE ESTE MÓDULO NO HACE: tocar entidades. Aquí sólo hay geometría sobre
++primitivas (`core/geometria.primitivas_de`), que es lo que permite medirla con
++números en una prueba en vez de a ojo en la pantalla. Recortar la línea, el arco
++o la polilínea es de quien llama.
++"""
++
++from __future__ import annotations
++
++import math
++
++TOL = 1e-9
++
++
++# --- cruces elementales ----------------------------------------------------
++
++def _cruce_rectas(p1, d1, p2, d2):
++    """Cruce de dos rectas dadas por punto y dirección. [] si son paralelas."""
++    det = d1[0] * d2[1] - d1[1] * d2[0]
++    if abs(det) < 1e-12:
++        return []
++    t = ((p2[0] - p1[0]) * d2[1] - (p2[1] - p1[1]) * d2[0]) / det
++    return [[p1[0] + d1[0] * t, p1[1] + d1[1] * t]]
++
++
++def _cruce_recta_circulo(p, d, c, r):
++    """Cruces de una recta (punto + dirección unitaria) con un círculo."""
++    fx, fy = p[0] - c[0], p[1] - c[1]
++    b = 2 * (fx * d[0] + fy * d[1])
++    cc = fx * fx + fy * fy - r * r
++    disc = b * b - 4 * cc
++    if disc < -1e-9:
++        return []
++    disc = max(disc, 0.0)
++    raiz = math.sqrt(disc)
++    ts = {(-b - raiz) / 2, (-b + raiz) / 2}
++    return [[p[0] + d[0] * t, p[1] + d[1] * t] for t in ts]
++
++
++def _cruce_circulos(c1, r1, c2, r2):
++    """Cruces de dos círculos. [] si no se tocan o si son el mismo."""
++    dx, dy = c2[0] - c1[0], c2[1] - c1[1]
++    d = math.hypot(dx, dy)
++    if d < 1e-12 or d > r1 + r2 + 1e-9 or d < abs(r1 - r2) - 1e-9:
++        return []
++    a = (r1 * r1 - r2 * r2 + d * d) / (2 * d)
++    h2 = r1 * r1 - a * a
++    h = math.sqrt(max(h2, 0.0))
++    mx, my = c1[0] + a * dx / d, c1[1] + a * dy / d
++    if h < 1e-12:
++        return [[mx, my]]
++    return [[mx + h * dy / d, my - h * dx / d],
++            [mx - h * dy / d, my + h * dx / d]]
++
++
++# --- las paralelas de cada curva -------------------------------------------
++
++def _paralelas(pr, r):
++    """Las dos curvas a distancia `r` de la primitiva, como candidatas.
++
++    Devuelve una lista de descripciones: ("recta", punto, dirección) o
++    ("circulo", centro, radio).
++    """
++    if pr["tipo"] == "seg":
++        ax, ay = pr["a"][0], pr["a"][1]
++        bx, by = pr["b"][0], pr["b"][1]
++        L = math.hypot(bx - ax, by - ay)
++        if L < 1e-12:
++            return []
++        d = [(bx - ax) / L, (by - ay) / L]
++        n = [-d[1], d[0]]
++        return [("recta", [ax + n[0] * r, ay + n[1] * r], d),
++                ("recta", [ax - n[0] * r, ay - n[1] * r], d)]
++    if pr["tipo"] == "arco":
++        c, R = pr["c"], pr["r"]
++        fuera = [("circulo", c, R + r)]
++        # El círculo de R−r no existe si el empalme es tan grande como el arco:
++        # no hay manera de meter una curva de radio r por dentro.
++        return fuera + ([("circulo", c, R - r)] if R - r > 1e-9 else [])
++    return []
++
++
++def _cruces(u, v):
++    if u[0] == "recta" and v[0] == "recta":
++        return _cruce_rectas(u[1], u[2], v[1], v[2])
++    if u[0] == "recta" and v[0] == "circulo":
++        return _cruce_recta_circulo(u[1], u[2], v[1], v[2])
++    if u[0] == "circulo" and v[0] == "recta":
++        return _cruce_recta_circulo(v[1], v[2], u[1], u[2])
++    return _cruce_circulos(u[1], u[2], v[1], v[2])
++
++
++# --- tangencia y pertenencia ----------------------------------------------
++
++def tangencia(pr, centro):
++    """El punto de `pr` más cercano al centro del empalme: la tangencia.
++
++    En un segmento es el pie de la perpendicular —y se calcula sobre la RECTA,
++    sin recortar al tramo, porque un empalme puede caer más allá del extremo y
++    entonces la línea se alarga, como en AutoCAD—. En un arco es el punto donde
++    el radio que pasa por el centro corta la curva.
++    """
++    if pr["tipo"] == "seg":
++        ax, ay = pr["a"][0], pr["a"][1]
++        bx, by = pr["b"][0], pr["b"][1]
++        dx, dy = bx - ax, by - ay
++        L2 = dx * dx + dy * dy
++        if L2 < 1e-18:
++            return [ax, ay]
++        t = ((centro[0] - ax) * dx + (centro[1] - ay) * dy) / L2
++        return [ax + dx * t, ay + dy * t]
++    c, R = pr["c"], pr["r"]
++    vx, vy = centro[0] - c[0], centro[1] - c[1]
++    L = math.hypot(vx, vy)
++    if L < 1e-12:
++        return [c[0] + R, c[1]]
++    return [c[0] + vx / L * R, c[1] + vy / L * R]
++
++
++def _dentro(pr, p):
++    """¿El punto cae DENTRO del tramo dibujado, o habría que alargarlo?"""
++    if pr["tipo"] == "seg":
++        ax, ay = pr["a"][0], pr["a"][1]
++        bx, by = pr["b"][0], pr["b"][1]
++        dx, dy = bx - ax, by - ay
++        L2 = dx * dx + dy * dy
++        if L2 < 1e-18:
++            return False
++        t = ((p[0] - ax) * dx + (p[1] - ay) * dy) / L2
++        return -1e-9 <= t <= 1 + 1e-9
++    a = math.degrees(math.atan2(p[1] - pr["c"][1], p[0] - pr["c"][0])) % 360
++    a0, a1 = pr["a0"] % 360, pr["a1"] % 360
++    barrido = (a1 - a0) % 360
++    if barrido < 1e-9:
++        return True                      # círculo completo
++    return ((a - a0) % 360) <= barrido + 1e-9
++
++
++def _angulo(c, p):
++    return math.degrees(math.atan2(p[1] - c[1], p[0] - c[0])) % 360
++
++
++# --- el empalme -------------------------------------------------------------
++
++def empalme(pr1, pick1, pr2, pick2, r: float) -> dict:
++    """El arco de radio `r` tangente a las dos primitivas, del lado que se picó.
++
++    Devuelve {centro, radio, t1, t2, ang_ini, ang_fin, alargada1, alargada2}.
++    `ang_ini`/`ang_fin` van antihorario, como todo arco en draw101, y recorren
++    el arco CORTO: un empalme es el pedacito de la esquina, nunca el resto de la
++    vuelta.
++
++    Levanta ValueError con el motivo cuando no hay solución. El motivo importa:
++    «no se tocan» y «ese radio no cabe» se arreglan de maneras distintas.
++    """
++    if r <= TOL:
++        raise ValueError("El radio del empalme tiene que ser mayor que cero")
++
++    candidatos = []
++    ps1, ps2 = _paralelas(pr1, r), _paralelas(pr2, r)
++    if not ps1 or not ps2:
++        # Sólo pasa con una curva degenerada (un segmento de largo cero). Un
++        # radio demasiado grande NO cae aquí: de un arco siempre sale al menos
++        # la paralela de R+r, que es el empalme que lo abraza por fuera. El
++        # radio que no cabe se detecta abajo, al quedarse sin candidatos.
++        raise ValueError("Una de las dos curvas no tiene largo: no se puede redondear")
++
++    for u in ps1:
++        for v in ps2:
++            for c in _cruces(u, v):
++                t1 = tangencia(pr1, c)
++                t2 = tangencia(pr2, c)
++                # Lo que de verdad define un empalme: su centro está a `r` de
++                # las dos curvas. Se comprueba aquí y no se da por hecho —los
++                # cruces de dos círculos concéntricos, por ejemplo, no existen y
++                # un candidato colado daría un arco que no toca nada.
++                d1 = math.hypot(c[0] - t1[0], c[1] - t1[1])
++                d2 = math.hypot(c[0] - t2[0], c[1] - t2[1])
++                if abs(d1 - r) > 1e-6 or abs(d2 - r) > 1e-6:
++                    continue
++                if math.hypot(t1[0] - t2[0], t1[1] - t2[1]) < 1e-9:
++                    continue            # las dos tangencias en el mismo punto
++                cerca = (math.hypot(pick1[0] - t1[0], pick1[1] - t1[1])
++                         + math.hypot(pick2[0] - t2[0], pick2[1] - t2[1]))
++                # Entre dos candidatos igual de cerca, gana el que no obliga a
++                # alargar nada: redondear lo que está dibujado antes que
++                # inventar la prolongación de una línea.
++                fuera = (0 if _dentro(pr1, t1) else 1) + (0 if _dentro(pr2, t2) else 1)
++                candidatos.append((fuera, cerca, c, t1, t2))
++
++    if not candidatos:
++        raise ValueError(
++            f"No hay manera de meter un empalme de radio {r:g} entre esas dos "
++            "curvas. Si están muy separadas o casi en línea, prueba otro radio.")
++
++    candidatos.sort(key=lambda x: (x[0], x[1]))
++    _fuera, _cerca, c, t1, t2 = candidatos[0]
++
++    a1 = _angulo(c, t1)
++    a2 = _angulo(c, t2)
++    # El arco CORTO entre las dos tangencias. Al revés saldría el complemento:
++    # un empalme que da la vuelta entera por fuera de la esquina.
++    ang_ini, ang_fin = (a1, a2) if (a2 - a1) % 360 <= 180 else (a2, a1)
++
++    return {"centro": c, "radio": r, "t1": t1, "t2": t2,
++            "ang_ini": ang_ini, "ang_fin": ang_fin,
++            "alargada1": not _dentro(pr1, t1),
++            "alargada2": not _dentro(pr2, t2)}
++
++
++# --- de la geometría a las entidades ---------------------------------------
++
++def _primitiva_picada(doc, e, pick):
++    """La primitiva de `e` más cercana a donde se picó, y su índice.
++
++    Importa para la POLILÍNEA: un rectángulo son cuatro tramos, y el empalme es
++    contra el que se señaló, no contra «el rectángulo». Para una línea o un arco
++    sólo hay una y el índice da igual.
++    """
++    from . import geometria as geo
++    prims = geo.primitivas_de(doc, e)
++    if not prims:
++        raise ValueError("Esa entidad no tiene geometría que redondear")
++    mejor, mejor_d = 0, None
++    for i, pr in enumerate(prims):
++        t = tangencia(pr, pick)
++        if pr["tipo"] == "seg" and not _dentro(pr, t):
++            # Fuera del tramo, lo más cercano es un extremo.
++            da = math.hypot(pick[0] - pr["a"][0], pick[1] - pr["a"][1])
++            db = math.hypot(pick[0] - pr["b"][0], pick[1] - pr["b"][1])
++            d = min(da, db)
++        else:
++            d = math.hypot(pick[0] - t[0], pick[1] - t[1])
++        if mejor_d is None or d < mejor_d:
++            mejor, mejor_d = i, d
++    return prims[mejor], mejor
++
++
++def _t_en_seg(pr, p):
++    ax, ay = pr["a"][0], pr["a"][1]
++    dx, dy = pr["b"][0] - ax, pr["b"][1] - ay
++    L2 = dx * dx + dy * dy
++    return 0.0 if L2 < 1e-18 else ((p[0] - ax) * dx + (p[1] - ay) * dy) / L2
++
++
++def _recortar_linea(e, corte, pick):
++    """Los cambios para dejar la línea del lado donde se picó.
++
++    Devuelve el diccionario en vez de mutar la entidad: quien escribe es
++    `doc.modificar`, que es por donde pasan el historial de deshacer y la
++    comprobación de capa bloqueada. Mutar a pelo se las saltaría las dos.
++    """
++    pr = {"tipo": "seg", "a": list(e.p1), "b": list(e.p2)}
++    campo = "p2" if _t_en_seg(pr, pick) < _t_en_seg(pr, corte) else "p1"
++    return {campo: [corte[0], corte[1]]}
++
++
++def _recortar_arco(e, corte, pick):
++    """Los cambios para dejar el arco del lado donde se picó.
++
++    SÓLO SE MUEVE UN ÁNGULO: mismo centro y mismo radio. La curvatura del arco
++    no cambia, que es lo que pidió Mike —«el arco debe quedar igual con el
++    fillet tangente a la curva»—; lo único que pasa es que queda más corto.
++    """
++    c = e.centro
++    ac = _angulo(c, corte)
++    a0 = e.ang_ini % 360
++    a1 = e.ang_fin % 360
++    barrido = (a1 - a0) % 360 or 360
++
++    if ((ac - a0) % 360) <= barrido:
++        # La tangencia cae DENTRO del arco: se recorta. ¿De qué lado del corte
++        # cayó el pick, contando antihorario desde el principio? Ese se queda.
++        ap = _angulo(c, pick)
++        if ((ap - a0) % 360) <= ((ac - a0) % 360):
++            return {"ang_fin": ac}
++        return {"ang_ini": ac}
++
++    # La tangencia cae FUERA del arco: no hay nada que recortar, hay que
++    # ALARGARLO hasta ella. Se mueve el extremo que le queda más cerca, medido
++    # por el camino corto.
++    #
++    # Esto estaba mal y el error no se veía: con un arco de 180°→270° y una
++    # tangencia en 136°, la primera versión escribía `ang_fin = 136°`, que
++    # antihorario significa 180°→270°→360°→136°, o sea 316° de arco. En vez de
++    # alargar 44° por el lado de arriba le daba la vuelta de 226° por el de
++    # abajo: el arco seguía pasando por donde debía —por eso ninguna
++    # comprobación de tangencia lo cazaba— y era casi un círculo entero.
++    d_ini = min((a0 - ac) % 360, (ac - a0) % 360)
++    d_fin = min((a1 - ac) % 360, (ac - a1) % 360)
++    return {"ang_ini": ac} if d_ini <= d_fin else {"ang_fin": ac}
++
++
++def _recortar_polilinea(e, k: int, corte, pick):
++    """Los cambios para cortar la polilínea en el tramo `k`.
++
++    SI ESTABA CERRADA, SE ABRE, y no hay manera de que no: un rectángulo es un
++    circuito, y quitarle un pedazo deja de serlo. Se devuelve `abierta` para que
++    quien llama lo DIGA; descubrirlo después, al ver que el achurado ya no
++    rellena, sería la peor manera de enterarse.
++
++    El tercer número de cada punto es el `bulge` del tramo que EMPIEZA ahí. El
++    punto de corte nace sin bulge porque un empalme sólo parte tramos rectos:
++    contra un tramo curvo, la primitiva picada ya es un arco y el corte cae en
++    sus extremos.
++    """
++    pts = [list(p) for p in e.puntos]
++    n = len(pts)
++    corte = [corte[0], corte[1], 0.0]
++
++    pr = {"tipo": "seg", "a": pts[k], "b": pts[(k + 1) % n]}
++    # ¿El pick cayó ANTES o DESPUÉS del corte, a lo largo del tramo picado? Es
++    # lo que decide qué mitad del tramo se conserva, y por lo tanto hacia dónde
++    # se recorre el resto.
++    antes = _t_en_seg(pr, pick) < _t_en_seg(pr, corte)
++
++    if e.cerrada:
++        # Se abre EN EL CORTE y se recorre la vuelta entera desde ahí. HACIA
++        # DÓNDE importa: al derecho se conserva la mitad del tramo que va del
++        # corte al vértice k+1; al revés, la que va del corte al vértice k.
++        #
++        # La primera versión iba siempre al derecho, y con el pick del lado de
++        # atrás tiraba justamente el pedazo que el dibujante quería conservar:
++        # se veía bien —el rectángulo se abría, como debe— y estaba al revés.
++        if antes:
++            cadena = [corte] + [pts[(k - i) % n] for i in range(n)]
++        else:
++            cadena = [corte] + [pts[(k + 1 + i) % n] for i in range(n)]
++        return {"puntos": cadena, "cerrada": False}, "abierta"
++
++    if antes:
++        return {"puntos": pts[:k + 1] + [corte]}, "recortada"
++    return {"puntos": [corte] + pts[k + 1:]}, "recortada"
++
++
++def aplicar(doc, id1, pick1, id2, pick2, r: float) -> dict:
++    """Calcula el empalme y lo aplica: recorta las dos curvas y pone el arco.
++
++    Devuelve qué pasó, para poder contarlo en la consola. No abre transacción:
++    eso es del endpoint, para que un Ctrl+Z deshaga los tres cambios juntos.
++    """
++    from . import entidades as ent_mod
++
++    if id1 == id2:
++        raise ValueError(
++            "Son la misma entidad. El empalme va entre dos curvas distintas; "
++            "para redondear la esquina de una polilínea consigo misma todavía "
++            "no está hecho.")
++    e1 = doc.entidades.get(id1)
++    e2 = doc.entidades.get(id2)
++    if e1 is None or e2 is None:
++        raise ValueError("Alguna de las dos entidades ya no está")
++    for e in (e1, e2):
++        if e.tipo not in ("linea", "arco", "polilinea"):
++            raise ValueError(f"No se puede redondear un {e.tipo}: va entre "
++                             "líneas, arcos y polilíneas")
++
++    pr1, k1 = _primitiva_picada(doc, e1, pick1)
++    pr2, k2 = _primitiva_picada(doc, e2, pick2)
++    f = empalme(pr1, pick1, pr2, pick2, r)
++
++    abiertas = []
++    for e, k, corte, pick in ((e1, k1, f["t1"], pick1),
++                              (e2, k2, f["t2"], pick2)):
++        if e.tipo == "linea":
++            cambios = _recortar_linea(e, corte, pick)
++        elif e.tipo == "arco":
++            cambios = _recortar_arco(e, corte, pick)
++        else:
++            cambios, como = _recortar_polilinea(e, k, corte, pick)
++            if como == "abierta":
++                abiertas.append(e.id)
++        doc.modificar(e.id, cambios)
++
++    arco = ent_mod.Arco(centro=[f["centro"][0], f["centro"][1]], radio=r,
++                        ang_ini=f["ang_ini"], ang_fin=f["ang_fin"],
++                        capa=e1.capa)
++    doc.agregar(arco)
++    return {"arco": arco.id, "centro": f["centro"], "radio": r,
++            "t1": f["t1"], "t2": f["t2"],
++            "abiertas": abiertas,
++            "alargadas": [i for i, a in ((id1, f["alargada1"]), (id2, f["alargada2"])) if a]}
