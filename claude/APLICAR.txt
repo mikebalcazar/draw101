@@ -89,3 +89,8 @@ B19-t035-al-dia.patch
 0.24.0-c-interfaz.patch
 0.24.0-d-t058.patch
 0.24.0-e-version.patch
+0.25.0-a-motor.patch
+0.25.0-b-servidor.patch
+0.25.0-c-interfaz.patch
+0.25.0-d-t059.patch
+0.25.0-e-version.patch

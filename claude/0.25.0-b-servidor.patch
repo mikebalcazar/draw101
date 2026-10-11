@@ -1,0 +1,59 @@
+diff --git a/server.py b/server.py
+index 2ee2dae..5659146 100644
+--- a/server.py
++++ b/server.py
+@@ -27,10 +27,11 @@ from pydantic import BaseModel
+ 
+ from core import capas as mod_capas
+ from core import actualizar as mod_actualizar, avisos as mod_avisos, config, unidades as mod_unidades, cotas as mod_cotas, licencias as mod_licencias, dibujo, geometria, papel, pdf_fondo, preferencias, proyecto, t101x
+ from core import importar as mod_importar
+ from core import unir as mod_unir
++from core import empalme as mod_empalme
+ from core import agrupar as mod_agrupar
+ from core import oda as mod_oda
+ from core import nube as mod_nube
+ from core import version as mod_version
+ from core import licencia as mod_licencia
+@@ -2168,10 +2169,42 @@ def unir_entidades(entrada: Unir):
+     except (CapaBloqueada, ValueError) as exc:
+         _error(exc)
+     return {**r, "parche": parche, **S.resumen()}
+ 
+ 
++class Empalme(BaseModel):
++    id1: str
++    pick1: list[float]
++    id2: str
++    pick2: list[float]
++    radio: float
++
++
++@app.post("/api/empalme")
++def empalme_entidades(entrada: Empalme):
++    """EMPALME  ·  arco de radio dado tangente a dos curvas, recortándolas.
++
++    La geometría vive en `core/empalme.py`; aquí sólo se envuelve en una
++    transacción —para que un Ctrl+Z deshaga el recorte de las dos curvas y el
++    arco nuevo de un golpe, no en tres pasos— y se arma el parche.
++
++    Los `pick` son los puntos donde el dibujante picó cada curva. No son
++    decoración: son lo que decide cuál de las cuatro soluciones posibles se
++    construye y qué lado de cada curva se conserva.
++    """
++    try:
++        with S.candado:
++            with S.doc.transaccion("Empalme"):
++                r = mod_empalme.aplicar(S.doc, entrada.id1, entrada.pick1,
++                                        entrada.id2, entrada.pick2,
++                                        entrada.radio)
++            parche = _parche([entrada.id1, entrada.id2, r["arco"]])
++    except (CapaBloqueada, ValueError) as exc:
++        _error(exc)
++    return {**r, "parche": parche, **S.resumen()}
++
++
+ @app.post("/api/operacion")
+ def operacion(entrada: Operacion):
+     ids = []
+     tocadas: list[str] = []
+     try:
