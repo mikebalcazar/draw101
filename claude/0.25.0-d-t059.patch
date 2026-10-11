@@ -1,0 +1,404 @@
+diff --git a/pruebas/t059_empalme_contra_arco.py b/pruebas/t059_empalme_contra_arco.py
+new file mode 100644
+index 0000000..7da3a84
+--- /dev/null
++++ b/pruebas/t059_empalme_contra_arco.py
+@@ -0,0 +1,398 @@
++"""t059 · EMPALME entre un arco y un rectángulo  ·  0.25.0
++
++Mike, 11-oct-2026, con la captura de la pantalla a un lado: «Quiero hacer un
++fillet aquí pero me indica que tiene que ser una línea. Un elemento es un
++rectángulo y el otro es un arco. Necesito que calcule el fillet entre la
++intersección del arco y el rectángulo y haga las operaciones necesarias para
++generar el fillet, probablemente haya que recortar el rectángulo para generar el
++fillet. Y recorta la sección de la línea recta que se integra al fillet, y el
++arco debe quedar igual con el fillet tangente a la curva del arco».
++
++POR QUÉ DECÍA «TIENE QUE SER UNA LÍNEA». No era un filtro puesto por prudencia:
++la cuenta vieja no sabía hacer otra cosa. Buscaba el centro del empalme sobre la
++BISECTRIZ del ángulo entre las dos rectas, y un arco no tiene una dirección que
++bisecar. El motor nuevo (`core/empalme.py`) usa curvas paralelas a distancia r:
++el centro de un empalme de radio r está a r de las dos curvas, o sea en el cruce
++de sus paralelas, y eso vale igual para una recta que para un arco.
++
++LO QUE SE MIDE AQUÍ Y NO SE VE:
++
++  · QUE LA TANGENCIA SEA TANGENCIA DE VERDAD, medida como distancia: del centro
++    del empalme a la recta tiene que haber exactamente r, y del centro del
++    empalme al centro del arco exactamente R±r. Un empalme que se ve bien en la
++    pantalla y está a dos centésimas de la tangencia deja un escalón que la
++    fresadora sí corta.
++
++  · QUE LOS EXTREMOS DEL ARCO DE EMPALME CAIGAN EN LOS DOS PUNTOS DE TANGENCIA.
++    Tangente y sin tocar las curvas es un arco flotando.
++
++  · QUE EL ARCO ORIGINAL CONSERVE CENTRO Y RADIO. Es lo que Mike pidió con
++    «el arco debe quedar igual»: sólo se le mueve un ángulo.
++
++  · QUE EL LADO QUE SE PICÓ SEA EL QUE SOBREVIVE. Entre dos curvas caben cuatro
++    empalmes del mismo radio; el punto del clic es el único dato que dice cuál
++    se quiere. Se pica el mismo par de curvas de un lado y del otro y se exige
++    que salgan soluciones DISTINTAS, cada una del lado picado.
++
++  · QUE UN RECTÁNGULO CERRADO SE ABRA, Y SE DIGA. No hay manera de quitarle un
++    pedazo a un circuito y que siga siendo un circuito. Lo que se mide es que
++    se avise: enterarse después, al ver que el achurado ya no rellena, es la
++    peor manera.
++
++  · QUE ALARGAR SEA ALARGAR. Si la tangencia cae fuera del arco hay que
++    estirarlo, y se estira el extremo que le queda más cerca.
++
++VERIFICADA ROMPIENDO EL CÓDIGO, una rotura a la vez:
++
++  · abrir la polilínea cerrada siempre hacia adelante → 3 fallos
++  · alargar el arco moviendo siempre `ang_fin` → 1, y dice 316.40°, que es
++    exactamente la vuelta por el lado equivocado
++  · devolver el filtro «tiene que ser una línea» → 4, uno de ellos con el
++    mensaje de la captura de Mike escrito en el historial
++  · que el motor no ordene las soluciones por cercanía al pick → 2
++  · no avisar que la polilínea quedó abierta → 2
++  · que la pantalla no pida el punto del clic (`conPunto: false`) → 4
++  · que la pantalla mande [0,0] en vez de donde se picó → 2
++  · hacerlo sin transacción, en tres pasos de historial → 4
++
++Y UNA COMPROBACIÓN DE ESTA PRUEBA NO MEDÍA NADA la primera vez, cazada —como
++las tres de t058— viendo una rotura salir VERDE: la parte de pantalla hacía un
++solo empalme, y al romperla mandando [0,0] como los dos picks salió verde,
++porque con [0,0] gana de casualidad la misma solución. Una prueba que pasa con
++el dato borrado no estaba midiendo el dato. Se arregló agregando el segundo
++caso, que pica el otro lado del corte y exige el otro pedazo.
++
++DOS ERRORES DE VERDAD QUE ESTA PRUEBA DEJA CLAVADOS, los dos encontrados
++corriendo el caso de Mike y mirando los números, no la pantalla:
++
++  · LA POLILÍNEA CERRADA SE ABRÍA POR EL LADO EQUIVOCADO. Se cortaba en la
++    tangencia y se recorría la vuelta siempre hacia adelante, así que con el
++    pick de este lado se tiraba justo el pedazo que el dibujante quería
++    conservar. Se veía bien —el rectángulo se abría, como debe— y estaba al
++    revés. Lo cazan las dos comprobaciones de «el punto donde piqué sigue sobre
++    el rectángulo».
++
++  · EL ARCO SE ALARGABA POR EL LADO EQUIVOCADO. Con un arco de 180°→270° y una
++    tangencia en 136°, se escribía `ang_fin = 136°`, que antihorario significa
++    180°→270°→360°→136°: 316° de arco. En vez de alargar 44° por arriba le daba
++    la vuelta de 226° por abajo. El arco seguía pasando por donde debía, así que
++    ninguna comprobación de tangencia lo cazaba; lo caza la del barrido.
++"""
++
++from __future__ import annotations
++
++import json
++import math
++import urllib.request
++
++from core import empalme as mod_empalme
++from core import entidades as ent
++from core.documento import Documento
++from pruebas import comun, navegador
++
++DESCRIPCION = "EMPALME entre un arco y un rectángulo: tangente, recortando los dos"
++
++RECT = [[0, 0], [200, 0], [200, 120], [0, 120]]
++ARCO = dict(centro=[200, 100], radio=80, ang_ini=180, ang_fin=270)
++
++# Los puntos donde se pica cada curva. EL DEL ARCO TIENE QUE ESTAR SOBRE EL
++# ARCO: a 80 del centro, no a 70. El motor usa el punto nada más para ordenar
++# las cuatro soluciones posibles, así que ahí da igual estar cerca; la pantalla
++# lo usa para ATINARLE a la curva con el ratón, y ahí no da igual. La primera
++# versión de esta prueba picaba (130, 95), que está 10 unidades adentro del
++# arco: el motor pasaba y los clics de la pantalla no agarraban nada.
++PICK_RECT = [60, 0]                 # sobre el borde de abajo
++PICK_ARCO = [124.8198, 72.6352]     # sobre el arco, a 200°
++
++
++# --------------------------------------------------------------------------- #
++# El motor                                                                    #
++# --------------------------------------------------------------------------- #
++
++def _caso(pick_rect, pick_arco, radio, cerrada=True):
++    """El caso de Mike: el rectángulo y el arco de la captura."""
++    doc = Documento.nuevo()
++    with doc.transaccion("dibujo"):
++        rect = doc.agregar(ent.Polilinea(puntos=[list(p) for p in RECT], cerrada=cerrada))
++        arco = doc.agregar(ent.Arco(**ARCO))
++    with doc.transaccion("Empalme"):
++        res = mod_empalme.aplicar(doc, rect.id, pick_rect, arco.id, pick_arco, radio)
++    return doc, doc.entidades[rect.id], doc.entidades[arco.id], res
++
++
++def _dist_a_recta(c, a, b) -> float:
++    largo = math.hypot(b[0] - a[0], b[1] - a[1])
++    return abs((b[0] - a[0]) * (c[1] - a[1]) - (b[1] - a[1]) * (c[0] - a[0])) / largo
++
++
++def _sobre_el_borde_de_abajo(pts, x) -> bool:
++    """¿El punto (x, 0) sigue estando sobre algún tramo del contorno?"""
++    for i in range(len(pts) - 1):
++        a, b = pts[i], pts[i + 1]
++        if abs(a[1]) < 1e-9 and abs(b[1]) < 1e-9 and \
++           min(a[0], b[0]) - 1e-9 <= x <= max(a[0], b[0]) + 1e-9:
++            return True
++    return False
++
++
++def _motor(r: comun.Reporte) -> None:
++    doc, rect, arco, res = _caso(PICK_RECT, PICK_ARCO, 15)
++
++    # -- tangencia, medida como distancia ----------------------------------- #
++    c = res["centro"]
++    r.casi(_dist_a_recta(c, [0, 0], [200, 0]), 15,
++           "del centro del empalme a la recta hay exactamente el radio", tol=1e-9)
++    d_centros = math.hypot(c[0] - ARCO["centro"][0], c[1] - ARCO["centro"][1])
++    r.casi(abs(d_centros - ARCO["radio"]), 15,
++           "y al arco también: tangente de verdad a la curva, no casi", tol=1e-9)
++
++    # -- los extremos del empalme caen en las tangencias --------------------- #
++    emp = doc.entidades[res["arco"]]
++    for nombre, ang, esperado in (("inicial", emp.ang_ini, res["t1"]),
++                                  ("final", emp.ang_fin, res["t2"])):
++        p = [emp.centro[0] + emp.radio * math.cos(math.radians(ang)),
++             emp.centro[1] + emp.radio * math.sin(math.radians(ang))]
++        r.punto(p, esperado,
++                f"el extremo {nombre} del empalme cae en su punto de tangencia", tol=1e-9)
++
++    # -- el arco original queda igual ---------------------------------------- #
++    r.punto(arco.centro, ARCO["centro"], "el arco no se movió de centro", tol=1e-12)
++    r.casi(arco.radio, ARCO["radio"], "ni le cambió el radio: sólo quedó más corto", tol=1e-12)
++    barrido = (arco.ang_fin - arco.ang_ini) % 360
++    r.cierto(barrido < 90 - 1e-9, "el arco se recortó, no se alargó", f"barrido {barrido:.4f}°")
++    r.casi(arco.ang_ini % 360, 180, "y se recortó por el extremo del lado del empalme", tol=1e-9)
++
++    # -- el rectángulo se abre, y se dice ------------------------------------ #
++    r.igual(rect.cerrada, False, "el rectángulo cerrado quedó abierto: no hay otra manera")
++    r.igual(res["abiertas"], [rect.id], "y se avisa cuál se abrió, para poder decirlo")
++    r.igual(len(rect.puntos), 5, "con un vértice más: el punto de tangencia")
++    r.igual(res["alargadas"], [], "no se alargó nada: las dos tangencias caen dentro")
++
++    # -- el lado que se picó es el que sobrevive ----------------------------- #
++    corte = res["t1"][0]
++    r.cierto(_sobre_el_borde_de_abajo(rect.puntos, PICK_RECT[0]),
++             "el punto donde piqué el rectángulo sigue sobre el rectángulo",
++             f"corte en x={corte:.2f}, vértices {[[round(v, 1) for v in p[:2]] for p in rect.puntos]}")
++    r.cierto(not _sobre_el_borde_de_abajo(rect.puntos, (corte + 200) / 2),
++             "y el pedazo del otro lado del corte se fue")
++
++    _, rect2, _, res2 = _caso([190, 0], PICK_ARCO, 15)
++    r.cierto(_sobre_el_borde_de_abajo(rect2.puntos, 190),
++             "picando del otro lado, el que sobrevive es el otro pedazo",
++             f"vértices {[[round(v, 1) for v in p[:2]] for p in rect2.puntos]}")
++    r.cierto(not _sobre_el_borde_de_abajo(rect2.puntos, PICK_RECT[0]),
++             "y ahora el que se va es el que antes se quedaba")
++    r.casi(res2["t1"][0], corte, "la tangencia es la misma: lo que cambia es qué lado se tira", tol=1e-9)
++
++    # -- contra una línea suelta, no sólo contra una polilínea --------------- #
++    doc3 = Documento.nuevo()
++    with doc3.transaccion("dibujo"):
++        linea = doc3.agregar(ent.Linea(p1=[0, 0], p2=[200, 0]))
++        arco3 = doc3.agregar(ent.Arco(**ARCO))
++    with doc3.transaccion("Empalme"):
++        res3 = mod_empalme.aplicar(doc3, linea.id, PICK_RECT, arco3.id, PICK_ARCO, 15)
++    l3 = doc3.entidades[linea.id]
++    r.punto(res3["centro"], c, "una línea suelta da el mismo empalme que el mismo borde del rectángulo", tol=1e-9)
++    r.punto(l3.p2, res3["t1"], "y la línea se recorta justo en la tangencia", tol=1e-9)
++    r.punto(l3.p1, [0, 0], "sin moverle el otro extremo", tol=1e-12)
++
++    # -- picar los dos lados de la LÍNEA da soluciones distintas ------------- #
++    centros = {}
++    for lado, pick in (("izquierda", [60, 0]), ("derecha", [380, 0])):
++        d = Documento.nuevo()
++        with d.transaccion("dibujo"):
++            li = d.agregar(ent.Linea(p1=[0, 0], p2=[400, 0]))
++            ai = d.agregar(ent.Arco(centro=[200, 100], radio=80, ang_ini=180, ang_fin=360))
++        with d.transaccion("Empalme"):
++            centros[lado] = mod_empalme.aplicar(d, li.id, pick, ai.id, PICK_ARCO, 15)["centro"]
++    r.cierto(abs(centros["izquierda"][0] - centros["derecha"][0]) > 1,
++             "picar un lado u otro de la línea da empalmes DISTINTOS, no el mismo",
++             f"izquierda {[round(v, 3) for v in centros['izquierda']]} · "
++             f"derecha {[round(v, 3) for v in centros['derecha']]}")
++
++    # -- alargar es alargar, no dar la vuelta -------------------------------- #
++    d = Documento.nuevo()
++    with d.transaccion("dibujo"):
++        li = d.agregar(ent.Linea(p1=[0, 0], p2=[200, 0]))
++        ai = d.agregar(ent.Arco(**ARCO))
++    with d.transaccion("Empalme"):
++        res4 = mod_empalme.aplicar(d, li.id, PICK_RECT, ai.id, PICK_ARCO, 500)
++    a4 = d.entidades[ai.id]
++    barrido4 = (a4.ang_fin - a4.ang_ini) % 360
++    r.cierto(90 < barrido4 < 180,
++             "con la tangencia fuera del arco, el arco se ALARGA por el lado cercano",
++             f"barrido {barrido4:.2f}° (medía 90°; dar la vuelta por el otro lado daría 316°)")
++    r.punto(a4.centro, ARCO["centro"], "alargándolo tampoco se le mueve el centro", tol=1e-12)
++    r.cierto(sorted(res4["alargadas"]) == sorted([li.id, ai.id]),
++             "y se avisa que hubo que alargar", str(res4["alargadas"]))
++
++    # -- lo que no se puede hacer, se dice -------------------------------- #
++    d = Documento.nuevo()
++    with d.transaccion("dibujo"):
++        li = d.agregar(ent.Linea(p1=[0, 0], p2=[200, 0]))
++        ai = d.agregar(ent.Arco(**ARCO))
++    quejas = {}
++    for que, args in (("misma", (li.id, [60, 0], li.id, [160, 0], 15)),
++                      ("radio", (li.id, PICK_RECT, ai.id, PICK_ARCO, -5))):
++        try:
++            with d.transaccion("Empalme"):
++                mod_empalme.aplicar(d, *args)
++            quejas[que] = ""
++        except ValueError as exc:
++            quejas[que] = str(exc)
++    r.cierto("misma entidad" in quejas["misma"],
++             "empalmar una curva consigo misma se dice que no está hecho", quejas["misma"])
++    r.cierto(quejas["radio"] and quejas["radio"] != quejas["misma"],
++             "y un radio de cero o menos tiene su propia queja, no la misma", quejas["radio"])
++
++
++# --------------------------------------------------------------------------- #
++# La pantalla: el comando de verdad, picando con el ratón                     #
++# --------------------------------------------------------------------------- #
++
++def _entidad(base: str, id_: str) -> dict:
++    with urllib.request.urlopen(base + f"/api/entidad/{id_}", timeout=5) as f:
++        return json.loads(f.read().decode("utf-8"))
++
++
++def _ids(base) -> list[str]:
++    return sorted({t["id"] for t in navegador.trazos(base)}, key=lambda s: int(s[1:]))
++
++
++def _de_tipo(base, tipo) -> list[dict]:
++    return [e for e in (_entidad(base, i) for i in _ids(base)) if e.get("tipo") == tipo]
++
++
++def _cmd(pagina, *textos):
++    for t in textos:
++        pagina.click("#cmd")
++        pagina.keyboard.press("Control+A")
++        pagina.keyboard.press("Backspace")
++        pagina.type("#cmd", t, delay=10)
++        pagina.keyboard.press("Enter")
++        pagina.wait_for_timeout(250)
++
++
++def _clic(pagina, p) -> None:
++    x, y = pagina.evaluate("""(p) => {
++        const [x, y] = aPX(p[0], p[1]);
++        const caja = document.querySelector('#lienzo').getBoundingClientRect();
++        return [caja.left + x, caja.top + y];
++    }""", list(p))
++    pagina.mouse.move(x, y)
++    pagina.wait_for_timeout(80)
++    pagina.mouse.click(x, y)
++    pagina.wait_for_timeout(400)
++
++
++def _dicho(pagina) -> str:
++    return pagina.evaluate("""() => {
++        const c = document.querySelector('#cmd-historial');
++        return [...c.querySelectorAll('.eco')].slice(-4).map((e) => e.textContent).join(' | ');
++    }""")
++
++
++def _pantalla(r: comun.Reporte) -> None:
++    """El caso de Mike tal como lo va a hacer él: dibujar, teclear EMPALME,
++    poner el radio y PICAR las dos curvas con el ratón.
++
++    Es la mitad que el motor no puede medir: que el filtro ya no diga «tiene que
++    ser una línea», y que el punto del clic llegue hasta el servidor. El motor
++    recibe los puntos como argumentos; si la pantalla no se los manda, el motor
++    sigue pasando y el comando no sirve.
++    """
++    with navegador.programa() as (pagina, base):
++        navegador.cerrar_inicio(pagina)
++        pagina.evaluate("""() => {
++            estado.prefs.osnap = false; estado.prefs.ortho = false;
++            estado.prefs.snap_rejilla = false; estado.prefs.dinamica = false;
++            encuadrarCaja(-60, -60, 320, 260);
++        }""")
++        pagina.wait_for_timeout(200)
++        pagina.evaluate("""async (d) => {
++            await post('/api/operacion', {accion: 'poner', agregar: [
++                {tipo: 'polilinea', puntos: d.rect, cerrada: true},
++                {tipo: 'arco', centro: d.arco.centro, radio: d.arco.radio,
++                 ang_ini: d.arco.ang_ini, ang_fin: d.arco.ang_fin}]});
++            await recargarTrazos();
++        }""", {"rect": RECT, "arco": ARCO})
++        pagina.wait_for_timeout(300)
++
++        antes_pl = _de_tipo(base, "polilinea")
++        antes_ar = _de_tipo(base, "arco")
++        r.exige(len(antes_pl) == 1 and len(antes_ar) == 1,
++                "el dibujo de partida es el de la captura: un rectángulo y un arco")
++
++        _cmd(pagina, "EMPALME", "15")
++        _clic(pagina, PICK_RECT)        # el rectángulo, por el borde de abajo
++        _clic(pagina, PICK_ARCO)        # el arco, sobre la curva
++        pagina.wait_for_timeout(500)
++
++        dicho = _dicho(pagina)
++        r.cierto("ser una línea" not in dicho,
++                 "ya NO dice «tiene que ser una línea»: es lo que reportó Mike", dicho)
++
++        arcos = _de_tipo(base, "arco")
++        r.cierto(len(arcos) == 2, "quedaron dos arcos: el de siempre y el del empalme",
++                 f"hay {len(arcos)} · {dicho}")
++        if len(arcos) == 2:
++            emp = min(arcos, key=lambda a: a["radio"])
++            viejo = max(arcos, key=lambda a: a["radio"])
++            r.casi(emp["radio"], 15, "el empalme salió con el radio que se pidió")
++            r.punto(viejo["centro"], ARCO["centro"], "y el arco original no se movió", tol=1e-6)
++            r.casi(viejo["radio"], ARCO["radio"], "ni cambió de radio")
++            r.casi(_dist_a_recta(emp["centro"], [0, 0], [200, 0]), 15,
++                   "el empalme es tangente al borde de abajo del rectángulo", tol=1e-6)
++            d = math.hypot(emp["centro"][0] - viejo["centro"][0],
++                           emp["centro"][1] - viejo["centro"][1])
++            r.casi(abs(d - viejo["radio"]), 15,
++                   "y tangente al arco: la curva del arco queda limpia", tol=1e-6)
++
++        pls = _de_tipo(base, "polilinea")
++        if r.igual(len(pls), 1, "el rectángulo sigue siendo uno"):
++            r.igual(pls[0]["cerrada"], False, "pero abierto: se le quitó un pedazo")
++            r.cierto(_sobre_el_borde_de_abajo(pls[0]["puntos"], PICK_RECT[0]),
++                     "y el pedazo que sobrevive es el que se picó",
++                     str([[round(v, 1) for v in p[:2]] for p in pls[0]["puntos"]]))
++        r.cierto("abierta" in dicho.lower(),
++                 "y se AVISA que quedó abierto, en vez de dejarlo descubrir solo", dicho)
++
++        # Ctrl+Z tiene que deshacer las tres cosas de un golpe, no en tres.
++        pagina.keyboard.press("Escape")
++        pagina.keyboard.press("Control+z")
++        pagina.wait_for_timeout(600)
++        r.igual(len(_de_tipo(base, "arco")), 1, "un solo Ctrl+Z deshace el empalme entero")
++        vuelto = _de_tipo(base, "polilinea")
++        if len(vuelto) == 1:
++            r.igual(vuelto[0]["cerrada"], True, "y el rectángulo vuelve a estar cerrado")
++            r.igual(len(vuelto[0]["puntos"]), 4, "con sus cuatro vértices de siempre")
++
++        # SEGUNDO CASO, Y NO ES DE ADORNO: el mismo par de curvas picando el
++        # rectángulo del OTRO lado del corte. Es lo único que mide que el punto
++        # del clic viaje de la pantalla al servidor. La primera versión de esta
++        # prueba sólo hacía el caso de arriba, y al romperla —mandando [0,0]
++        # como los dos picks en vez de donde se picó— salió VERDE: con [0,0]
++        # gana por casualidad la misma solución. Una prueba que pasa con el dato
++        # borrado no estaba midiendo el dato.
++        _cmd(pagina, "EMPALME", "15")
++        _clic(pagina, [190, 0])         # el rectángulo, pero del lado derecho
++        _clic(pagina, PICK_ARCO)
++        pagina.wait_for_timeout(500)
++
++        pls = _de_tipo(base, "polilinea")
++        if r.igual(len(pls), 1, "picando del otro lado también se hace el empalme"):
++            donde = str([[round(v, 1) for v in q[:2]] for q in pls[0]["puntos"]])
++            r.cierto(_sobre_el_borde_de_abajo(pls[0]["puntos"], 190),
++                     "y lo que sobrevive es el pedazo DERECHO, el que se picó", donde)
++            r.cierto(not _sobre_el_borde_de_abajo(pls[0]["puntos"], PICK_RECT[0]),
++                     "no el izquierdo: el punto del clic llegó hasta el servidor", donde)
++
++        r.igual(pagina.errores, [], "y no hubo un solo error de JavaScript")
++
++
++def correr(r: comun.Reporte) -> None:
++    _motor(r)
++    if not navegador.hay_navegador():
++        r.cierto(True, "(sin Playwright en esta máquina: la parte de pantalla se salta)")
++        return
++    _pantalla(r)
