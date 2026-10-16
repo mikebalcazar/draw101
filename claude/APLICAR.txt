@@ -94,3 +94,11 @@ B19-t035-al-dia.patch
 0.25.0-c-interfaz.patch
 0.25.0-d-t059.patch
 0.25.0-e-version.patch
+0.26.0-a-operaciones.patch
+0.26.0-b-entrada.patch
+0.26.0-c-valores.patch
+0.26.0-d-sugeridor.patch
+0.26.0-e-iconos.patch
+0.26.0-f-t060.patch
+0.26.0-f2-t061-t062.patch
+0.26.0-g-version.patch
