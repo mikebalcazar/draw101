@@ -1,0 +1,153 @@
+diff --git a/ui/app.js b/ui/app.js
+index 72bc70f..7d61f26 100644
+--- a/ui/app.js
++++ b/ui/app.js
+@@ -282,11 +282,11 @@ const PanelCotas = (() => {
+     const t = $("#pc-texto"), f = $("#pc-flecha");
+     if (document.activeElement !== t) t.value = mm(enDibujo(estilo.altura_texto ?? 2.5));
+     if (document.activeElement !== f) f.value = mm(enDibujo(estilo.tam_flecha ?? 2.0));
+   }
+   async function cambiar(clave, texto) {
+-    const n = parseFloat(String(texto).replace(",", "."));
++    const n = Operacion.numeroDe(String(texto).replace(",", "."));
+     if (!(n > 0)) { avisar(Tr("El tamaño tiene que ser mayor que cero."), true); pintar(); return; }
+     if (!estilo) await traer();
+     const k = parseFloat(estilo.factor_escala) || 1;
+     const cambios = { [clave]: n / k };
+     try {
+@@ -1072,11 +1072,11 @@ function armarCamposObjeto(campos, ids, ents, { enVivo = false } = {}) {
+   // cada entidad de línea, no todas». El tipo de línea (y su escala) van por
+   // entidad; «Por capa» es lo de siempre.
+   fila("Tipo de línea", selectorTipoLinea(comunes("tipo_linea")), async (val) =>
+     cambiarObjetos(ids, { tipo_linea: val || null }));
+   fila("Escala del tipo", campoTexto(mm(comunes("escala_tl") ?? 1)), async (val) => {
+-    const x = parseFloat(String(val).replace(",", "."));
++    const x = Operacion.numeroDe(String(val).replace(",", "."));
+     if (!(x > 0)) return avisar("La escala del tipo de línea tiene que ser mayor que cero.", true);
+     cambiarObjetos(ids, { escala_tl: x });
+   });
+ 
+   if (n !== 1 || tipos.length !== 1) {
+@@ -1105,11 +1105,11 @@ function armarCamposObjeto(campos, ids, ents, { enVivo = false } = {}) {
+         if (!p) return avisar("Escribe las coordenadas como 100,50", true);
+         cambiarObjetos(ids, { [clave]: p });
+       });
+     } else if (clase === "numero") {
+       fila(etiqueta, campoTexto(mm(valor)), async (val) => {
+-        const x = parseFloat(String(val).replace(",", "."));
++        const x = Operacion.numeroDe(String(val).replace(",", "."));
+         if (!isFinite(x)) return avisar("Eso no es un número.", true);
+         cambiarObjetos(ids, { [clave]: x });
+       });
+     } else if (clase === "si_no") {
+       fila(etiqueta, selectorLista(valor ? "si" : "no", [["si", "sí"], ["no", "no"]]),
+@@ -1149,11 +1149,11 @@ function filaTamanoCota(campos, ids, ents, enVivo) {
+   const casilla = document.createElement("input");
+   casilla.type = "checkbox";
+   casilla.checked = encadenada;
+   casilla.title = "Encadenada al tamaño base del documento: si el base cambia, esta cota cambia en proporción.";
+   const aplicar_ = async (texto, cadena) => {
+-    const x = parseFloat(String(texto).replace(",", "."));
++    const x = Operacion.numeroDe(String(texto).replace(",", "."));
+     if (!(x > 0)) return avisar("El tamaño tiene que ser mayor que cero.", true);
+     const escala = x / altura;                       // sobre el estilo a 1:1
+     const cambios = cadena
+       ? { factor_tamano: escala / (enHoja ? 1 : baseDoc), encadenada: true }
+       : { factor_tamano: escala, encadenada: false };
+diff --git a/ui/dialogo.js b/ui/dialogo.js
+index bdbe266..e37ad5e 100644
+--- a/ui/dialogo.js
++++ b/ui/dialogo.js
+@@ -71,11 +71,11 @@ const Dialogo = (() => {
+       const el = abierto.caja.querySelector(`[data-clave="${c.clave}"]`);
+       if (!el) { v[c.clave] = c.valor; continue; }
+       if (c.tipo === "nota") continue;
+       if (c.tipo === "casilla") v[c.clave] = el.checked;
+       else if (c.tipo === "numero") {
+-        const n = parseFloat(el.value.replace(",", "."));
++        const n = Operacion.numeroDe(el.value.replace(",", "."));
+         v[c.clave] = isFinite(n) ? n : c.valor;
+       } else v[c.clave] = el.value;
+     }
+     return v;
+   }
+diff --git a/ui/comandos.js b/ui/comandos.js
+index 53ecf0e..d0a3310 100644
+--- a/ui/comandos.js
++++ b/ui/comandos.js
+@@ -100,10 +100,15 @@ const Comandos = (() => {
+       return;
+     }
+     ultimo = texto.trim();
+     eco("› " + ultimo);
+     corriendo = cmd.nombre;
++    // Analítica para el sugeridor (Mike, 16-oct-2026). Se anota el comando
++    // RESUELTO y no lo tecleado, para que «C», «CIRCULO» y «CIRCLE» cuenten
++    // como uno solo; y se anota aquí, después de resolver, para que un dedazo
++    // no le suba puntos a nadie.
++    if (typeof Sugeridor !== "undefined" && Sugeridor.anotarUso) Sugeridor.anotarUso(cmd.nombre);
+     // El icono de la herramienta junto al cursor mientras el comando dure
+     // (ui/iconos.js). Una herramienta puede cambiarlo a medio camino.
+     estado.cursorIcono = (typeof Iconos !== "undefined" && Iconos.POR_COMANDO[cmd.nombre]) || null;
+     try {
+       await cmd.correr(partes.slice(1));
+@@ -222,11 +227,19 @@ const Comandos = (() => {
+       if (!texto) {                       // Enter en vacío repite el último
+         if (ultimo) await correr(ultimo);
+         return;
+       }
+       historial.push(texto);
+-      await correr(texto);
++      // Enter corre lo que la lista está enseñando hasta arriba (Mike,
++      // 16-oct-2026: «con "of" ya identifica que es el único comando»). Sólo
++      // se traduce la PRIMERA palabra: «ZOOM 2» conserva su argumento. Si lo
++      // tecleado ya es un comando o un atajo, vuelve tal cual.
++      const partes = texto.split(/\s+/);
++      if (typeof Sugeridor !== "undefined" && Sugeridor.comandoDe) {
++        partes[0] = Sugeridor.comandoDe(partes[0]);
++      }
++      await correr(partes.join(" "));
+     });
+ 
+     window.addEventListener("keyup", (e) => {
+       if (e.key !== " " || Entrada.esperandoTextoLibre) return;
+       const et0 = document.activeElement.tagName;
+@@ -321,11 +334,11 @@ Comandos.registrar({
+     if (op === "P" || op === "PREVIO") return vistaPrevia();
+     if (op === "V" || op === "VENTANA") {
+       Comandos.pedir("Primera esquina de la ventana");
+       return iniciarZoomVentana();
+     }
+-    const f = parseFloat(op);
++    const f = Operacion.numeroDe(op);
+     if (isFinite(f) && f > 0) {
+       // Se apunta la vista antes de saltar. La rueda no lo hace —apuntaría una
+       // vista por muesca y ZOOM P dejaría de servir para nada.
+       recordarVista();
+       return zoomEn(lienzo.clientWidth / 2, lienzo.clientHeight / 2, f);
+@@ -454,11 +467,11 @@ Comandos.registrar({
+ 
+ Comandos.registrar({
+   nombre: "REJILLA", alias: ["GRID", "F7"],
+   ayuda: "REJILLA [ON · OFF · paso en mm]",
+   correr: async (args) => {
+-    const n = parseFloat(args[0]);
++    const n = Operacion.numeroDe(args[0]);
+     if (isFinite(n) && n > 0) {
+       await guardarPrefs({ rejilla_paso: n, rejilla: true });
+       return Comandos.eco(`Rejilla de ${mm(n)} mm.`);
+     }
+     interruptor("rejilla", args, "Rejilla");
+@@ -476,11 +489,11 @@ Comandos.registrar({
+ 
+ Comandos.registrar({
+   nombre: "SNAP", alias: ["F9"],
+   ayuda: "SNAP [ON · OFF · paso en mm] — forzar el cursor a la rejilla",
+   correr: async (args) => {
+-    const n = parseFloat(args[0]);
++    const n = Operacion.numeroDe(args[0]);
+     if (isFinite(n) && n > 0) {
+       await guardarPrefs({ snap_paso: n, snap_rejilla: true });
+       return Comandos.eco(`Snap de ${mm(n)} mm.`);
+     }
+     interruptor("snap_rejilla", args, "Snap de rejilla");
