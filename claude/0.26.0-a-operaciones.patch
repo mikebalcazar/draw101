@@ -1,0 +1,172 @@
+diff --git a/ui/operacion.js b/ui/operacion.js
+new file mode 100644
+index 0000000..b305ba2
+--- /dev/null
++++ b/ui/operacion.js
+@@ -0,0 +1,166 @@
++/* Operaciones aritméticas donde se teclea una medida  ·  draw101 0.26.0
++ *
++ * Mike, 16-oct-2026: «si tengo 2 medidas de secciones de una línea y quiero
++ * trazar una línea de esa medida sumado (45+110), en vez de tener que escribir
++ * forzosamente el valor completo (155), poder escribir 45+110 y que el programa
++ * sepa que el resultado de la operación es el valor final y entonces me traza
++ * 155. Eso en todos los comandos que requieran u ocupen un valor para el trazo».
++ *
++ * En el taller la medida casi nunca viene dada: el claro son 1200 menos dos
++ * costados de 18, la repisa va a la mitad de lo que quede, el entrepaño son tres
++ * de 450. Hasta hoy esa cuenta se hacía aparte —en la cabeza o en el celular— y
++ * se teclaba el resultado. Una cuenta que no se ve no se puede revisar, y un
++ * número mal sumado en un plano se corta en la máquina.
++ *
++ * DOS PUERTAS, Y LA DIFERENCIA ES LO QUE HACE QUE ESTO NO ROMPA NADA:
++ *
++ *   · `evaluar` es ESTRICTA: dígitos, punto decimal, + − * / y paréntesis. Una
++ *     coma, un «<», una arroba o una letra son NaN. Va donde hoy hay una criba
++ *     que TIENE que seguir rechazando coordenadas: en este programa «100,50» es
++ *     un punto y «100<45» es un polar, y si se colaran como número suelto la
++ *     línea se iría a otro lado. Es la criba de antes —`/^-?\d+(\.\d+)?$/`—
++ *     ensanchada con las operaciones: todo lo que aquélla aceptaba, ésta
++ *     también.
++ *
++ *   · `numeroDe` es SUELTA: si el texto NO trae operación, hace el `parseFloat`
++ *     de siempre y se acabó. Eso es a propósito y no descuido: quien teclea
++ *     «100mm» en el radio del empalme lleva meses obteniendo 100, y una versión
++ *     nueva no se lo puede quitar. El intérprete sólo entra cuando hay una
++ *     operación de verdad. Va donde hoy hay un `parseFloat` pelado.
++ *
++ * Las dos son ENSANCHAMIENTOS: sin operación en el texto, el resultado es
++ * idéntico al de antes, carácter por carácter. Por eso esto puede entrar de un
++ * golpe en los 23 comandos que piden un valor, en las coordenadas tecleadas, en
++ * la cajita dinámica, en el panel de propiedades y en los diálogos, sin tener
++ * que revisar uno por uno qué podía escribirse antes en cada uno.
++ *
++ * NO SE USA `eval`, y no es paranoia de manual. La interfaz corre dentro de
++ * Electron: ahí `eval` de una cadena que puede venir de un archivo ajeno —el
++ * nombre de una capa, el atributo de un bloque del arquitecto— es ejecutar
++ * código del que manda el archivo. Y un intérprete propio además puede DECIR
++ * qué está mal, en vez de contestar `undefined`.
++ */
++
++const Operacion = (() => {
++
++  /** ¿El texto trae una operación, o es un número pelado?
++   *
++   *  Un signo al frente NO es una operación: «-45» es un número negativo, no
++   *  una resta. De ahí el `slice(1)`, que es la única razón por la que esta
++   *  función no es un `test` de una línea. */
++  function tieneOperacion(texto) {
++    return /[+\-*/()]/.test(String(texto ?? "").trim().slice(1));
++  }
++
++  /* --- Partir el texto en piezas ---------------------------------------- */
++
++  /* Un número o un signo, anclado al principio de lo que queda. La notación
++   * científica («1e-3») entra en la MISMA pieza a propósito: `parseFloat` la
++   * acepta desde siempre, y si el «-» de «1e-3» se leyera como una resta, un
++   * texto que hoy da 0.001 empezaría a dar error. */
++  const PIEZA = /^(?:(?:\d+(?:\.\d*)?|\.\d+)(?:[eE][+-]?\d+)?|[+\-*/()])/;
++
++  function piezas(t) {
++    const fuera = [];
++    let resto = t;
++    for (;;) {
++      // El espacio se salta ENTRE piezas, no se borra de todo el texto. La
++      // diferencia no es cosmética: borrándolo, «2 3» se volvía «23» y el
++      // intérprete contestaba veintitrés con toda confianza. Un espacio en
++      // medio de un número es un dedo que se equivocó, y tiene que doler.
++      resto = resto.replace(/^\s+/, "");
++      if (!resto) return fuera;
++      const m = PIEZA.exec(resto);
++      if (!m) return null;              // un carácter que no es número ni signo
++      fuera.push(m[0]);
++      resto = resto.slice(m[0].length);
++    }
++  }
++
++  /* --- El intérprete ---------------------------------------------------- */
++
++  /* Descenso recursivo, tres niveles, que es lo que da la precedencia sin una
++   * tabla: `expresion` parte en + y −, `termino` en * y /, y por eso
++   * «1200-2*18» son 1164 y no 21 564. `null` significa «esto no es una
++   * operación válida»; el cero legítimo no se confunde con él. */
++  function analizar(ps) {
++    let i = 0;
++    const ver = () => ps[i];
++    const comer = () => ps[i++];
++
++    function factor() {
++      const p = ver();
++      if (p === "+") { comer(); return factor(); }
++      if (p === "-") { comer(); const v = factor(); return v === null ? null : -v; }
++      if (p === "(") {
++        comer();
++        const v = expresion();
++        if (v === null || ver() !== ")") return null;   // falta cerrar
++        comer();
++        return v;
++      }
++      // Aquí tenía que venir un número: si se acabó el texto o viene un signo,
++      // la operación está incompleta («45+», «*5», «(1+)»).
++      if (p === undefined || "+-*/()".includes(p)) return null;
++      const n = parseFloat(comer());
++      return isFinite(n) ? n : null;
++    }
++
++    function termino() {
++      let v = factor();
++      if (v === null) return null;
++      while (ver() === "*" || ver() === "/") {
++        const op = comer();
++        const d = factor();
++        if (d === null) return null;
++        // Dividir entre cero no da «infinito»: da una medida que no existe. Se
++        // contesta «no es un número» y quien llamó lo dice, en vez de meter un
++        // Infinity al dibujo y que el trazo se vaya al otro lado del mundo.
++        if (op === "/" && d === 0) return null;
++        v = op === "/" ? v / d : v * d;
++      }
++      return v;
++    }
++
++    function expresion() {
++      let v = termino();
++      if (v === null) return null;
++      while (ver() === "+" || ver() === "-") {
++        const op = comer();
++        const d = termino();
++        if (d === null) return null;
++        v = op === "+" ? v + d : v - d;
++      }
++      return v;
++    }
++
++    const v = expresion();
++    // Que haya sobrado texto es un error, no algo que se ignore: «2 3» o
++    // «(45)110» son un dedo que se equivocó, y `parseFloat` contestaría 2 y 45
++    // sin decir nada.
++    if (v === null || i !== ps.length) return null;
++    return v;
++  }
++
++  /* --- Las dos puertas -------------------------------------------------- */
++
++  /** ESTRICTA. Sólo números y operaciones; cualquier otra cosa es NaN.
++   *  Ver el comentario de arriba: va donde hay que seguir rechazando «100,50». */
++  function evaluar(texto) {
++    const t = String(texto ?? "").trim();
++    if (!t) return NaN;
++    const ps = piezas(t);
++    if (!ps) return NaN;
++    const v = analizar(ps);
++    return v === null || !isFinite(v) ? NaN : v;
++  }
++
++  /** SUELTA. Sin operación en el texto, el `parseFloat` de siempre; con
++   *  operación, el intérprete estricto. Va donde hay un `parseFloat` pelado. */
++  function numeroDe(texto) {
++    const t = String(texto ?? "").trim();
++    return tieneOperacion(t) ? evaluar(t) : parseFloat(t);
++  }
++
++  return { evaluar, numeroDe, tieneOperacion };
++})();
