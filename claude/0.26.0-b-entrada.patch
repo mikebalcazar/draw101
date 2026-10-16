@@ -1,0 +1,165 @@
+diff --git a/ui/entrada.js b/ui/entrada.js
+index 4996946..990a36e 100644
+--- a/ui/entrada.js
++++ b/ui/entrada.js
+@@ -31,28 +31,28 @@ const Entrada = (() => {
+     const origen = relativo ? (base || [0, 0]) : [0, 0];
+ 
+     // polar: distancia<ángulo
+     if (cuerpo.includes("<")) {
+       const [d, a] = cuerpo.split("<");
+-      const dist = parseFloat(d), ang = parseFloat(a);
++      const dist = Operacion.numeroDe(d), ang = Operacion.numeroDe(a);
+       if (!isFinite(dist) || !isFinite(ang)) return null;
+       return [origen[0] + dist * Math.cos(ang * Math.PI / 180),
+               origen[1] + dist * Math.sin(ang * Math.PI / 180)];
+     }
+     // cartesianas: x,y
+     if (cuerpo.includes(",")) {
+       const [x, y] = cuerpo.split(",");
+-      const px = parseFloat(x), py = parseFloat(y);
++      const px = Operacion.numeroDe(x), py = Operacion.numeroDe(y);
+       if (!isFinite(px) || !isFinite(py)) return null;
+       return [origen[0] + px, origen[1] + py];
+     }
+     // Un solo número con punto base: distancia directa en la dirección del
+     // cursor. Si el cursor está justo encima del punto base no hay dirección
+     // que seguir —pasa siempre al dibujar un círculo: se pica el centro y se
+     // teclea el radio sin mover el ratón— y entonces se toma la horizontal.
+     // El resultado es el que el usuario quería: un radio de esa medida.
+-    const solo = parseFloat(cuerpo);
++    const solo = Operacion.numeroDe(cuerpo);
+     if (isFinite(solo) && base) {
+       const dx = estado.cursor.x - base[0], dy = estado.cursor.y - base[1];
+       const largo = Math.hypot(dx, dy);
+       if (largo < 1e-9) return [base[0] + solo, base[1]];
+       return [base[0] + dx / largo * solo, base[1] + dy / largo * solo];
+@@ -145,12 +145,11 @@ const Entrada = (() => {
+     if (act === $("#din-v1")) { campo = xy ? "ancho" : "longitud"; texto = act.value; }
+     else if (act === $("#din-v2")) { campo = xy ? "alto" : "angulo"; texto = act.value; }
+     else if (act === $("#cmd")) { campo = xy ? "ancho" : "longitud"; texto = act.value; }
+     else return null;
+     const t = String(texto).trim();
+-    if (!/^-?\d+(\.\d+)?$/.test(t)) return null;
+-    const n = parseFloat(t);
++    const n = Operacion.evaluar(t);          // «45+110» vale aquí; «100,50» no
+     if (!isFinite(n) || (campo !== "angulo" && n === 0)) return null;
+     // Si el campo trae lo que la propia caja escribió (la medida del cursor),
+     // no es un tecleo: sólo cuenta lo que la persona cambió.
+     if (act.dataset.propio === t) return null;
+     return { campo, valor: n };
+@@ -220,12 +219,12 @@ const Entrada = (() => {
+     $("#din-c2").classList.toggle("fijo", !!(bl && (bl.campo === "angulo" || bl.campo === "alto")));
+   }
+ 
+   function valorDinamico() {
+     const base = pendiente && pendiente.base;
+-    const v1 = parseFloat($("#din-v1").value);
+-    const v2 = parseFloat($("#din-v2").value);
++    const v1 = Operacion.numeroDe($("#din-v1").value);
++    const v2 = Operacion.numeroDe($("#din-v2").value);
+     if (!isFinite(v1) || !isFinite(v2)) return null;
+     if (!base) return [v1, v2];
+     if (pendiente.dinamica === "xy") {
+       // Lo fijado con Enter manda sobre lo que muestre la caja.
+       const ancho = (bloqueo && bloqueo.campo === "ancho") ? bloqueo.valor : v1;
+@@ -291,12 +290,11 @@ const Entrada = (() => {
+     // **La coma no se convierte en punto aquí.** En este programa la coma
+     // separa X de Y (`300,100` es un punto), así que aceptarla como decimal
+     // convertía una coordenada en una longitud de 300.1 mm y la línea se iba a
+     // otro lado. Sólo un número pelado, con punto decimal si acaso.
+     const t = String(texto).trim();
+-    if (!/^-?\d+(\.\d+)?$/.test(t)) return false;    // «100,50» y «@100<45» no
+-    const n = parseFloat(t);
++    const n = Operacion.evaluar(t);   // «100,50» y «@100<45» siguen fuera; «45+110» entra
+     if (!isFinite(n) || n === 0) return false;
+     if (pendiente.dinamica === "xy") {
+       // Rectángulo por la línea de comandos (Mike, 9-sep-2026): «clic origen
+       // → teclear ancho Enter → teclear alto Enter → se crea». Sin cajita
+       // dinámica, el primer número es el ancho y el segundo el alto; crece
+@@ -321,12 +319,11 @@ const Entrada = (() => {
+ 
+   /** Con `numero: true`, un número a secas es la respuesta, no un punto. */
+   function numeroTecleado(texto) {
+     if (!pendiente || !pendiente.numero) return false;
+     const t = String(texto).trim().replace(",", ".");
+-    if (!/^-?\d+(\.\d+)?$/.test(t)) return false;
+-    const n = parseFloat(t);
++    const n = Operacion.evaluar(t);
+     if (!isFinite(n)) return false;
+     entregar({ numero: n });
+     return true;
+   }
+ 
+@@ -496,12 +493,20 @@ const Entrada = (() => {
+     clave = clave || mensaje;
+     const omision = recordar ? ultimoValor(clave, valor) : valor;
+     while (true) {
+       const t = await pedirTexto({ mensaje, valor: omision === null ? "" : mm(omision), libre: false });
+       if (t === "" && omision !== null) { if (recordar) recordarValor(clave, omision); return omision; }
+-      const n = parseFloat(String(t).replace(",", "."));
+-      if (isFinite(n) && (minimo === null || n >= minimo)) { if (recordar) recordarValor(clave, n); return n; }
++      const texto = String(t).replace(",", ".");
++      const n = Operacion.numeroDe(texto);
++      if (isFinite(n) && (minimo === null || n >= minimo)) {
++        // Si se tecleó una operación, se enseña la cuenta hecha. Cuesta un
++        // renglón y es la única manera de cachar un paréntesis mal puesto
++        // ANTES de que la pieza esté trazada.
++        if (Operacion.tieneOperacion(texto)) Comandos.eco(`${texto} = ${mm(n)} ${U()}`);
++        if (recordar) recordarValor(clave, n);
++        return n;
++      }
+       Comandos.eco(`«${t}» no es un número válido.`, "malo");
+     }
+   }
+ 
+   function textoRecibido(texto) {
+@@ -555,27 +560,33 @@ const Entrada = (() => {
+     if (e.key === "Tab" && (estado.prefs || {}).dinamica && pendiente.base) {
+       e.preventDefault();
+       const enV1 = document.activeElement === $("#din-v1");
+       const xy = pendiente.dinamica === "xy";
+       const campo = enV1 ? (xy ? "ancho" : "longitud") : (xy ? "alto" : "angulo");
+-      const valor = parseFloat((enV1 ? $("#din-v1") : $("#din-v2")).value);
++      const valor = Operacion.numeroDe((enV1 ? $("#din-v1") : $("#din-v2")).value);
+       if (isFinite(valor)) bloqueo = { campo, valor };
+       (enV1 ? $("#din-v2") : $("#din-v1")).select();
+       alMoverse();
+       return true;
+     }
+ 
+     // Enter **o espacio** en la entrada dinámica: en un número el espacio no
+     // sirve de nada, así que confirma (Mike, 7-sep).
++    //
++    // Salvo cuando lo tecleado es una OPERACIÓN. Ahí el espacio sí sirve: quien
++    // escribe «45 + 110» por costumbre habría confirmado 45 y trazado la pieza
++    // corta. Con una operación a medias el espacio se teclea y es Enter el que
++    // remata; con un número pelado todo sigue como el 7-sep.
+     if ((e.key === "Enter" || e.key === " ") &&
+         (document.activeElement === $("#din-v1") || document.activeElement === $("#din-v2"))) {
++      if (e.key === " " && Operacion.tieneOperacion(document.activeElement.value)) return false;
+       e.preventDefault();
+       // Rectángulo (Mike, 8-sep): Enter en X pasa a Y, igual que Tab; el
+       // segundo Enter remata. Un solo valor tecleado en X y Enter no puede
+       // querer decir «el alto es el del ratón».
+       if (pendiente.dinamica === "xy" && pendiente.base && document.activeElement === $("#din-v1")) {
+-        const valor = parseFloat($("#din-v1").value);
++        const valor = Operacion.numeroDe($("#din-v1").value);
+         if (isFinite(valor) && valor !== 0) bloqueo = { campo: "ancho", valor };
+         $("#din-v2").select();
+         alMoverse();
+         return true;
+       }
+@@ -583,11 +594,11 @@ const Entrada = (() => {
+       if (p) entregar(p);
+       return true;
+     }
+ 
+     // Empezar a teclear un número manda el foco a la entrada dinámica.
+-    if (/^[0-9.\-]$/.test(e.key) && (estado.prefs || {}).dinamica &&
++    if (/^[0-9.\-(]$/.test(e.key) && (estado.prefs || {}).dinamica &&
+         !["INPUT", "SELECT", "TEXTAREA"].includes(document.activeElement.tagName)) {
+       $("#din-v1").value = e.key;
+       $("#din-v1").focus();
+       e.preventDefault();
+       return true;
