@@ -1,0 +1,99 @@
+diff --git a/core/version.py b/core/version.py
+index f028f7a..86e05bd 100644
+--- a/core/version.py
++++ b/core/version.py
+@@ -19,17 +19,62 @@ Numeración: `mayor.menor.parche`.
+     volver a AutoCAD.
+ """
+ 
+ from __future__ import annotations
+ 
+-VERSION = "0.25.0"
+-FECHA = "2026-10-11"
++VERSION = "0.26.0"
++FECHA = "2026-10-16"
+ 
+ # Qué trae cada entrega, en el idioma del taller y no en el del código.
+ # La más nueva arriba. Lo que se lista aquí es lo que el comando VERSION
+ # enseña en la consola.
+ BITACORA: list[dict] = [
++    {
++        "version": "0.26.0",
++        "fecha": "2026-10-16",
++        "cambios": [
++            "DONDE VA UNA MEDIDA AHORA PUEDES TECLEAR LA CUENTA. En vez de sacar "
++            "aparte que 45 y 110 son 155, escribes «45+110» y traza 155. Sirven "
++            "la suma, la resta, la multiplicación, la división y los paréntesis: "
++            "«(1200-80)/2» son 560, «1200-2*18» son 1164. Funciona en los 23 "
++            "comandos que preguntan una medida —radio del empalme, distancia del "
++            "desfase, ancho, alto, separación del arreglo—, en las coordenadas "
++            "tecleadas («45+110,20*2»), en la cajita de la entrada dinámica, en "
++            "el panel de propiedades y en los cuadros de diálogo.",
++            "Cuando tecleas una operación, el programa ENSEÑA la cuenta hecha "
++            "(«(1200-80)/2 = 560 cm»). Cuesta un renglón y es la única manera de "
++            "cachar un paréntesis mal puesto antes de que la pieza esté trazada.",
++            "Lo que ya escribías sigue igual: «100,50» sigue siendo el punto "
++            "(100, 50) y no la medida 100.50, y «100mm» sigue valiendo 100.",
++            "ENTER CORRE EL COMANDO DE HASTA ARRIBA DE LAS SUGERENCIAS. Tecleabas "
++            "«OF», la lista enseñaba DESFASE, y Enter contestaba «comando "
++            "desconocido: OF», porque los atajos de DESFASE son DF, O y OFFSET. "
++            "Lo que la lista enseña y lo que Enter hace ya son lo mismo, desde la "
++            "primera letra.",
++            "LA LISTA DE SUGERENCIAS APRENDE DE TI. Los comandos que más usas "
++            "—y más recientemente— suben solos al principio. El orden es: tu "
++            "atajo exacto primero, luego los que más usas, y el alfabético hasta "
++            "el final. El atajo exacto gana SIEMPRE: «C» seguirá trazando "
++            "círculos por muchas veces que uses COPIAR, para que una tecla que ya "
++            "tienes en el dedo no cambie de significado sola.",
++            "ACTUALIZAR y ACTUALIZARMUEBLES no se disparan por adivinanza: uno "
++            "baja e instala y el otro rehace el dibujo. Siguen en la lista y "
++            "siguen corriendo escritos completos o con sus atajos, pero Enter no "
++            "los agarra desde una letra suelta.",
++            "LOS ÍCONOS DE LA BARRA SON DIBUJOS, NO LETRAS. Eran caracteres "
++            "sueltos («╱» para línea, «✥» para mover), y por eso se veían chicos "
++            "y no se parecían a nada: un carácter se dibuja del tamaño que la "
++            "tipografía quiera. Ahora son 42 dibujos propios, del doble de "
++            "tamaño, con las proporciones medidas de una barra de AutoCAD.",
++            "Y DICEN CÓMO SE USA EL COMANDO, con dos colores: NARANJA son los "
++            "puntos que te va a pedir que piques —los dos extremos en LINEA, el "
++            "centro en CIRCULO, el punto de adentro en RAYADO—; AZUL es hacia "
++            "dónde trabaja; y AZUL PUNTEADO es lo que se va o lo que todavía no "
++            "existe: el pedazo que RECORTAR se lleva, el tramo que EXTENDER "
++            "agrega, la copia que COPIAR va a dejar.",
++        ],
++    },
+     {
+         "version": "0.25.0",
+         "fecha": "2026-10-11",
+         "cambios": [
+             "EMPALME (fillet) YA FUNCIONA CONTRA ARCOS Y POLILÍNEAS, no sólo "
+diff --git a/package.json b/package.json
+index 3968956..8057da4 100644
+--- a/package.json
++++ b/package.json
+@@ -1,10 +1,10 @@
+ {
+   "name": "draw101",
+   "productName": "draw101",
+-  "version": "0.25.0",
+-  "_versionApp": "0.25.0 — la que enseña la app viene de core/version.py; ésta sólo existe porque electron-builder exige semver",
++  "version": "0.26.0",
++  "_versionApp": "0.26.0 — la que enseña la app viene de core/version.py; ésta sólo existe porque electron-builder exige semver",
+   "_notaAsociaciones": "draw101 aparece en «Abrir con» de los DXF y DWG y en Aplicaciones predeterminadas, pero NO se roba la asociación: quién los abre por omisión lo sigue decidiendo el usuario (regla de Mike, 0.11.2). electron-builder registra el ProgID; Windows decide. El .t101d sí es nuestro. Ojo: dentro de «build» electron-builder rechaza cualquier clave que no conozca, aunque empiece con guión bajo (se cazó armando la 0.20.16).",
+   "_notaEmpaque": "asar apagado a propósito: main.js busca server.py junto a electron/, y el motor de Python no puede vivir dentro de un asar. Y electron-builder saca cualquier node_modules de los globs de `files`, así que los dos motores de DWG (dwgjs/node_modules) se copian por extraResources o la app se queda sin leer DWG.",
+   "description": "CAD 2D de Taller 101 — leer, trazar, acotar e imprimir planos",
+   "main": "electron/main.js",
+   "author": "Taller 101",
+@@ -19,11 +19,11 @@
+     "electron-builder": "^25.0.0"
+   },
+   "build": {
+     "appId": "mx.taller101.dibujador",
+     "productName": "draw101",
+-    "artifactName": "draw101-0.25.0-setup.${ext}",
++    "artifactName": "draw101-0.26.0-setup.${ext}",
+     "directories": {
+       "output": "dist",
+       "buildResources": "build"
+     },
+     "asar": false,
