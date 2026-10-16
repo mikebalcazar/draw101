@@ -13,10 +13,10 @@ index 0000000..18c8987
 + * usa el comando, o las secciones que deshecha, o la dirección en que trabaja».
 + *
 + * POR QUÉ ERAN CHICOS Y ABSTRACTOS, que resultó ser la misma razón: no eran
-+ * dibujos. Eran CARACTERES UNICODE —«╱» para línea, «✚» para mover, «⧉» para
++ * dibujos. Eran CARACTERES UNICODE —«╱» para línea, «✥» para mover, «⧉» para
 + * copiar, «⇗» para cota alineada—. Un carácter se dibuja del tamaño que la
 + * tipografía quiera dentro de su cuadratín, así que agrandar la letra no
-+ * agranda el trazo; y «✚» no se parece a mover nada porque no se eligió para
++ * agranda el trazo; y «✥» no se parece a mover nada porque no se eligió para
 + * eso: se eligió porque existía. De ahí los dos síntomas a la vez.
 + *
 + * LAS MEDIDAS SALIERON DE LA CAPTURA, MEDIDAS, no a ojo. En la barra de
