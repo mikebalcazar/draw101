@@ -1,0 +1,462 @@
+diff --git a/pruebas/t025_sugeridor.py b/pruebas/t025_sugeridor.py
+index 426185a..33da136 100644
+--- a/pruebas/t025_sugeridor.py
++++ b/pruebas/t025_sugeridor.py
+@@ -93,18 +93,34 @@ def _flechas(r: comun.Reporte, pagina) -> None:
+     }""")
+     r.igual(v, "C", "lo tecleado no se completa solo")
+     pagina.keyboard.press("ArrowDown")
+     r.igual(pagina.evaluate("document.getElementById('cmd').value"), "CIRCULO",
+             "la flecha abajo escribe CIRCULO en la caja (no borra lo tecleado)")
+-    # CIRCULO va primero porque «C» es su atajo exacto; las demás salen en
+-    # orden. CAPA entró en la lista el 22-sep-2026 y por eso se cuela aquí.
+-    pagina.keyboard.press("ArrowDown")
+-    r.igual(pagina.evaluate("document.getElementById('cmd').value"), "CAPA",
+-            "y la siguiente baja a CAPA")
+-    pagina.keyboard.press("ArrowDown")
+-    r.igual(pagina.evaluate("document.getElementById('cmd').value"), "COTA",
+-            "y la de después a COTA")
++
++    # Se comprueba LA REGLA, no los nombres.
++    #
++    # Aquí decía «la siguiente baja a CAPA y la de después a COTA», y el
++    # comentario de al lado ya confesaba el problema: «CAPA entró en la lista el
++    # 22-sep-2026 y por eso se cuela aquí». Una prueba que nombra el segundo y
++    # el tercero se rompe cada vez que alguien registra un comando nuevo, y se
++    # rompió el 16-oct-2026 cuando el orden cambió a petición de Mike (el uso
++    # manda, y el alfabético pasó a ser el último desempate). Lo que importa no
++    # es que el segundo sea CAPA: es que el primero sea el del atajo exacto y
++    # que los demás vayan en un orden definido, no al azar.
++    nombres = pagina.evaluate("() => Sugeridor.buscar('C').map(o => o.cmd.nombre)")
++    r.igual(nombres[0], "CIRCULO", "el primero es el del atajo exacto")
++    resto = nombres[1:]
++    r.cierto(resto == sorted(resto, key=lambda n_: (len(n_), n_)),
++             "y los demás, sin analítica de por medio, van del nombre más corto al "
++             "más largo y luego alfabético", str(resto))
++    r.cierto("COTA" in nombres and "COPIAR" in nombres,
++             "con eso COTA y COPIAR caben en los ocho; con el alfabético a secas "
++             "los empujaban AYUDA, CANTIDADES y CAPA", str(nombres))
++    for i in (1, 2):
++        pagina.keyboard.press("ArrowDown")
++        r.igual(pagina.evaluate("document.getElementById('cmd').value"), nombres[i],
++                f"la flecha baja al número {i + 1} de la lista, sea cual sea")
+     pagina.keyboard.press("Escape")
+     pagina.evaluate("() => { const c = document.getElementById('cmd'); c.value = ''; c.dispatchEvent(new Event('input')); }")
+ 
+     # Con la caja vacía, las flechas siguen siendo el historial.
+     navegador.comando(pagina, "ENCUADRAR")
+diff --git a/pruebas/t061_sugeridor_que_aprende.py b/pruebas/t061_sugeridor_que_aprende.py
+new file mode 100644
+index 0000000..c59b6aa
+--- /dev/null
++++ b/pruebas/t061_sugeridor_que_aprende.py
+@@ -0,0 +1,225 @@
++"""t061 · Enter corre el de hasta arriba, y la lista aprende  ·  0.26.0
++
++Mike, 16-oct-2026: «cuando estoy escribiendo un comando, ejemplo offset, ya
++desde que escribí "of" identifica que es el único comando. Permite que con enter
++ya seleccione ese comando. De hecho, permite que desde la primera letra ya
++ejecute el comando que aparece hasta arriba de la lista de los sugeridos, sin
++necesidad de escribir todo. Implementa una analítica que los comandos más
++frecuentes sean los que aparecen hasta arriba de la lista. Antes del orden
++alfabético, la jerarquía es por cantidad de uso junto con una combinación de uso
++reciente. El orden alfabético es el último».
++
++EL ERROR DE FONDO ERA QUE LA LISTA Y ENTER NO SE PONÍAN DE ACUERDO. Los atajos
++de DESFASE son DF, O y OFFSET: «OF» no es ninguno. Así que la lista enseñaba
++DESFASE —porque empieza con OF— y Enter contestaba «comando desconocido: OF».
++Lo que se ve y lo que pasa tienen que ser lo mismo.
++
++LO QUE SE MIDE AQUÍ Y NO SE VE:
++
++  · QUE EL ATAJO EXACTO LE GANE AL USO, SIEMPRE. Se le preguntó a Mike y lo
++    escogió: «C» es el atajo de CIRCULO, y si la analítica pudiera ponerle
++    COPIAR encima, un día «C» dejaría de trazar círculos sin que nadie tocara
++    nada. Aquí se usa COPIAR cien veces y se exige que «C» siga siendo CIRCULO.
++    Es la comprobación más importante de esta prueba: es la que impide que una
++    tecla que ya está en la memoria del dedo cambie de significado sola.
++
++  · QUE EL USO LE GANE AL ALFABÉTICO Y LA RECIENCIA DESEMPATE. Con las mismas
++    veces, el de esta semana va arriba del de hace un año. Los puntos no son
++    una cuenta: cada uso suma 1 y lo acumulado se parte a la mitad cada 30
++    días, así que las dos cosas que pidió Mike viven en un solo número.
++
++  · QUE LO QUE ENTER CORRE SEA LO QUE LA LISTA ENSEÑA. Se compara comando por
++    comando, no de palabra.
++
++  · QUE ACTUALIZAR NO SE PUEDA DISPARAR CON UNA LETRA. Baja e instala 126 MB; y
++    ACTUALIZARMUEBLES rehace el dibujo sin preguntar. Los dos llevan
++    `soloEntero` y se van hasta el final de la lista: siguen estando, se
++    escriben completos o se escogen con las flechas, pero Enter no los agarra
++    por adivinanza. Se van ABAJO y no sólo se sacan del Enter, porque si
++    siguieran apareciendo arriba la lista volvería a decir una cosa y Enter a
++    hacer otra, que es el error que esto vino a arreglar.
++
++  · QUE LA CUENTA SOBREVIVA AL PROGRAMA: se guarda en las preferencias, no en
++    la memoria de la sesión.
++
++VERIFICADA ROMPIENDO EL CÓDIGO, una rotura a la vez:
++
++  · que la frecuencia le gane al atajo exacto → 3 fallos, y la lista de
++    desacuerdos enseña «C» corriendo AYUDA y «M» corriendo ESPEJO: justo el
++    día en que una tecla cambia de significado sola
++  · que los puntos no se desvanezcan con el tiempo (sin reciencia) → 1
++  · que Enter vuelva a correr lo tecleado tal cual → 2
++  · que `soloEntero` deje de mandar abajo → 1, y entonces «AC» pone arriba
++    ACTUALIZAR, que baja 126 MB
++  · que no se guarde en las preferencias → 2
++
++Y UNA COMPROBACIÓN DE ESTA PRUEBA NO MEDÍA NADA, cazada viendo una rotura salir
++VERDE: buscaba la palabra «desconocido» en la consola, y el programa de pruebas
++arranca en inglés y dice «Unknown command». Comparaba contra nada. Ahora se mide
++qué comando quedó corriendo (`Comandos.corriendo`), que no depende del idioma.
++"""
++
++from __future__ import annotations
++
++import json
++import urllib.request
++
++from pruebas import comun, navegador
++
++DESCRIPCION = "Enter corre el comando de hasta arriba, y la lista se ordena por uso"
++
++HOY = 1760000000          # un «ahora» cualquiera, para las cuentas de reciencia
++DIA = 24 * 3600
++
++
++def _cmd(pagina, *textos):
++    for t in textos:
++        pagina.click("#cmd")
++        pagina.keyboard.press("Control+A")
++        pagina.keyboard.press("Backspace")
++        pagina.type("#cmd", t, delay=8)
++        pagina.keyboard.press("Enter")
++        pagina.wait_for_timeout(250)
++
++
++def _primeros(pagina, texto, n=3):
++    return pagina.evaluate("([t, n]) => Sugeridor.buscar(t).slice(0, n).map(o => o.cmd.nombre)",
++                           [texto, n])
++
++
++def _poner_uso(pagina, uso):
++    """Siembra la analítica como si se hubiera usado así durante meses."""
++    pagina.evaluate("(u) => { estado.prefs = estado.prefs || {}; estado.prefs.uso_comandos = u; }", uso)
++
++
++def correr(r: comun.Reporte) -> None:
++    if not navegador.hay_navegador():
++        r.cierto(True, "(sin Playwright en esta máquina: la prueba se salta)")
++        return
++    with navegador.programa() as (pagina, base):
++        navegador.cerrar_inicio(pagina)
++        pagina.wait_for_timeout(400)
++
++        # -- 1 · el caso de Mike, de punta a punta --------------------------- #
++        r.igual(pagina.evaluate("() => Comandos.existe('OF')"), False,
++                "«OF» no es atajo de nadie: por eso Enter contestaba «comando desconocido»")
++        r.igual(_primeros(pagina, "OF", 1), ["DESFASE"],
++                "y sin embargo la lista ya enseñaba DESFASE")
++        r.igual(pagina.evaluate("() => Sugeridor.comandoDe('OF')"), "DESFASE",
++                "ahora Enter corre lo que la lista enseña")
++
++        # Se mide QUÉ COMANDO QUEDÓ CORRIENDO, no el texto del historial.
++        #
++        # La primera versión buscaba la palabra «desconocido» en la consola, y al
++        # romper el código —quitando justamente el enganche que Mike pidió— la
++        # prueba salió VERDE: el programa de pruebas arranca en inglés y dice
++        # «Unknown command», así que la comprobación comparaba contra nada. Una
++        # comprobación que depende del idioma no es una comprobación.
++        _cmd(pagina, "OF")
++        pagina.wait_for_timeout(350)
++        r.igual(pagina.evaluate("() => Comandos.corriendo"), "DESFASE",
++                "tecleando «OF» y Enter, el que arranca es DESFASE")
++        r.cierto(pagina.evaluate("() => !!Entrada.esperandoTexto"),
++                 "y de verdad arrancó: está preguntando la distancia")
++        pagina.keyboard.press("Escape")
++        pagina.wait_for_timeout(250)
++
++        # -- 2 · la lista y Enter dicen lo mismo, letra por letra ------------ #
++        desacuerdos = pagina.evaluate("""() => {
++            const mal = [];
++            for (const c of "ABCDEFGHIJLMNOPQRSTUVWXZ") {
++              const o = Sugeridor.buscar(c);
++              if (!o.length) continue;
++              const corre = Sugeridor.comandoDe(c);
++              // Con un atajo exacto, `comandoDe` devuelve lo tecleado tal cual
++              // y lo resuelve el motor: se compara contra el comando resuelto.
++              const resuelto = Comandos.existe(corre)
++                ? (Comandos.lista.find(x => x.nombre === corre) || {}).nombre || corre : corre;
++              if (o[0].exacto) continue;
++              if (resuelto !== o[0].cmd.nombre) mal.push([c, o[0].cmd.nombre, resuelto]);
++            }
++            return mal;
++        }""")
++        r.igual(desacuerdos, [],
++                "con cualquier letra, Enter corre exactamente el que la lista pone hasta arriba")
++
++        # -- 3 · EL ATAJO EXACTO LE GANA AL USO (la decisión de Mike) -------- #
++        _poner_uso(pagina, {"COPIAR": {"n": 100, "t": HOY}, "CIRCULO": {"n": 0.2, "t": HOY - 400 * DIA}})
++        pagina.wait_for_timeout(120)
++        r.igual(_primeros(pagina, "C", 1), ["CIRCULO"],
++                "con COPIAR usado 100 veces y CIRCULO casi nunca, «C» SIGUE siendo CIRCULO")
++        r.igual(pagina.evaluate("() => Sugeridor.comandoDe('C')"), "C",
++                "y Enter lo deja pasar tal cual, que es su atajo de siempre")
++        # El control: sin atajo de por medio, el uso sí manda.
++        r.igual(_primeros(pagina, "CO", 1), ["COPIAR"],
++                "pero donde NO hay atajo exacto —«CO»— el más usado sí se pone arriba")
++
++        # -- 4 · el uso le gana al alfabético -------------------------------- #
++        #
++        # El prefijo tiene que ser uno que NO sea atajo de nadie, o la regla del
++        # atajo exacto manda y esto no mediría el uso. La primera versión de
++        # esta prueba usaba «E» y «ES» —que son los atajos de BORRAR y de
++        # ESCALAR— y fallaba enseñando que la regla del atajo funcionaba, no que
++        # el uso ordenara. De ahí que ahora se compruebe primero.
++        r.igual(pagina.evaluate("() => Comandos.existe('BOR')"), False,
++                "«BOR» no es atajo de nadie: sirve para medir el orden por uso")
++        _poner_uso(pagina, {})
++        pagina.wait_for_timeout(120)
++        antes = _primeros(pagina, "BOR", 3)
++        _poner_uso(pagina, {"BORRARPLANO": {"n": 50, "t": HOY}})
++        pagina.wait_for_timeout(120)
++        r.igual(_primeros(pagina, "BOR", 1), ["BORRARPLANO"],
++                "un comando muy usado sube al primer lugar de su prefijo")
++        r.cierto(antes[0] != "BORRARPLANO",
++                 "y sin analítica no estaba ahí: era el último por alfabético",
++                 f"sin analítica: {antes} · con uso: BORRARPLANO")
++
++        # -- 5 · con el mismo uso, manda la reciencia ------------------------ #
++        def orden_bor(uso):
++            _poner_uso(pagina, uso)
++            pagina.wait_for_timeout(120)
++            return [c for c in _primeros(pagina, "BOR", 6) if c in ("BORRAR", "BORRARPLANO")][:2]
++
++        r.igual(orden_bor({"BORRAR": {"n": 10, "t": HOY - 365 * DIA},
++                           "BORRARPLANO": {"n": 10, "t": HOY - 2 * DIA}}), ["BORRARPLANO", "BORRAR"],
++                "con las mismas veces, el de esta semana va arriba del de hace un año")
++        # El control, al revés: si el reciente es el otro, el orden se invierte.
++        # Sin esto, la comprobación de arriba también pasaría si el orden fuera
++        # alfabético por casualidad, o si la reciencia no se mirara en absoluto.
++        r.igual(orden_bor({"BORRAR": {"n": 10, "t": HOY - 2 * DIA},
++                           "BORRARPLANO": {"n": 10, "t": HOY - 365 * DIA}}), ["BORRAR", "BORRARPLANO"],
++                "y al revés se invierte: es la reciencia, no el nombre, lo que decide")
++
++        # -- 6 · los que actúan solos no se disparan con una letra ----------- #
++        _poner_uso(pagina, {"ACTUALIZAR": {"n": 500, "t": HOY},
++                            "ACTUALIZARMUEBLES": {"n": 500, "t": HOY}})
++        pagina.wait_for_timeout(120)
++        for texto in ("A", "AC"):
++            arriba = _primeros(pagina, texto, 1)
++            r.cierto(arriba and arriba[0] not in ("ACTUALIZAR", "ACTUALIZARMUEBLES"),
++                     f"«{texto}» no pone arriba un comando que baja, instala o rehace el dibujo",
++                     str(arriba))
++        # «ACT» SÍ corre ACTUALIZARMUEBLES, y debe: es su atajo de toda la vida,
++        # no una adivinanza del sugeridor. `soloEntero` sólo tapa el camino de
++        # adivinar; no le quita a nadie el atajo que ya tenía.
++        r.igual(_primeros(pagina, "ACT", 1), ["ACTUALIZARMUEBLES"],
++                "«ACT» sigue siendo el atajo de ACTUALIZARMUEBLES: eso no se toca")
++        r.cierto("ACTUALIZAR" in pagina.evaluate("() => Sugeridor.buscar('ACTUALIZA').map(o => o.cmd.nombre)"),
++                 "pero siguen en la lista: se esconden del Enter, no del usuario")
++        r.igual(pagina.evaluate("() => Sugeridor.comandoDe('ACTUALIZAR')"), "ACTUALIZAR",
++                "y escrito completo corre, porque ahí ya no hay adivinanza")
++
++        # -- 7 · la cuenta sobrevive al programa ----------------------------- #
++        _poner_uso(pagina, {})
++        pagina.evaluate("() => { Sugeridor.anotarUso('RECTANGULO'); Sugeridor.anotarUso('RECTANGULO'); }")
++        pagina.wait_for_timeout(900)          # el guardado se junta y sale a los 400 ms
++        with urllib.request.urlopen(base + "/api/preferencias", timeout=5) as f:
++            prefs = json.loads(f.read().decode("utf-8"))
++        guardado = (prefs.get("preferencias") or prefs).get("uso_comandos") or {}
++        r.cierto("RECTANGULO" in guardado,
++                 "lo que se usa queda escrito en las preferencias, no sólo en la sesión",
++                 str(guardado)[:120])
++        r.cierto((guardado.get("RECTANGULO") or {}).get("n", 0) > 1.5,
++                 "y dos usos cuentan más que uno", str(guardado.get("RECTANGULO")))
++
++        r.igual(pagina.errores, [], "y no hubo un solo error de JavaScript")
+diff --git a/pruebas/t062_iconos_de_la_barra.py b/pruebas/t062_iconos_de_la_barra.py
+new file mode 100644
+index 0000000..639cdcb
+--- /dev/null
++++ b/pruebas/t062_iconos_de_la_barra.py
+@@ -0,0 +1,178 @@
++"""t062 · Los dibujos de la barra  ·  0.26.0
++
++Mike, 16-oct-2026, con una captura de AutoCAD al lado: «intenta copiar las
++dimensiones de los íconos de funciones. Nuestros íconos son muy chicos. Y
++también la simbología, necesito que sea más clara, los nuestros son muy
++abstractos. Agrega acentos de naranja y azul para apoyarte de los puntos que usa
++el comando, o las secciones que deshecha, o la dirección en que trabaja».
++
++POR QUÉ ERAN CHICOS Y ABSTRACTOS: era el mismo motivo. No eran dibujos, eran
++CARACTERES UNICODE —«╱» para línea, «✥» para mover, «⧉» para copiar—. Un
++carácter se dibuja del tamaño que la tipografía quiera dentro de su cuadratín,
++así que agrandar la letra no agranda el trazo; y «✥» no se parece a mover nada
++porque no se escogió por parecerse, se escogió porque existía.
++
++LAS MEDIDAS SE SACARON MIDIENDO LA CAPTURA, no a ojo: en la barra de AutoCAD
++los íconos chicos son ~16 px de tinta en una caja de ~25 y los grandes ~28 en
++una de ~48, o sea entre 58 % y 64 %. Los nuestros eran un carácter de 15 px
++—unos 12 de tinta— en una caja de 34×30: menos de la mitad.
++
++LO QUE SE MIDE AQUÍ Y NO SE VE:
++
++  · QUE NO HAYA DOS COMANDOS CON EL MISMO DIBUJO. Son 42 hechos a mano, a
++    puros números, y copiar el renglón de arriba y olvidar cambiarlo es el
++    error más fácil de cometer y el más difícil de ver: la barra se vería
++    completa y dos herramientas distintas dirían lo mismo.
++
++  · QUE NINGÚN TRAZO SE SALGA DE LA CAJA DE 24. Un número de más y el dibujo
++    se recorta contra el borde del botón, que en la pantalla se ve como un
++    ícono «mal hecho» sin que se sepa por qué. Ya pasó con ARREGLO, cuya
++    flecha arrancaba en x = 1.8.
++
++  · QUE TODOS LOS BOTONES TENGAN DIBUJO. Un comando sin ícono se queda con su
++    carácter de antes, que es lo correcto, pero hay que saber cuántos son.
++
++  · QUE EL IDIOMA DE COLOR ESTÉ DE VERDAD PUESTO: naranja para los puntos que
++    el comando pide, azul para hacia dónde trabaja, azul punteado para lo que
++    se va. Si los acentos se cayeran, los íconos seguirían viéndose —en gris— y
++    nadie lo notaría hasta necesitarlos.
++
++  · QUE EL DIBUJO MIDA LO QUE SE DIJO dentro del botón, medido en la pantalla
++    de verdad y no en el CSS.
++
++VERIFICADA ROMPIENDO EL CÓDIGO, una rotura a la vez:
++
++  · darle a CHAFLAN el dibujo de EMPALME → 1, y lo nombra
++  · un trazo que se sale de la caja (x = −3) → 1
++  · que se caiga el naranja del CSS → 2
++  · que vuelvan los íconos chicos (12 px) → 2, uno diciendo «33 %» contra el
++    58–64 % que mide AutoCAD
++  · que no se pongan los dibujos en los botones → 4
++"""
++
++from __future__ import annotations
++
++from pruebas import comun, navegador
++
++DESCRIPCION = "los 42 dibujos de la barra: tamaño, que no se repitan y el color que explica"
++
++
++def correr(r: comun.Reporte) -> None:
++    if not navegador.hay_navegador():
++        r.cierto(True, "(sin Playwright en esta máquina: la prueba se salta)")
++        return
++    with navegador.programa() as (pagina, base):
++        navegador.cerrar_inicio(pagina)
++        pagina.wait_for_timeout(500)
++
++        # -- todos los botones tienen dibujo --------------------------------- #
++        cuenta = pagina.evaluate("""() => {
++            const b = [...document.querySelectorAll('#herramientas button[data-cmd]')];
++            return { total: b.length,
++                     con: b.filter(x => x.querySelector('svg')).length,
++                     sin: b.filter(x => !x.querySelector('svg')).map(x => x.dataset.cmd) };
++        }""")
++        r.cierto(cuenta["total"] >= 40, f"la barra trae {cuenta['total']} herramientas")
++        r.igual(cuenta["sin"], [], "y todas tienen dibujo, ninguna se quedó con su carácter")
++
++        # -- NINGUNO REPETIDO ------------------------------------------------ #
++        repes = pagina.evaluate("""() => {
++            const vistos = new Map(), mal = [];
++            for (const [k, g] of Object.entries(IconosBarra.GLIFOS)) {
++              const firma = g.replace(/\\s+/g, "");
++              if (vistos.has(firma)) mal.push([vistos.get(firma), k]);
++              else vistos.set(firma, k);
++            }
++            return mal;
++        }""")
++        r.igual(repes, [], "no hay dos comandos con el mismo dibujo")
++
++        # -- nada se sale de la caja de 24 ----------------------------------- #
++        fuera = pagina.evaluate("""() => {
++            const mal = [];
++            const caja = document.createElement('div');
++            caja.style.cssText = 'position:fixed;left:-9999px;top:0';
++            document.body.appendChild(caja);
++            for (const [k, g] of Object.entries(IconosBarra.GLIFOS)) {
++              caja.innerHTML = IconosBarra.envolver(g);
++              const svg = caja.querySelector('svg');
++              svg.setAttribute('width', '24'); svg.setAttribute('height', '24');
++              let x0 = 99, y0 = 99, x1 = -99, y1 = -99;
++              for (const e of svg.querySelectorAll('path,rect,circle,ellipse')) {
++                const b = e.getBBox();
++                x0 = Math.min(x0, b.x); y0 = Math.min(y0, b.y);
++                x1 = Math.max(x1, b.x + b.width); y1 = Math.max(y1, b.y + b.height);
++              }
++              // Medio grosor de trazo de holgura: el trazo se pinta centrado
++              // en la geometría, así que 0.8 px asoman por fuera de la caja.
++              if (x0 < -0.1 || y0 < -0.1 || x1 > 24.1 || y1 > 24.1)
++                mal.push([k, +x0.toFixed(1), +y0.toFixed(1), +x1.toFixed(1), +y1.toFixed(1)]);
++            }
++            caja.remove();
++            return mal;
++        }""")
++        r.igual(fuera, [], "ningún trazo se sale de la caja de 24 (se recortaría contra el botón)")
++
++        # -- el idioma de color está puesto ---------------------------------- #
++        color = pagina.evaluate("""() => {
++            let naranja = 0, azul = 0, punteado = 0;
++            for (const g of Object.values(IconosBarra.GLIFOS)) {
++              if (/class="p"/.test(g)) naranja++;
++              if (/class="d"/.test(g)) azul++;
++              if (/class="x"/.test(g)) punteado++;
++            }
++            return { naranja, azul, punteado, total: Object.keys(IconosBarra.GLIFOS).length };
++        }""")
++        r.cierto(color["naranja"] >= 20,
++                 "la mayoría dice con naranja qué puntos va a pedir el comando",
++                 f"{color['naranja']} de {color['total']}")
++        r.cierto(color["punteado"] >= 12,
++                 "y buena parte dice con azul punteado qué se va o qué va a aparecer",
++                 f"{color['punteado']} de {color['total']}")
++        r.cierto(color["azul"] >= 8,
++                 "y hay flechas azules de dirección donde el comando tiene un sentido",
++                 f"{color['azul']} de {color['total']}")
++
++        # Que los colores LLEGUEN a la pantalla, no sólo a la clase: se mira el
++        # color calculado de un naranja de verdad. Sin esto, un CSS mal escrito
++        # dejaría los íconos en gris y las cuentas de arriba seguirían bien.
++        pintado = pagina.evaluate("""() => {
++            const e = document.querySelector('#herramientas button[data-cmd="LINEA"] svg .p');
++            if (!e) return null;
++            const c = getComputedStyle(e);
++            return { relleno: c.fill, trazo: getComputedStyle(
++              document.querySelector('#herramientas button[data-cmd="MOVER"] svg .x')).stroke };
++        }""")
++        r.cierto(pintado and pintado["relleno"] not in ("none", "rgb(0, 0, 0)", ""),
++                 "el naranja llega pintado a la pantalla, no se queda en la clase",
++                 str(pintado))
++        r.cierto(pintado and pintado["trazo"] != pintado["relleno"],
++                 "y el azul es otro color que el naranja: se distinguen de verdad",
++                 str(pintado))
++
++        # -- el tamaño, medido en la pantalla -------------------------------- #
++        medidas = pagina.evaluate("""() => {
++            const b = document.querySelector('#herramientas button[data-cmd="LINEA"]');
++            const s = b.querySelector('svg');
++            const rb = b.getBoundingClientRect(), rs = s.getBoundingClientRect();
++            return { boton: [Math.round(rb.width), Math.round(rb.height)],
++                     dibujo: [Math.round(rs.width), Math.round(rs.height)] };
++        }""")
++        r.igual(medidas["dibujo"], [24, 24], "el dibujo mide 24 px, el doble de la tinta de antes")
++        r.cierto(medidas["boton"][0] >= 36 and medidas["boton"][1] >= 36,
++                 "y el botón 36, contra los 34×30 de antes", str(medidas["boton"]))
++        proporcion = medidas["dibujo"][0] / medidas["boton"][0]
++        r.cierto(0.55 <= proporcion <= 0.72,
++                 "el dibujo ocupa entre 55 % y 72 % del botón, como en la barra de AutoCAD",
++                 f"{proporcion:.0%}")
++
++        # -- y en el tema oscuro tampoco se cae nada ------------------------- #
++        pagina.evaluate("() => document.documentElement.dataset.tema = 'oscuro'")
++        pagina.wait_for_timeout(250)
++        oscuro = pagina.evaluate("""() => getComputedStyle(
++            document.querySelector('#herramientas button[data-cmd="LINEA"] svg .p')).fill""")
++        r.cierto(oscuro and oscuro != pintado["relleno"],
++                 "en el tema oscuro el naranja cambia de tono: sigue a la paleta, no está pegado",
++                 f"claro {pintado['relleno']} · oscuro {oscuro}")
++
++        r.igual(pagina.errores, [], "y no hubo un solo error de JavaScript")
