@@ -1,0 +1,326 @@
+diff --git a/ui/barraiconos.js b/ui/barraiconos.js
+new file mode 100644
+index 0000000..18c8987
+--- /dev/null
++++ b/ui/barraiconos.js
+@@ -0,0 +1,220 @@
++/* Los dibujos de la barra de herramientas  ·  draw101 0.26.0
++ *
++ * Mike, 16-oct-2026, con una captura de AutoCAD al lado: «intenta copiar las
++ * dimensiones de los íconos de funciones. Nuestros íconos son muy chicos. Y
++ * también la simbología, necesito que sea más clara, los nuestros son muy
++ * abstractos. Agrega acentos de naranja y azul para apoyarte de los puntos que
++ * usa el comando, o las secciones que deshecha, o la dirección en que trabaja».
++ *
++ * POR QUÉ ERAN CHICOS Y ABSTRACTOS, que resultó ser la misma razón: no eran
++ * dibujos. Eran CARACTERES UNICODE —«╱» para línea, «✚» para mover, «⧉» para
++ * copiar, «⇗» para cota alineada—. Un carácter se dibuja del tamaño que la
++ * tipografía quiera dentro de su cuadratín, así que agrandar la letra no
++ * agranda el trazo; y «✚» no se parece a mover nada porque no se eligió para
++ * eso: se eligió porque existía. De ahí los dos síntomas a la vez.
++ *
++ * LAS MEDIDAS SALIERON DE LA CAPTURA, MEDIDAS, no a ojo. En la barra de
++ * AutoCAD que mandó Mike: los íconos chicos son ~16 px de tinta en una caja de
++ * ~25, y los grandes ~28 en una de ~48 — entre 58 % y 64 % de la caja. Los
++ * nuestros eran ~12 px de tinta en una caja de 34×30: menos de la mitad. Aquí
++ * la caja es de 36 y el dibujo de 24, o sea 67 %, que es el extremo generoso de
++ * lo que hace AutoCAD. Las medidas se copian; los dibujos NO: los de Autodesk
++ * son suyos, éstos están dibujados de nuevo.
++ *
++ * EL IDIOMA DE LOS COLORES, que es lo que los vuelve explicables:
++ *
++ *   · NARANJA (`p`) = los puntos que el comando te va a pedir que piques. En
++ *     LINEA son los dos extremos; en CIRCULO el centro; en RAYADO el punto de
++ *     adentro del área.
++ *   · AZUL (`d`) = hacia dónde trabaja: la flecha de MOVER, el giro de ROTAR,
++ *     la distancia de DESFASE.
++ *   · AZUL PUNTEADO (`x`) = lo que se va o lo que todavía no existe: el pedazo
++ *     que RECORTAR se lleva, la copia que COPIAR va a dejar, el tramo que
++ *     EXTENDER va a agregar.
++ *
++ * Con eso, un ícono no dice sólo «recortar»: dice que vas a picar ahí y que lo
++ * punteado es lo que desaparece. Es la diferencia entre un símbolo y una
++ * instrucción.
++ *
++ * Los colores salen de la paleta de la casa —`--canto` y `--acc2`— y no de dos
++ * valores nuevos: así siguen al tema claro y al oscuro sin repasarlos a mano.
++ *
++ * Caja de 24×24. El trazo, el remate redondo y los colores van en el <svg> de
++ * `envolver`, no en cada figura, para que un cambio de grosor sea una línea.
++ */
++
++const IconosBarra = (() => {
++
++  /* Ayudas. Cada una devuelve markup; un ícono es una o dos líneas. */
++  const l = (d, c = "") => `<path d="${d}"${c ? ` class="${c}"` : ""}/>`;
++  const pt = (x, y) => `<circle cx="${x}" cy="${y}" r="1.9" class="p"/>`;
++  const rect = (x, y, w, h, c = "") => `<rect x="${x}" y="${y}" width="${w}" height="${h}" rx="0.6"${c ? ` class="${c}"` : ""}/>`;
++  const circ = (x, y, r, c = "") => `<circle cx="${x}" cy="${y}" r="${r}"${c ? ` class="${c}"` : ""}/>`;
++
++  /** Flecha de `a` a `b`, con su punta. En azul salvo que se diga otra cosa. */
++  function flecha(x1, y1, x2, y2, c = "d") {
++    const a = Math.atan2(y2 - y1, x2 - x1), t = 3.2, ap = 0.45;
++    const p1 = [x2 - t * Math.cos(a - ap), y2 - t * Math.sin(a - ap)];
++    const p2 = [x2 - t * Math.cos(a + ap), y2 - t * Math.sin(a + ap)];
++    const r = (n) => Math.round(n * 100) / 100;
++    return l(`M${x1} ${y1}L${x2} ${y2}`, c)
++         + l(`M${r(p1[0])} ${r(p1[1])}L${x2} ${y2}L${r(p2[0])} ${r(p2[1])}`, c);
++  }
++
++  /** Cota: línea con punta en los dos extremos y sus dos líneas de referencia. */
++  function cota(x1, y1, x2, y2) {
++    return flecha((x1 + x2) / 2, (y1 + y2) / 2, x1, y1, "")
++         + flecha((x1 + x2) / 2, (y1 + y2) / 2, x2, y2, "");
++  }
++
++  const G = {
++
++    /* --- Trazo --------------------------------------------------------- */
++    // Los dos extremos que pide, y nada más: es literalmente lo que hace.
++    LINEA: l("M4 19L20 5") + pt(4, 19) + pt(20, 5),
++
++    POLILINEA: l("M3 18L9 9L15 14L21 5") + pt(3, 18) + pt(9, 9) + pt(15, 14) + pt(21, 5),
++
++    // Las dos esquinas opuestas, que son las dos que pregunta.
++    RECTANGULO: rect(4, 6.5, 16, 11) + pt(4, 6.5) + pt(20, 17.5),
++
++    // Centro naranja y radio azul: el orden en que lo pide, dibujado.
++    CIRCULO: circ(12, 12, 7.5) + flecha(12, 12, 19.5, 12) + pt(12, 12),
++
++    // Tres puntos sobre la curva: por eso se llama «arco por tres puntos».
++    ARCO: l("M4 18A10 10 0 0 1 20 18") + pt(4, 18) + pt(12, 8.2) + pt(20, 18),
++
++    ELIPSE: `<ellipse cx="12" cy="12" rx="9" ry="5.5"/>` + pt(21, 12) + pt(12, 6.5),
++
++    SPLINE: l("M3 17C7 17 7 7 12 7S17 17 21 17") + pt(3, 17) + pt(12, 7) + pt(21, 17),
++
++    PUNTO: l("M12 4.5V9M12 15V19.5M4.5 12H9M15 12H19.5") + pt(12, 12),
++
++    // El rayado se pica POR DENTRO: de ahí el punto naranja adentro del área.
++    RAYADO: l("M4 7L20 7L17 18L7 18Z") + l("M7 16L14.5 8M10.5 17L17.5 9.2M5.5 13L12 7") + pt(12.2, 12.8),
++
++    /* --- Anotaciones --------------------------------------------------- */
++    // Las dos líneas de referencia salen de los dos puntos que pregunta.
++    COTA: l("M5 9V19M19 9V19") + l("M5 14H19") + cota(5, 14, 19, 14) + pt(5, 19) + pt(19, 19),
++
++    COTAALINEADA: l("M4 14L8 19M16 6L20 11") + l("M6 16.5L18 8.5") + cota(6, 16.5, 18, 8.5) + pt(4, 19) + pt(20, 6.5),
++
++    // Dos tramos encadenados que comparten la línea de referencia de en medio.
++    // Las líneas de referencia salen HACIA ARRIBA desde la pieza, que es como
++    // se ven en un plano. Saliendo para los dos lados el conjunto quedaba
++    // simétrico y se leía como una nave con alas, no como dos cotas seguidas.
++    COTACONTINUA: l("M4 19H20") + l("M4 9V18M12 9V18M20 9V18") + l("M4 9H20") + flecha(8, 9, 4, 9, "") + flecha(16, 9, 20, 9, "") + l("M10.5 10.8L13.5 7.2") + pt(12, 19),
++
++    COTAANGULAR: l("M4 19L11 4M11 4L20 17") + l("M7.6 11.2A8.5 8.5 0 0 0 15.9 11.6") + flecha(10.5, 12.6, 7.3, 10.5, "") + flecha(13, 12.7, 16.2, 10.9, "") + pt(11, 4),
++
++    // Se pica la curva: el punto naranja va SOBRE ella, no en el centro.
++    COTARADIO: circ(11, 13, 7) + l("M11 13L20 6") + cota(11, 13, 20, 6) + pt(16.3, 8.6),
++
++    COTADIAMETRO: circ(12, 12, 7) + l("M7 17L17 7") + cota(7, 17, 17, 7) + pt(7, 17) + pt(17, 7),
++
++    // La punta naranja es a DÓNDE apunta; el renglón de arriba es la nota.
++    DIRECTRIZ: l("M4.5 18.5L11 12L15 12L21 12M15 12V10") + l("M17 8.5H21") + pt(4.5, 18.5),
++
++    TEXTO: l("M5 18L11 6L17 18M7.4 14H14.6") + l("M4 20.5H20", "x") + pt(5, 20.5),
++
++    /* --- Modificar ------------------------------------------------------ */
++    // MOVER: el original se va (punteado) y la flecha dice a dónde.
++    MOVER: rect(3.5, 12, 8.5, 7.5, "x") + rect(12.5, 4.5, 8, 7.5) + flecha(8, 12, 15, 6.5) + pt(8, 15.5),
++
++    // COPIAR: al revés que MOVER —el original SE QUEDA (sólido) y lo punteado
++    // es la copia que va a aparecer—. Es toda la diferencia entre los dos.
++    COPIAR: rect(3.5, 11, 9, 8.5) + rect(10.5, 4, 9, 8.5, "x") + pt(8, 15),
++
++    ROTAR: rect(4, 14.5, 6.5, 5.5) + l("M6 10.5A8.5 8.5 0 0 1 19.5 8") + flecha(17.5, 5.5, 20.3, 8.8) + pt(12, 12.5),
++
++    // Crece desde el punto base naranja: por eso la flecha sale de ahí.
++    ESCALAR: rect(4, 13.5, 6, 6) + rect(4, 5, 15.5, 14.5, "x") + flecha(10.5, 13, 18.5, 6) + pt(4, 19.5),
++
++    ESPEJO: l("M9 5H3.5V19M3.5 12H7.5") + l("M15 5H20.5V19M20.5 12H16.5", "x") + l("M12 2.5V21.5", "x"),
++
++    // Las dos paralelas y la distancia entre ellas, que es lo que pregunta.
++    DESFASE: l("M3.5 8H20.5") + l("M3.5 16.5H20.5", "x") + flecha(9, 8.8, 9, 15.7) + pt(16, 16.5),
++
++    // Se pica EL PEDAZO QUE SE VA: punteado azul y el punto naranja encima.
++    RECORTAR: l("M3 14H8.5M15.5 14H21") + l("M8.5 4.5V20M15.5 4.5V20") + l("M8.5 14H15.5", "x") + pt(12, 14),
++
++    // Al revés: lo punteado es el tramo que va a APARECER hasta el tope.
++    EXTENDER: l("M20.5 4.5V20") + l("M3.5 13H11") + l("M11 13H20.5", "x") + flecha(11.5, 13, 19.5, 13) + pt(7, 13),
++
++    // Las dos colitas que el empalme se come, punteadas; el arco, sólido.
++    EMPALME: l("M5 4V11A6 6 0 0 0 11 17H19") + l("M5 11V17H11", "x") + pt(5, 7.5) + pt(15.5, 17),
++
++    CHAFLAN: l("M5 4V10L12 17H19") + l("M5 10V17H12", "x") + pt(5, 7) + pt(16, 17),
++
++    // El primero es el de verdad; los demás son los que el arreglo va a poner.
++    ARREGLO: rect(5, 10, 6, 6) + rect(14, 10, 6, 6, "x") + rect(5, 17.5, 6, 5, "x") + rect(14, 17.5, 6, 5, "x") + flecha(5.5, 7, 19.5, 7) + flecha(3, 10.5, 3, 22),
++
++    ESTIRAR: l("M3 19V8H11V19") + rect(8, 4.5, 8.5, 8.5, "x") + flecha(17.5, 8.5, 22, 8.5) + pt(11, 8),
++
++    // Dos tramos sueltos y el hueco donde se juntan.
++    UNIR: l("M4 4V10.5M13.5 19H20") + l("M4 10.5V19H13.5", "x") + pt(4, 10.5) + pt(13.5, 19),
++
++    // Al revés de UNIR: una pieza que se va en pedazos, cada uno para su lado.
++    EXPLOTAR: l("M7 3.5H17") + l("M20.5 7V17") + l("M17 20.5H7") + l("M3.5 17V7") + l("M7 8H17V16H7Z", "x"),
++
++    GRUPO: rect(2.5, 5.5, 19, 13, "x") + rect(5, 8, 6, 8) + circ(16.5, 12, 3.5),
++
++    // De dónde se toman las propiedades y a dónde van.
++    IGUALAR: l("M3.5 8.5H9.5M3.5 12H9.5M3.5 15.5H9.5") + rect(15, 7.5, 6.5, 9, "x") + flecha(11, 12, 14.5, 12),
++
++    BORRAR: l("M5 8.5H19L17.5 20H6.5Z") + l("M3.5 8.5H20.5M9 8.5V5.5H15V8.5") + l("M10 11.5V17M14 11.5V17", "x"),
++
++    /* --- Bloques -------------------------------------------------------- */
++    // Las piezas sueltas se vuelven una, con su punto de inserción.
++    BLOQUE: l("M4 4.5H7M4 4.5V7M20 4.5H17M20 4.5V7M4 19.5H7M4 19.5V17M20 19.5H17M20 19.5V17") + rect(8, 8, 8, 8) + pt(12, 12),
++
++    INSERTAR: rect(8, 11, 11, 8) + flecha(13.5, 3.5, 13.5, 10) + pt(8, 19),
++
++    // Una hoja con el plano del arquitecto abajo, para calcar encima.
++    PDFFONDO: l("M5 3.5H15L19 7.5V20.5H5Z") + l("M15 3.5V7.5H19") + l("M7.5 17L11 12L14 15L16.5 11.5", "x"),
++
++    /* --- Hoja ----------------------------------------------------------- */
++    // Marco y pie de plano abajo a la derecha: la hoja de este programa.
++    PLANO: rect(3, 4.5, 18, 15) + l("M14 19.5V14.5H21M14 17H21"),
++
++    // Los tiradores de las esquinas son lo que se agarra con el ratón.
++    EDITARVENTANA: rect(3, 4.5, 18, 15) + rect(7, 8, 10, 8, "d")
++      + `<rect x="5.9" y="6.9" width="2.2" height="2.2" class="p" stroke="none"/><rect x="15.9" y="6.9" width="2.2" height="2.2" class="p" stroke="none"/><rect x="5.9" y="14.9" width="2.2" height="2.2" class="p" stroke="none"/><rect x="15.9" y="14.9" width="2.2" height="2.2" class="p" stroke="none"/>`,
++
++    VENTANANUEVA: rect(3, 4.5, 18, 15) + rect(5.5, 7.5, 8.5, 8, "x") + l("M18 9.5V15.5M15 12.5H21", "d"),
++
++    // La hoja sale del programa: por eso la flecha va hacia afuera.
++    IMPRIMIR: l("M5 3.5H15L19 7.5V20.5H5Z") + l("M15 3.5V7.5H19") + flecha(12, 10, 12, 17.5) + l("M8.5 14L12 17.5L15.5 14", "d"),
++
++    IMPRIMIRFISICO: l("M7 9V4.5H17V9") + l("M4 9H20V16H17M7 16H4V9") + rect(7, 13.5, 10, 7) + l("M9.5 16.5H14.5", "d"),
++  };
++
++  /** El <svg> con los ajustes comunes. El grosor, el remate y los colores van
++   *  aquí y no en cada figura: cambiar el grosor de los 42 es una línea. */
++  function envolver(markup) {
++    return `<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.6" `
++         + `stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">${markup}</svg>`;
++  }
++
++  /** Mete el dibujo en cada botón de la barra que tenga uno.
++   *
++   *  El que no tenga se queda con su carácter de antes, a propósito: así un
++   *  comando nuevo aparece en la barra aunque todavía no tenga ícono, en vez de
++   *  salir como un botón vacío. */
++  function poner(raiz) {
++    const donde = raiz || document;
++    let n = 0;
++    for (const b of donde.querySelectorAll("#herramientas button[data-cmd]")) {
++      const g = G[b.dataset.cmd];
++      if (!g) continue;
++      b.innerHTML = envolver(g);
++      n++;
++    }
++    return n;
++  }
++
++  if (document.readyState === "loading") document.addEventListener("DOMContentLoaded", () => poner());
++  else poner();
++
++  return { poner, envolver, GLIFOS: G };
++})();
+diff --git a/ui/styles.css b/ui/styles.css
+index 959738a..0cc8965 100644
+--- a/ui/styles.css
++++ b/ui/styles.css
+@@ -395,20 +395,26 @@ footer .sel{color:var(--acc2)}
+ #herramientas .bloque .titulo{
+   font-size:8.5px;font-weight:700;letter-spacing:.12em;text-transform:uppercase;
+   color:var(--txt3);line-height:12px;padding:0 3px;user-select:none;white-space:nowrap;
+ }
+ /* En fila: dos renglones, y las columnas que hagan falta. */
++/* 16-oct-2026, Mike: «nuestros íconos son muy chicos». Medido en su captura
++   de AutoCAD: los íconos chicos de allá son ~16 px de tinta en una caja de
++   ~25, los grandes ~28 en una de ~48 — entre 58 % y 64 % de la caja. Los
++   nuestros eran un carácter de 15 px (unos 12 de tinta de verdad) en una caja
++   de 34×30: menos de la mitad. La caja pasa a 36 y el dibujo a 24, o sea el
++   67 %, el extremo generoso de lo que hace AutoCAD. */
+ #herramientas .bloque .celdas{
+-  display:grid;grid-auto-flow:column;grid-template-rows:repeat(2, 30px);
+-  grid-auto-columns:34px;gap:2px;
++  display:grid;grid-auto-flow:column;grid-template-rows:repeat(2, 36px);
++  grid-auto-columns:36px;gap:2px;
+ }
+ /* De lado: el bloque se estira a lo ancho y son dos columnas, con los
+    renglones que hagan falta. */
+ #herramientas[data-anclaje="izquierda"] .bloque .celdas,
+ #herramientas[data-anclaje="derecha"] .bloque .celdas{
+-  grid-auto-flow:row;grid-template-rows:none;grid-template-columns:repeat(2, 34px);
+-  grid-auto-rows:30px;
++  grid-auto-flow:row;grid-template-rows:none;grid-template-columns:repeat(2, 36px);
++  grid-auto-rows:36px;
+ }
+ /* Entre bloque y bloque, una raya fina, para que el ojo los separe rápido. */
+ #herramientas .bloque + .bloque{border-left:1px solid var(--linea2);margin-left:2px;padding-left:5px}
+ #herramientas[data-anclaje="izquierda"] .bloque + .bloque,
+ #herramientas[data-anclaje="derecha"] .bloque + .bloque{
+@@ -428,21 +434,34 @@ footer .sel{color:var(--acc2)}
+ #herramientas[data-anclaje="flotante"] button,
+ #herramientas[data-anclaje="flotante"] .asa{pointer-events:auto}
+ #herramientas[data-anclaje="flotante"] .bloque{pointer-events:none}
+ 
+ #herramientas button{
+-  width:34px;height:30px;padding:0;font-size:15px;line-height:1;flex:0 0 auto;
++  width:36px;height:36px;padding:0;font-size:17px;line-height:1;flex:0 0 auto;
++  display:flex;align-items:center;justify-content:center;
+   background:transparent;border-color:transparent;color:var(--txt2);
+ }
++/* El dibujo dentro del botón. Ver ui/barraiconos.js para el idioma de color:
++   naranja = los puntos que el comando pide; azul = hacia dónde trabaja; azul
++   punteado = lo que se va o lo que todavía no existe. Los dos colores salen de
++   la paleta de la casa, así que siguen al tema claro y al oscuro solos. */
++#herramientas button svg{width:24px;height:24px;display:block}
++#herramientas button svg .p{fill:var(--canto);stroke:none}
++#herramientas button svg .d{stroke:var(--acc2)}
++#herramientas button svg .x{stroke:var(--acc2);stroke-dasharray:2.6 2.2;opacity:.85}
++/* Con el botón activo todo se lee sobre el fondo del acento: la tinta toma el
++   color del acento y los naranjas se quedan, que son los que dicen qué pide. */
++#herramientas button.activa svg .d,
++#herramientas button.activa svg .x{stroke:currentColor;opacity:.7}
+ #herramientas button:hover{background:var(--hover);color:var(--txt)}
+ #herramientas button.activa{background:var(--acc-sombra);border-color:var(--acc2);color:var(--acc2)}
+ 
+ /* El asa: por donde se agarra para moverla. */
+ #herramientas .asa{
+   display:flex;align-items:center;justify-content:center;
+   cursor:grab;color:var(--txt3);flex:0 0 auto;user-select:none;
+-  width:34px;height:16px;border-radius:4px;
++  width:36px;height:16px;border-radius:4px;
+ }
+ #herramientas .asa:hover{background:var(--hover);color:var(--txt2)}
+ #herramientas .asa:active{cursor:grabbing}
+ #herramientas[data-anclaje="arriba"] .asa,
+ #herramientas[data-anclaje="abajo"] .asa,
+diff --git a/ui/index.html b/ui/index.html
+index c56dbc4..47d56e2 100644
+--- a/ui/index.html
++++ b/ui/index.html
+@@ -343,10 +343,11 @@
+ </footer>
+ 
+ <script src="idioma-en.js"></script>
+ <script src="idioma.js"></script>
+ <script src="base.js"></script>
++<script src="operacion.js"></script>
+ <script src="dialogo.js"></script>
+ <script src="radial.js"></script>
+   <script src="iconos.js"></script>
+ <script src="vista.js"></script>
+ <script src="osnap.js"></script>
+@@ -367,10 +368,11 @@
+ <script src="licencia.js"></script>
+ <script src="nube.js"></script>
+ <script src="color.js"></script>
+ <script src="app.js"></script>
+ <script src="sugeridor.js"></script>
++<script src="barraiconos.js"></script>
+ <script src="marco.js"></script>
+ <script src="soltar.js"></script>
+ <script src="portapapeles.js"></script>
+ </body>
+ </html>
