@@ -1,0 +1,260 @@
+diff --git a/pruebas/t060_operaciones_en_las_medidas.py b/pruebas/t060_operaciones_en_las_medidas.py
+new file mode 100644
+index 0000000..cc0c81a
+--- /dev/null
++++ b/pruebas/t060_operaciones_en_las_medidas.py
+@@ -0,0 +1,254 @@
++"""t060 · Teclear una operación donde va una medida  ·  0.26.0
++
++Mike, 16-oct-2026: «si tengo 2 medidas de secciones de una línea y quiero trazar
++una línea de esa medida sumado (45+110), en vez de tener que escribir
++forzosamente el valor completo (155), poder escribir 45+110 y que el programa
++sepa que el resultado de la operación es el valor final y entonces me traza 155.
++Eso en todos los comandos que requieran u ocupen un valor para el trazo.
++Interpreta todas las operaciones matemáticas aritméticas».
++
++EN EL TALLER la medida casi nunca viene dada: el claro son 1200 menos dos
++costados de 18, la repisa va a la mitad de lo que quede. Esa cuenta se hacía
++aparte y se tecleaba el resultado; una cuenta que no se ve no se puede revisar.
++
++LO QUE SE MIDE AQUÍ Y NO SE VE:
++
++  · QUE «100,50» SIGA SIENDO UN PUNTO Y NO EL NÚMERO 100.50. Es el riesgo real
++    de este cambio y la razón de que el intérprete tenga dos puertas. En este
++    programa la coma separa X de Y; si una coordenada se colara como medida, la
++    línea se iría a otro lado y nadie vería por qué. El código que había tenía
++    una criba (`/^-?\\d+(\\.\\d+)?$/`) puesta justo para eso, con su comentario
++    explicándolo, y este cambio la reemplazó: hay que probar que la nueva
++    rechaza lo mismo.
++
++  · QUE «100mm» SIGA DANDO 100. Donde había un `parseFloat` pelado, el programa
++    era indulgente desde siempre y alguien lleva meses tecleando las unidades.
++    Una versión nueva no se lo puede quitar. Por eso la puerta suelta: sin
++    operación en el texto hace el `parseFloat` de antes, idéntico.
++
++  · QUE LA PRECEDENCIA SEA LA DE LA ESCUELA. «1200-2*18» son 1164, no 21 564.
++    Un intérprete que multiplica al final da un número creíble y equivocado,
++    que es la peor clase.
++
++  · QUE «2 3» NO SEA 23. Un espacio en medio de un número es un dedazo. La
++    primera versión quitaba todos los espacios antes de partir el texto y
++    contestaba veintitrés con toda confianza.
++
++  · QUE LLEGUE A LOS COMANDOS DE VERDAD, no sólo al intérprete: se traza una
++    línea tecleando la medida como operación y se mide la línea que quedó.
++
++VERIFICADA ROMPIENDO EL CÓDIGO, una rotura a la vez:
++
++  · que la puerta estricta trague comas (vuelve el peligro de la coordenada) → 4
++    fallos, y uno dice «se obtuvo 100.5»: exactamente el número equivocado que
++    este diseño existe para evitar
++  · precedencia al revés, sumar antes de multiplicar → 6
++  · que la puerta suelta pierda la indulgencia (estricta siempre) → 1, el de
++    «100mm»
++  · que `pedirNumero` vuelva a `parseFloat` → 1
++  · que deje de enseñarse la cuenta hecha → 2
++
++Y UNA COMPROBACIÓN DE ESTA PRUEBA NO MEDÍA NADA, cazada viendo una rotura salir
++verde: buscaba «(1200-80)/2» en la consola para probar que se enseña el
++resultado, pero el texto tecleado ya sale solo en el historial («› (1200-80)/2»),
++así que pasaba aunque nadie enseñara nada. Ahora busca «(1200-80)/2 = », con el
++igual, que es lo único que no se escribe solo.
++"""
++
++from __future__ import annotations
++
++import json
++import math
++import urllib.request
++
++from pruebas import comun, navegador
++
++DESCRIPCION = "teclear 45+110 donde va una medida, en los comandos y en las coordenadas"
++
++
++def _entidad(base, id_):
++    with urllib.request.urlopen(base + f"/api/entidad/{id_}", timeout=5) as f:
++        return json.loads(f.read().decode("utf-8"))
++
++
++def _ids(base):
++    return sorted({t["id"] for t in navegador.trazos(base)}, key=lambda s: int(s[1:]))
++
++
++def _de_tipo(base, tipo):
++    return [e for e in (_entidad(base, i) for i in _ids(base)) if e.get("tipo") == tipo]
++
++
++def _cmd(pagina, *textos):
++    for t in textos:
++        pagina.click("#cmd")
++        pagina.keyboard.press("Control+A")
++        pagina.keyboard.press("Backspace")
++        pagina.type("#cmd", t, delay=8)
++        pagina.keyboard.press("Enter")
++        pagina.wait_for_timeout(220)
++
++
++def _mover(pagina, p):
++    """Lleva el ratón a un punto del dibujo, sin picar.
++
++    Hace falta porque una medida a secas —«45+110»— no es un punto: FIJA el
++    largo y espera a que el cursor diga hacia dónde, que es como se dibuja en
++    AutoCAD. Sin mover el ratón no hay dirección y el comando se queda
++    esperando, que es lo que pasó la primera vez que corrió esta prueba.
++    """
++    x, y = pagina.evaluate("""(p) => {
++        const [x, y] = aPX(p[0], p[1]);
++        const c = document.querySelector('#lienzo').getBoundingClientRect();
++        return [c.left + x, c.top + y];
++    }""", list(p))
++    pagina.mouse.move(x, y)
++    pagina.wait_for_timeout(120)
++
++
++def _limpiar(pagina, base):
++    ids = _ids(base)
++    if ids:
++        pagina.evaluate("(ids) => post('/api/operacion', {accion: 'limpiar', borrar: ids})", ids)
++        pagina.evaluate("async () => { await recargarTrazos(); Seleccion.limpiar(); }")
++        pagina.wait_for_timeout(250)
++
++
++# --------------------------------------------------------------------------- #
++# El intérprete, medido en el programa de verdad                              #
++# --------------------------------------------------------------------------- #
++
++def _interprete(r: comun.Reporte, pagina) -> None:
++    def ev(t):
++        return pagina.evaluate("(t) => { const v = Operacion.evaluar(t); return Number.isFinite(v) ? v : null; }", t)
++
++    def num(t):
++        return pagina.evaluate("(t) => { const v = Operacion.numeroDe(t); return Number.isFinite(v) ? v : null; }", t)
++
++    # -- lo que pidió Mike --------------------------------------------------- #
++    for texto, esperado in (("45+110", 155), ("(1200-80)/2", 560), ("3*450", 1350),
++                            ("((2+3)*4)/2", 10), ("45 + 110", 155), ("12.5+0.5", 13),
++                            ("-45", -45), ("100", 100), ("-(45+5)", -50)):
++        r.casi(ev(texto), esperado, f"«{texto}» vale {esperado}", tol=1e-9)
++
++    r.casi(ev("1200-2*18"), 1164,
++           "«1200-2*18» son 1164: multiplica antes de restar, como en la escuela", tol=1e-9)
++
++    # -- lo que NO puede aceptar: son coordenadas, no medidas ---------------- #
++    for texto in ("100,50", "@100,50", "100<45", "@100<45"):
++        r.igual(ev(texto), None,
++                f"«{texto}» NO es una medida: en este programa es un punto")
++
++    # -- lo que es un dedazo y tiene que doler ------------------------------- #
++    for texto in ("2 3", "45+", "*5", "(1+2", "1+2)", "(45)110", "1/0", "()"):
++        r.igual(ev(texto), None, f"«{texto}» se rechaza en vez de inventar un número")
++    r.igual(num("45+"), None, "una operación a medias tampoco pasa por la puerta suelta")
++
++    # -- la indulgencia de siempre, intacta ---------------------------------- #
++    r.casi(num("100mm"), 100, "«100mm» sigue dando 100: sin operación, el parseFloat de siempre")
++    r.casi(num("1e-3"), 0.001, "y «1e-3» sigue dando 0.001, que parseFloat aceptaba")
++    r.casi(num("45+110"), 155, "pero con operación, el intérprete")
++
++    # -- ensanchamiento: lo que la criba vieja aceptaba, se acepta igual ----- #
++    iguales = pagina.evaluate("""() => {
++        const vieja = /^-?\\d+(\\.\\d+)?$/;
++        let n = 0, mal = [];
++        for (let k = 0; k < 600; k++) {
++          for (const c of [String(k), "-" + k, k + "." + (k % 100), "-" + k + ".5"]) {
++            if (!vieja.test(c)) continue;
++            n++;
++            if (Operacion.evaluar(c) !== parseFloat(c)) mal.push(c);
++          }
++        }
++        return {n, mal: mal.slice(0, 5)};
++    }""")
++    r.cierto(iguales["n"] > 1000 and not iguales["mal"],
++             "todo lo que la criba de antes aceptaba da hoy exactamente el mismo número",
++             f"{iguales['n']} textos probados · fallan: {iguales['mal']}")
++
++
++# --------------------------------------------------------------------------- #
++# Los comandos de verdad                                                      #
++# --------------------------------------------------------------------------- #
++
++def _comandos(r: comun.Reporte, pagina, base) -> None:
++    # 1 · La medida directa: se pica el origen, se apunta con el ratón y se
++    #     teclea la operación; Enter remata con la dirección del cursor.
++    _cmd(pagina, "LINEA", "0,0")
++    _mover(pagina, [400, 0])
++    _cmd(pagina, "45+110")
++    pagina.keyboard.press("Enter")
++    pagina.wait_for_timeout(250)
++    pagina.keyboard.press("Escape")
++    pagina.wait_for_timeout(250)
++    lineas = _de_tipo(base, "linea")
++    if r.igual(len(lineas), 1, "tecleando «45+110» como medida sale una línea"):
++        p1, p2 = lineas[0]["p1"], lineas[0]["p2"]
++        largo = math.hypot(p2[0] - p1[0], p2[1] - p1[1])
++        r.casi(largo, 155, "y mide 155, que es la cuenta hecha", tol=1e-6)
++    _limpiar(pagina, base)
++
++    # 2 · Coordenadas con operación en las dos mitades.
++    _cmd(pagina, "LINEA", "0,0", "45+110,20*2")
++    pagina.keyboard.press("Escape")
++    pagina.wait_for_timeout(250)
++    lineas = _de_tipo(base, "linea")
++    if r.igual(len(lineas), 1, "las coordenadas también aceptan operación en X y en Y"):
++        r.punto(lineas[0]["p2"], [155, 40], "«45+110,20*2» es el punto (155, 40)", tol=1e-6)
++    _limpiar(pagina, base)
++
++    # 3 · LA NO REGRESIÓN QUE IMPORTA: «100,50» sigue siendo un punto.
++    _cmd(pagina, "LINEA", "0,0", "100,50")
++    pagina.keyboard.press("Escape")
++    pagina.wait_for_timeout(250)
++    lineas = _de_tipo(base, "linea")
++    if r.igual(len(lineas), 1, "«100,50» sigue trazando"):
++        r.punto(lineas[0]["p2"], [100, 50],
++                "y sigue siendo el PUNTO (100, 50), no una medida de 100.50", tol=1e-6)
++    _limpiar(pagina, base)
++
++    # 4 · Un comando que pregunta un valor con `pedirNumero` — que es por donde
++    #     pasan los 23 que piden medidas. DESFASE pide la distancia.
++    _cmd(pagina, "LINEA", "0,0", "0,500")
++    pagina.keyboard.press("Escape")
++    pagina.wait_for_timeout(200)
++    _cmd(pagina, "DESFASE", "(1200-80)/2")
++    pagina.wait_for_timeout(250)
++    # se pica la línea y luego el lado
++    pagina.evaluate("""async () => {
++        const id = estado.trazos[0].id;
++        Seleccion.alternar(id, false);
++    }""")
++    pagina.wait_for_timeout(300)
++    dicho = pagina.evaluate("""() => [...document.querySelectorAll('#cmd-historial .eco')]
++        .slice(-6).map(e => e.textContent).join(' | ')""")
++    r.cierto("560" in dicho,
++             "en un comando que pregunta una medida, «(1200-80)/2» se resuelve en 560",
++             dicho)
++    # Se busca «(1200-80)/2 = », con el igual: el texto tecleado solo ya aparece
++    # en la consola por su cuenta («› (1200-80)/2»), así que buscarlo a secas
++    # pasaba aunque nadie enseñara el resultado. Se cazó rompiendo el eco y
++    # viendo que esta comprobación seguía verde.
++    r.cierto("(1200-80)/2 = " in dicho,
++             "y se ENSEÑA la cuenta hecha, para cachar un paréntesis mal puesto a tiempo",
++             dicho)
++    pagina.keyboard.press("Escape")
++    pagina.wait_for_timeout(200)
++    _limpiar(pagina, base)
++
++
++def correr(r: comun.Reporte) -> None:
++    if not navegador.hay_navegador():
++        r.cierto(True, "(sin Playwright en esta máquina: la prueba se salta)")
++        return
++    with navegador.programa() as (pagina, base):
++        navegador.cerrar_inicio(pagina)
++        pagina.evaluate("""() => {
++            estado.prefs.osnap = false; estado.prefs.ortho = false;
++            estado.prefs.snap_rejilla = false; estado.prefs.dinamica = false;
++            encuadrarCaja(-100, -100, 600, 600);
++        }""")
++        pagina.wait_for_timeout(200)
++        _interprete(r, pagina)
++        _comandos(r, pagina, base)
++        r.igual(pagina.errores, [], "y no hubo un solo error de JavaScript")
