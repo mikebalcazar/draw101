@@ -1,0 +1,268 @@
+diff --git a/core/preferencias.py b/core/preferencias.py
+index 1c99dac..a8c4490 100644
+--- a/core/preferencias.py
++++ b/core/preferencias.py
+@@ -107,10 +107,18 @@ OMISION = {
+ 
+     # La última respuesta a cada pregunta numérica («Distancia del desfase»:
+     # 60), por pregunta. La herramienta la ofrece por omisión la próxima vez.
+     "ultimos_valores": {},
+ 
++    # Cuánto se usa cada comando, para que el sugeridor ponga arriba los de
++    # todos los días (Mike, 16-oct-2026). Por comando: {"n": puntos, "t":
++    # cuándo fue la última vez}. Los puntos no son una cuenta: cada uso suma 1
++    # y lo acumulado se desvanece a la mitad cada 30 días, así que un comando
++    # de hace un año no le gana a uno de esta semana. Vive en las preferencias
++    # porque es del usuario, no del plano.
++    "uso_comandos": {},
++
+     # Dónde quedó la barra de herramientas. Es del usuario, no del plano:
+     # dónde te gusta la barra no cambia porque abras otro dibujo.
+     # anclaje: izquierda | derecha | arriba | abajo | flotante
+     "barra": {"anclaje": "flotante", "x": 12, "y": 12},
+ }
+@@ -120,14 +128,14 @@ def _fusionar(base: dict, encima: dict) -> dict:
+     salida = dict(base)
+     for k, v in (encima or {}).items():
+         if k not in base:
+             continue                       # llave de otra versión: se ignora
+         if isinstance(base[k], dict) and isinstance(v, dict):
+-            # Los atajos los inventa el usuario, y los últimos valores llevan
+-            # la pregunta como llave: no se pueden filtrar contra una lista
+-            # fija de llaves como el resto.
+-            salida[k] = dict(v) if k in ("atajos", "ultimos_valores") else {
++            # Los atajos los inventa el usuario, los últimos valores llevan
++            # la pregunta como llave y el uso lleva el nombre del comando: no
++            # se pueden filtrar contra una lista fija de llaves como el resto.
++            salida[k] = dict(v) if k in ("atajos", "ultimos_valores", "uso_comandos") else {
+                 **base[k], **{a: b for a, b in v.items() if a in base[k]}}
+         elif isinstance(v, type(base[k])) or isinstance(base[k], float) and isinstance(v, int):
+             salida[k] = v
+     return salida
+ 
+diff --git a/ui/sugeridor.js b/ui/sugeridor.js
+index a305ca5..6f42e75 100644
+--- a/ui/sugeridor.js
++++ b/ui/sugeridor.js
+@@ -13,18 +13,85 @@
+  *      lo escrito sin enterarse de que el sugeridor existe.
+  *   4. Se busca por nombre y por atajo, en español y en inglés
+  *      (Idioma.COMANDOS): quien teclea CIRCLE encuentra CIRCULO.
+  *   5. Ocho como mucho, arriba de la caja (la consola vive abajo).
+  *   6. Nada se completa solo: flechas y Enter, no Tab.
++ *
++ * ---------------------------------------------------------------------------
++ * 16-oct-2026. Mike: «ya desde que escribí "of" identifica que es el único
++ * comando. Permite que con enter ya seleccione ese comando… de hecho, permite
++ * que desde la primera letra ya ejecute el comando que aparece hasta arriba de
++ * la lista de los sugeridos, sin necesidad de escribir todo. Implementa una
++ * analítica que los comandos más frecuentes sean los que aparecen hasta arriba
++ * de la lista. Antes del orden alfabético, la jerarquía es por cantidad de uso
++ * junto con una combinación de uso reciente».
++ *
++ * Dos cosas, y la segunda cambió la primera:
++ *
++ *   7. ENTER CORRE EL DE HASTA ARRIBA. «OF» no es atajo de nadie —los de
++ *      DESFASE son DF, O y OFFSET—, así que hasta hoy «OF» + Enter contestaba
++ *      «comando desconocido» mientras la lista enseñaba DESFASE. La lista decía
++ *      una cosa y Enter hacía otra.
++ *
++ *   8. LA JERARQUÍA ES: atajo exacto → uso → alfabético. El orden alfabético
++ *      pasó a ser el último, como pidió Mike. Pero el ATAJO EXACTO sigue
++ *      ganándole al uso, y eso se le preguntó a Mike expresamente (16-oct):
++ *      «C» es el atajo de CIRCULO, y si la analítica pudiera ponerle COPIAR
++ *      encima, un día «C» dejaría de trazar círculos sin que nadie tocara
++ *      nada. Una tecla que ya está en la memoria del dedo no puede cambiar de
++ *      significado sola. La analítica ordena a los demás —los que apenas
++ *      empiezan igual—, que es donde de verdad ayuda.
+  */
+ 
+ const Sugeridor = (() => {
+   const TOPE = 8;
+   let lista = null, elegido = -1, opciones = [];
+ 
+   const campo = () => document.getElementById("cmd");
+ 
++  /* --- Analítica de uso ------------------------------------------------- */
++
++  /* Los puntos de un comando NO son una cuenta de veces: cada uso suma 1 y lo
++   * acumulado se desvanece a la mitad cada 30 días. Un solo número que ya trae
++   * las dos cosas que pidió Mike —cuánto se usa y qué tan reciente es— sin
++   * guardar la historia de cada clic ni tener que decidir cómo pesar una
++   * contra la otra. Un comando de 50 usos del año pasado vale menos que uno de
++   * 10 de esta semana, que es exactamente lo que uno espera de una lista que
++   * «aprende». */
++  const VIDA = 30 * 24 * 3600;             // segundos en que los puntos se parten a la mitad
++  let guardando = null;
++
++  const ahora = () => Math.floor(Date.now() / 1000);
++
++  function decaer(n, t, cuando) {
++    if (!(n > 0)) return 0;
++    return n * Math.pow(0.5, Math.max(0, cuando - (t || 0)) / VIDA);
++  }
++
++  function puntosDe(nombre, cuando) {
++    const u = ((typeof estado !== "undefined" && estado.prefs) || {}).uso_comandos || {};
++    const e = u[nombre];
++    return e ? decaer(e.n, e.t, cuando) : 0;
++  }
++
++  /** La llama `Comandos.correr` cuando un comando de verdad arrancó. */
++  function anotarUso(nombre) {
++    if (!nombre || typeof estado === "undefined") return;
++    estado.prefs = estado.prefs || {};
++    const u = Object.assign({}, estado.prefs.uso_comandos || {});
++    const t = ahora();
++    const previo = u[nombre] || { n: 0, t };
++    u[nombre] = { n: decaer(previo.n, previo.t, t) + 1, t };
++    estado.prefs.uso_comandos = u;
++    // Se junta antes de escribir: dibujando se corren comandos a cada rato y
++    // no hay por qué pegarle al disco en cada uno.
++    clearTimeout(guardando);
++    guardando = setTimeout(() => {
++      post("/api/preferencias", { cambios: { uso_comandos: u } }).catch(() => {});
++    }, 400);
++  }
++
+   function armar() {
+     if (lista) return;
+     lista = document.createElement("div");
+     lista.id = "sugerencias";
+     lista.style.display = "none";
+@@ -54,23 +121,55 @@ const Sugeridor = (() => {
+   function buscar(texto) {
+     const t = String(texto || "").trim().toUpperCase();
+     if (!t || /[\s,@<]/.test(t) || /^[-\d.]/.test(t) || typeof Comandos === "undefined") return [];
+     const todos = Comandos.lista || [];
+     const candidatos = [];
++    const cuando = ahora();
+     for (const cmd of todos) {
+       const nombre = String(cmd.nombre || "").toUpperCase();
+       const atajos = (cmd.alias || []).map((a) => String(a).toUpperCase());
+       const ingles = nombresIngles(nombre);
+       const formas = [nombre, ...atajos, ...ingles];
+       const como = formas.find((f) => f.startsWith(t));
+       if (!como) continue;
+       // Lo que Enter correría con lo tecleado tal cual: nombre, atajo o
+       // nombre en inglés que coincide entero.
+       const exacto = formas.includes(t);
+-      candidatos.push({ cmd, como, exacto, ingles });
++      candidatos.push({ cmd, como, exacto, ingles, puntos: puntosDe(cmd.nombre, cuando) });
+     }
+-    candidatos.sort((a, b) => (b.exacto - a.exacto) || (a.cmd.nombre.length - b.cmd.nombre.length) || a.cmd.nombre.localeCompare(b.cmd.nombre));
++    // LA JERARQUÍA, en este orden y por estas razones:
++    //
++    //   1. EL ATAJO EXACTO, siempre. Ver el punto 8 del encabezado: es lo que
++    //      impide que una tecla ya aprendida cambie de significado sola.
++    //
++    //   2. `soloEntero`: los que actúan por su cuenta sin preguntar
++    //      —ACTUALIZAR baja e instala, ACTUALIZARMUEBLES rehace el dibujo— van
++    //      hasta abajo, para que Enter nunca los agarre por adivinanza. No se
++    //      esconden: se escriben completos o se escogen con las flechas.
++    //      Mandarlos abajo, y no sólo sacarlos del Enter, es a propósito: si
++    //      siguieran saliendo arriba, la lista diría una cosa y Enter haría
++    //      otra, que es justo el error que todo esto vino a arreglar.
++    //
++    //   3. EL USO, que es lo que Mike pidió que mandara.
++    //
++    //   4. EL NOMBRE MÁS CORTO. Este desempate se iba a quitar —el uso lo
++    //      reemplaza— y se quedó, un escalón DEBAJO del uso. La razón salió al
++    //      correr t025: con el alfabético puro, teclear «C» en una instalación
++    //      recién puesta enseñaba AYUDA, CANTIDADES y CAPA, y COPIAR y COTA se
++    //      caían fuera de los ocho que caben. El nombre corto es un sustituto
++    //      tosco de «comando de uso diario» —COTA, CAPA y MOVER son cortos;
++    //      CONFIGURACION no—, y es lo único que hay el primer día, cuando la
++    //      analítica todavía no sabe nada. En cuanto se usa el programa, el uso
++    //      le pasa por encima.
++    //
++    //   5. EL ALFABÉTICO, que pasó a ser el desempate de hasta abajo, como
++    //      pidió Mike.
++    candidatos.sort((a, b) => (b.exacto - a.exacto)
++                           || ((a.cmd.soloEntero ? 1 : 0) - (b.cmd.soloEntero ? 1 : 0))
++                           || (b.puntos - a.puntos)
++                           || (a.cmd.nombre.length - b.cmd.nombre.length)
++                           || a.cmd.nombre.localeCompare(b.cmd.nombre));
+     return candidatos.slice(0, TOPE);
+   }
+ 
+   /* La ayuda, en una línea corta (Mike, 16-sep-2026: la lista estaba muy
+    * grande). La de un comando puede traer todas sus formas: «CIRCULO [2P · 3P
+@@ -107,10 +206,29 @@ const Sugeridor = (() => {
+     });
+     colocar();
+     lista.style.display = opciones.length ? "block" : "none";
+   }
+ 
++  /** El comando que Enter debe correr con lo tecleado. Lo llama comandos.js.
++   *
++   *  Si lo tecleado YA es un comando o un atajo, se devuelve tal cual: «C»
++   *  sigue siendo CIRCULO pase lo que pase con la analítica, y «ZOOM» no se
++   *  convierte en otra cosa. Si no lo es, se devuelve el de hasta arriba de la
++   *  lista — que es lo que la persona está viendo.
++   *
++   *  La lista se vuelve a calcular en vez de usar la que está pintada. Los dos
++   *  manejadores de Enter —el de la línea de comandos y el de aquí— cuelgan del
++   *  mismo campo, y depender de cuál corre primero es la clase de cosa que
++   *  funciona hasta que alguien reordena los <script> del index.html. */
++  function comandoDe(palabra) {
++    const t = String(palabra || "").trim();
++    if (!t) return t;
++    if (typeof Comandos === "undefined" || Comandos.existe(t)) return t;
++    const o = buscar(t);
++    return o.length ? o[0].cmd.nombre : t;
++  }
++
+   function escoger(i) {
+     elegido = i;
+     const c = campo();
+     if (c && opciones[i]) c.value = opciones[i].cmd.nombre;
+     pintar();
+@@ -163,7 +281,7 @@ const Sugeridor = (() => {
+   }
+ 
+   if (document.readyState === "loading") document.addEventListener("DOMContentLoaded", conectar);
+   else conectar();
+ 
+-  return { mover, cerrar, conectar, buscar, get abierto() { return opciones.length > 0; }, get elegido() { return elegido; } };
++  return { mover, cerrar, conectar, buscar, comandoDe, anotarUso, puntosDe, get abierto() { return opciones.length > 0; }, get elegido() { return elegido; } };
+ })();
+diff --git a/ui/actualizar.js b/ui/actualizar.js
+index fdce7a8..03c3d76 100644
+--- a/ui/actualizar.js
++++ b/ui/actualizar.js
+@@ -400,10 +400,16 @@ const Avisos = (() => {
+ })();
+ 
+ Comandos.registrar({
+   nombre: "ACTUALIZAR", alias: ["UPDATE", "ACTUALIZACIONES", "UPDATES"],
+   ayuda: "Busca si hay una versión nueva de draw101 y la baja e instala",
++  // Desde el 16-oct-2026 Enter corre el comando de hasta arriba de la lista
++  // de sugerencias, así que una «U» suelta bastaría para empezar a bajar 126
++  // MB. `soloEntero` lo manda al final de la lista: sigue apareciendo y sigue
++  // corriéndose si se escribe completo o se escoge con las flechas, pero
++  // nunca es el que Enter agarra por adivinanza. Ver ui/sugeridor.js.
++  soloEntero: true,
+   correr: () => Actualizar.revisar({ forzar: true }),
+ });
+ Comandos.registrar({
+   nombre: "AVISOS", alias: ["NOTICIAS", "NEWS", "NOTICES"],
+   ayuda: "Avisos de Taller 101 para quien usa draw101",
+diff --git a/ui/suite.js b/ui/suite.js
+index c4ce08f..688c8d7 100644
+--- a/ui/suite.js
++++ b/ui/suite.js
+@@ -49,10 +49,13 @@ window.traerT101x = async (ruta) => {
+ Comandos.registrar({
+   // Ojo con el nombre: REGENERAR (alias RE) ya es el de refrescar la pantalla,
+   // como en AutoCAD. Éste es otro trabajo y necesita otro nombre.
+   nombre: "ACTUALIZARMUEBLES", alias: ["ACT", "REGENT101X"],
+   ayuda: "Vuelve a leer el .t101x y rehace los muebles, sin tocar tus anotaciones",
++  // Rehace el dibujo sin preguntar. Con una «R» suelta no: ver `soloEntero`
++  // en ui/sugeridor.js.
++  soloEntero: true,
+   correr: async () => {
+     try {
+       const r = await post("/api/t101x/regenerar");
+       aplicar(r);
+       await recargarTrazos();
