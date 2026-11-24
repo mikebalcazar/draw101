@@ -1,0 +1,191 @@
+diff --git a/build/python-mac.sh b/build/python-mac.sh
+new file mode 100755
+index 0000000..9f2d4c8
+--- /dev/null
++++ b/build/python-mac.sh
+@@ -0,0 +1,111 @@
++#!/usr/bin/env bash
++# Arma el Python empotrado para macOS  ·  draw101
++#
++# Mike, 24-nov-2026: «¿podemos hacer la version para macos?».
++#
++# POR QUÉ ESTE ARCHIVO EXISTE, SIENDO QUE YA HAY UNO
++#
++# `build/python-empotrado.sh` saca el Python de Windows **del instalador
++# anterior de draw101**, con una cadena que llega hasta la 0.20.1. Para macOS
++# no hay instalador anterior del cual sacarlo: hay que armarlo de cero, una
++# vez, y de ahí en adelante este guión lo rehace igual en cada entrega.
++#
++# De dónde sale el intérprete: `python-build-standalone`, que son CPython
++# portables ya compilados. No es una fuente exótica: es lo que usa `uv` por
++# debajo para instalar versiones de Python, y los publica el mismo equipo.
++#
++# POR QUÉ x86_64 Y NO arm64, que parecería lo moderno: la Mac del taller es
++# una MacBook Air de 2017, con Intel. Una app x64 además corre en las Mac con
++# chip M por Rosetta, así que de las dos ésta es la que sirve en las dos; al
++# revés no. El día que haya una Mac con chip M y el plano grande se arrastre,
++# el cambio es la variable ARQ de aquí abajo y la de `package.json`.
++#
++# POR QUÉ NO SE FIJAN LAS VERSIONES DE LOS PAQUETES
++#
++# Se instalan sin fijar, igual que hace el flujo con el entorno de pruebas. La
++# red de seguridad no es la lista de versiones: es que la suite completa corre
++# sobre macOS en el mismo armado. Si una versión nueva rompe algo, sale ahí y
++# no en la máquina de Mike. Lo que SÍ se fija es la entrega del intérprete
++# (PBS_TAG), porque de ésa depende que el armado sea repetible.
++set -euo pipefail
++
++PBS_TAG="${PBS_TAG:-20261110}"
++PY="${PY_SERIE:-3.11}"
++ARQ="${ARQ:-x86_64-apple-darwin}"
++DESTINO="${DESTINO:-runtime/python}"
++
++echo "Python empotrado para macOS · serie $PY · $ARQ · entrega $PBS_TAG"
++
++API="https://api.github.com/repos/astral-sh/python-build-standalone/releases/tags/$PBS_TAG"
++curl -fsSL -o pbs.json "$API"
++
++# `install_only` es la variante sin los pedazos de compilación: trae bin/,
++# lib/ y nada más. Es la que se quiere dentro de una app.
++URL=$(python3 - <<'PY'
++import json, os, re, sys
++d = json.load(open("pbs.json"))
++pat = re.compile(rf"^cpython-{re.escape(os.environ['PY'])}\.\d+\+\d+-{re.escape(os.environ['ARQ'])}-install_only\.tar\.gz$")
++hits = sorted(a["name"] for a in d["assets"] if pat.match(a["name"]))
++if not hits:
++    print("NO ESTÁ. Lo que trae esta entrega para esa arquitectura:", file=sys.stderr)
++    for a in d["assets"]:
++        if os.environ["ARQ"] in a["name"] and "install_only" in a["name"]:
++            print("   ", a["name"], file=sys.stderr)
++    raise SystemExit(1)
++# El último por orden es el parche más nuevo de la serie.
++nombre = hits[-1]
++print(next(a["browser_download_url"] for a in d["assets"] if a["name"] == nombre))
++PY
++)
++export PY ARQ
++echo "  bajando: $URL"
++curl -fsSL -o python.tar.gz "$URL"
++
++# Se comprueba la huella publicada. Sin esto, un corte de red a medias deja un
++# tar truncado y el error aparece mucho después, al armar la app, diciendo
++# cualquier otra cosa.
++if curl -fsSL -o python.tar.gz.sha256 "$URL.sha256" 2>/dev/null; then
++  ESPERADA=$(cut -d' ' -f1 < python.tar.gz.sha256)
++  REAL=$(shasum -a 256 python.tar.gz | cut -d' ' -f1)
++  if [ "$ESPERADA" != "$REAL" ]; then
++    echo "!! la huella no cuadra: esperaba $ESPERADA y bajó $REAL"; exit 1
++  fi
++  echo "  huella sha256 correcta"
++else
++  echo "  (no hay .sha256 publicado para este archivo; se sigue sin comprobar)"
++fi
++
++rm -rf "$DESTINO"
++mkdir -p "$(dirname "$DESTINO")"
++tar -xzf python.tar.gz
++mv python "$DESTINO"
++
++BIN="$DESTINO/bin/python3"
++test -x "$BIN" || { echo "!! no quedó $BIN. Esto se extrajo:"; find "$DESTINO" -maxdepth 2 | head -20; exit 1; }
++echo "  intérprete: $("$BIN" -V)"
++
++# Los paquetes del motor. La lista sale de los imports de lo que viaja dentro
++# del paquete (core/, export/, server.py); numpy y fonttools entran solos como
++# dependencias de ezdxf y reportlab.
++"$BIN" -m pip install --quiet --upgrade pip
++"$BIN" -m pip install --quiet \
++  ezdxf fastapi uvicorn pydantic pillow reportlab orjson pypdfium2
++
++# Adelgazar. Un .app de 130 MB ya es grande; no hay por qué cargar además las
++# pruebas de la biblioteca estándar ni los .pyc de instalación.
++find "$DESTINO" -depth -type d -name "__pycache__" -exec rm -rf {} + 2>/dev/null || true
++find "$DESTINO" -depth -type d -name "test" -path "*/lib/python*/test" -exec rm -rf {} + 2>/dev/null || true
++find "$DESTINO" -depth -type d -name "idlelib" -exec rm -rf {} + 2>/dev/null || true
++find "$DESTINO" -depth -type d -name "tkinter" -exec rm -rf {} + 2>/dev/null || true
++
++# Que de verdad importe todo, aquí y no en la Mac de Mike. Si un wheel bajó
++# para la arquitectura equivocada, es en esta línea donde se ve.
++"$BIN" - <<'PY'
++import platform, sys
++import ezdxf, fastapi, uvicorn, pydantic, PIL, reportlab, orjson, pypdfium2, numpy
++print(f"  comprobado en {platform.machine()} · python {sys.version.split()[0]}")
++for m in (ezdxf, fastapi, pydantic, PIL, reportlab, numpy):
++    print(f"    {m.__name__:12s} {getattr(m, '__version__', '?')}")
++PY
++
++echo "  tamaño: $(du -sh "$DESTINO" | cut -f1)"
+diff --git a/package.json b/package.json
+index 8057da4..1f9bc0f 100644
+--- a/package.json
++++ b/package.json
+@@ -1,10 +1,10 @@
+ {
+   "name": "draw101",
+   "productName": "draw101",
+-  "version": "0.26.0",
+-  "_versionApp": "0.26.0 — la que enseña la app viene de core/version.py; ésta sólo existe porque electron-builder exige semver",
++  "version": "0.27.0",
++  "_versionApp": "0.27.0 — la que enseña la app viene de core/version.py; ésta sólo existe porque electron-builder exige semver",
+   "_notaAsociaciones": "draw101 aparece en «Abrir con» de los DXF y DWG y en Aplicaciones predeterminadas, pero NO se roba la asociación: quién los abre por omisión lo sigue decidiendo el usuario (regla de Mike, 0.11.2). electron-builder registra el ProgID; Windows decide. El .t101d sí es nuestro. Ojo: dentro de «build» electron-builder rechaza cualquier clave que no conozca, aunque empiece con guión bajo (se cazó armando la 0.20.16).",
+   "_notaEmpaque": "asar apagado a propósito: main.js busca server.py junto a electron/, y el motor de Python no puede vivir dentro de un asar. Y electron-builder saca cualquier node_modules de los globs de `files`, así que los dos motores de DWG (dwgjs/node_modules) se copian por extraResources o la app se queda sin leer DWG.",
+   "description": "CAD 2D de Taller 101 — leer, trazar, acotar e imprimir planos",
+   "main": "electron/main.js",
+   "author": "Taller 101",
+@@ -19,11 +19,11 @@
+     "electron-builder": "^25.0.0"
+   },
+   "build": {
+     "appId": "mx.taller101.dibujador",
+     "productName": "draw101",
+-    "artifactName": "draw101-0.26.0-setup.${ext}",
++    "artifactName": "draw101-0.27.0-setup.${ext}",
+     "directories": {
+       "output": "dist",
+       "buildResources": "build"
+     },
+     "asar": false,
+@@ -48,10 +48,43 @@
+         "from": "dwgjs/node_modules",
+         "to": "app/dwgjs/node_modules"
+       }
+     ],
+     "publish": null,
++    "//mac": "24-nov-2026, Mike: «¿podemos hacer la version para macos?». La Mac es una MacBook Air 2017 con Intel y Monterey 12.7.6, así que x64 y nada de Apple Silicon. Sin firmar a propósito: firmar pide cuenta de Apple (99 USD/año) y esta entrega es para probar, no para un cliente. En Intel una app sin firmar SÍ arranca —en Apple Silicon ni siquiera eso—, con el rodeo de clic derecho → Abrir la primera vez.",
++    "mac": {
++      "icon": "build/icon.png",
++      "category": "public.app-category.graphics-design",
++      "target": [
++        { "target": "dmg", "arch": ["x64"] },
++        { "target": "zip", "arch": ["x64"] }
++      ],
++      "//identity": "null apaga la firma. Sin esto electron-builder busca un certificado, no lo encuentra y falla el armado en vez de entregar una app sin firmar.",
++      "identity": null,
++      "//hardenedRuntime": "apagado a propósito: el runtime endurecido sólo tiene sentido con firma y notarización, y sin ellas impide que la app cargue su propio Python.",
++      "hardenedRuntime": false,
++      "darkModeSupport": true,
++      "//minimumSystemVersion": "Electron 33 pide macOS 11 (Big Sur) o más nuevo; Monterey 12.7.6 queda arriba. Si algún día se sube de Electron hay que revisar esto: la Air 2017 se quedó en Monterey y no puede subir más.",
++      "minimumSystemVersion": "11.0",
++      "extendInfo": {
++        "NSHumanReadableCopyright": "Taller 101",
++        "//LSMinimumSystemVersion": "lo mismo que minimumSystemVersion, para que Finder lo diga antes de abrir."
++      },
++      "fileAssociations": [
++        { "ext": "t101d", "name": "Dibujo Taller 101", "role": "Editor" },
++        { "ext": "dxf", "name": "Dibujo DXF", "role": "Editor" },
++        { "ext": "dwg", "name": "Dibujo DWG", "role": "Viewer" }
++      ]
++    },
++    "dmg": {
++      "//": "La ventana que se abre al montar el .dmg: la app a la izquierda y Aplicaciones a la derecha, que es como se instala en Mac — se arrastra de una a otra.",
++      "title": "draw101 ${version}",
++      "contents": [
++        { "x": 140, "y": 180, "type": "file" },
++        { "x": 400, "y": 180, "type": "link", "path": "/Applications" }
++      ]
++    },
+     "win": {
+       "icon": "build/icon.ico",
+       "signAndEditExecutable": true,
+       "target": [
+         "nsis"
