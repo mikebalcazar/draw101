@@ -1,0 +1,46 @@
+diff --git a/core/version.py b/core/version.py
+index 86e05bd..c6b9847 100644
+--- a/core/version.py
++++ b/core/version.py
+@@ -19,17 +19,39 @@ Numeración: `mayor.menor.parche`.
+     volver a AutoCAD.
+ """
+ 
+ from __future__ import annotations
+ 
+-VERSION = "0.26.0"
+-FECHA = "2026-10-16"
++VERSION = "0.27.0"
++FECHA = "2026-11-24"
+ 
+ # Qué trae cada entrega, en el idioma del taller y no en el del código.
+ # La más nueva arriba. Lo que se lista aquí es lo que el comando VERSION
+ # enseña en la consola.
+ BITACORA: list[dict] = [
++    {
++        "version": "0.27.0",
++        "fecha": "2026-11-24",
++        "cambios": [
++            "YA HAY VERSIÓN PARA MAC. La app se arma para las Mac con procesador "
++            "Intel y pide macOS 11 o más nuevo, así que corre en la MacBook Air "
++            "del taller. Sale en dos formas: un .dmg para instalar arrastrando y "
++            "un .zip por si el .dmg no abre. No está firmada con certificado de "
++            "Apple —eso cuesta una cuenta de desarrollador— así que la primera "
++            "vez hay que abrirla con clic derecho › Abrir, y aceptar el aviso.",
++            "La Mac trae su propio Python adentro, igual que la versión de "
++            "Windows: no hay que instalar nada aparte. Se arma en una máquina "
++            "Intel de verdad y la suite completa de pruebas corre ALLÁ antes de "
++            "entregar el paquete, no sólo en Windows.",
++            "AVISO HONESTO sobre la Air de 2017: va a ser la draw101 más lenta "
++            "que has usado. Lo que cuesta no es la cuenta sino pintar la "
++            "pantalla, y esa gráfica es de 2015. En planos chicos no se nota; en "
++            "uno de 20 mil piezas sí.",
++            "Sin cambios en el dibujo: es la misma 0.26.0 de Windows, empacada "
++            "para Mac.",
++        ],
++    },
+     {
+         "version": "0.26.0",
+         "fecha": "2026-10-16",
+         "cambios": [
+             "DONDE VA UNA MEDIDA AHORA PUEDES TECLEAR LA CUENTA. En vez de sacar "
