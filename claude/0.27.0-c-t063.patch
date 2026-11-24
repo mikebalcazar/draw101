@@ -1,0 +1,221 @@
+diff --git a/pruebas/t063_empaque_de_mac.py b/pruebas/t063_empaque_de_mac.py
+new file mode 100644
+index 0000000..9dc9bab
+--- /dev/null
++++ b/pruebas/t063_empaque_de_mac.py
+@@ -0,0 +1,215 @@
++"""t063 · El empaque de macOS  ·  0.27.0
++
++Mike, 24-nov-2026: «¿podemos hacer la version para macos?». La Mac del taller
++es una MacBook Air 2017 —Intel, 8 GB, Monterey 12.7.6—, así que la app se arma
++para x86_64 y sin firmar: firmar pide cuenta de Apple (99 USD/año) y esto es
++para probar. En Intel una app sin firmar sí arranca; en Apple Silicon no
++arrancaría ni con el rodeo.
++
++LO QUE SE MIDE AQUÍ Y NO SE VE:
++
++  · QUE LA LISTA DE PAQUETES DEL SCRIPT DE MAC NO SE QUEDE ATRÁS. Es la
++    comprobación que justifica esta prueba. En Windows el Python empotrado se
++    saca del instalador anterior, así que arrastra lo que ya traía; en Mac se
++    instala desde cero una lista escrita a mano en `build/python-mac.sh`. El
++    día que alguien agregue un `import` nuevo a `core/` y no toque esa lista,
++    Windows seguirá funcionando y la Mac tronará AL ABRIR, con un
++    ModuleNotFoundError que nadie va a ver hasta que Mike lo vea. Aquí se
++    comparan los imports de lo que viaja dentro del paquete contra lo que el
++    script instala.
++
++  · QUE EL DESTINO SIGA SIENDO INTEL. Poner `arm64` parece lo moderno y dejaría
++    a Mike sin poder abrirla. Al revés sí funciona —una app x64 corre en las
++    Mac con chip M por Rosetta—, así que x64 es la que sirve en las dos.
++
++  · QUE NO SE PIDA UN macOS MÁS NUEVO DEL QUE ESA MAC PUEDE TENER. La Air 2017
++    se quedó en Monterey (12) y no puede subir más. Electron 33 pide macOS 11,
++    así que hoy cabe; si alguien sube de Electron sin revisar esto, la app se
++    vuelve ilegible para la única Mac que hay.
++
++  · QUE LA FIRMA SIGA APAGADA. Con `identity` sin poner, electron-builder se
++    pone a buscar un certificado en el llavero y TUMBA el armado en vez de
++    entregar una app sin firmar.
++
++VERIFICADA ROMPIENDO EL CÓDIGO, una rotura a la vez. 13 roturas, 13 fallos:
++
++  · quitar «ezdxf» de la línea de pip ............................ 1 fallo
++  · quitar «pillow» (el que viaja con otro nombre: PIL) .......... 1 fallo
++  · quitar «pypdfium2» .......................................... 1 fallo
++  · quitar «orjson» ............................................. 1 fallo
++  · dejar SOLO ezdxf, quitar los otros siete ................... 2 fallos
++  · poner arm64 en vez de x64 ................................... 1 fallo
++  · pedir macOS 13 .............................................. 1 fallo
++  · quitar «identity: null» ..................................... 1 fallo
++  · poner hardenedRuntime en true ............................... 1 fallo
++  · quitar toda la sección «mac» ................................ 1 fallo
++  · quitar el .zip y dejar sólo el .dmg ......................... 1 fallo
++  · poner el flujo en «macos-latest» (Apple Silicon) ............ 1 fallo
++  · sacar la suite del flujo .................................... 1 fallo
++
++  Y una rotura que REGRESÓ EN VERDE, por si sirve de aviso: al quitar
++  «ezdxf» con una búsqueda que cambiaba la primera aparición, lo que se
++  borró fue la palabra «ezdxf» de un COMENTARIO cinco líneas arriba, no
++  de la línea de pip. La prueba estaba bien; la rotura apuntaba a otro
++  lado. Las cinco primeras de la lista se rehicieron apuntando a la
++  línea de pip de verdad.
++"""
++
++from __future__ import annotations
++
++import json
++import pathlib
++import re
++import subprocess
++import sys
++
++from pruebas import comun
++
++DESCRIPCION = "el empaque de macOS: Intel, sin firmar, y con todos los paquetes que el motor usa"
++
++RAIZ = pathlib.Path(__file__).resolve().parent.parent
++
++# De qué paquete de pip sale cada módulo, cuando no se llaman igual.
++PAQUETE_DE = {"PIL": "pillow"}
++
++# Los que NO hace falta nombrar porque entran solos como dependencia de otro.
++# Se anotan con de quién vienen, para que se pueda revisar si algún día se
++# quita el que los arrastra.
++POR_DEPENDENCIA = {
++    "numpy": "ezdxf",
++    "fonttools": "reportlab",
++    "starlette": "fastapi",
++    "anyio": "fastapi",
++    "click": "uvicorn",
++    "h11": "uvicorn",
++    "typing_extensions": "pydantic",
++    "annotated_types": "pydantic",
++    "pydantic_core": "pydantic",
++}
++
++
++def _terceros_del_paquete() -> set[str]:
++    """Los módulos de terceros que importa lo que VIAJA dentro de la app.
++
++    Sólo `core/`, `export/` y `server.py`: `pruebas/` no se empaqueta, así que
++    lo que importe una prueba no tiene por qué estar en la Mac.
++    """
++    propios = {"core", "export", "pruebas", "build", "dwgjs"}
++    estandar = set(sys.stdlib_module_names)
++    fuera: set[str] = set()
++    archivos = list((RAIZ / "core").glob("*.py")) + list((RAIZ / "export").glob("*.py"))
++    archivos.append(RAIZ / "server.py")
++    for f in archivos:
++        if not f.exists():
++            continue
++        for linea in f.read_text(encoding="utf-8").splitlines():
++            m = re.match(r"\s*(?:import|from)\s+([A-Za-z_][A-Za-z_0-9]*)", linea)
++            if not m:
++                continue
++            n = m.group(1)
++            if n in estandar or n in propios or n.startswith("_"):
++                continue
++            fuera.add(n)
++    return fuera
++
++
++def _instala_el_script() -> set[str]:
++    """Los paquetes que `build/python-mac.sh` le pide a pip."""
++    texto = (RAIZ / "build" / "python-mac.sh").read_text(encoding="utf-8")
++    m = re.search(r'pip install --quiet \\\n(.*?)\n\n', texto, re.S)
++    if not m:
++        m = re.search(r'pip install --quiet \\\n(.*?)$', texto, re.S | re.M)
++    if not m:
++        return set()
++    crudo = m.group(1).replace("\\", " ")
++    return {w for w in crudo.split() if re.fullmatch(r"[A-Za-z][A-Za-z0-9_.-]*", w)}
++
++
++def correr(r: comun.Reporte) -> None:
++    # -- 1 · la lista de paquetes está completa ------------------------------ #
++    usa = _terceros_del_paquete()
++    instala = _instala_el_script()
++    r.cierto(len(instala) >= 5,
++             "el script de Mac trae una lista de paquetes que se puede leer",
++             str(sorted(instala)))
++
++    faltan = []
++    for mod in sorted(usa):
++        paq = PAQUETE_DE.get(mod, mod)
++        if paq in instala or mod in instala:
++            continue
++        if mod in POR_DEPENDENCIA and POR_DEPENDENCIA[mod] in instala:
++            continue
++        faltan.append(f"{mod} (pip: {paq})")
++    r.igual(faltan, [],
++            "todo lo que el motor importa se instala en el Python de la Mac")
++
++    # El control: si esta comprobación midiera bien, quitar un paquete de la
++    # lista tiene que hacerla fallar. Se simula aquí mismo, sin tocar el
++    # archivo, para que no pueda pasar en verde por estar comparando conjuntos
++    # vacíos.
++    simulado = []
++    for mod in sorted(usa):
++        paq = PAQUETE_DE.get(mod, mod)
++        menos = instala - {"ezdxf"}
++        if paq in menos or mod in menos:
++            continue
++        if mod in POR_DEPENDENCIA and POR_DEPENDENCIA[mod] in menos:
++            continue
++        simulado.append(mod)
++    r.cierto(simulado,
++             "y la comprobación de arriba sí mide: quitando «ezdxf» de la lista, se queja",
++             f"se quejaría de {simulado}")
++
++    # -- 2 · el destino es Intel -------------------------------------------- #
++    cfg = json.loads((RAIZ / "package.json").read_text(encoding="utf-8"))
++    mac = cfg.get("build", {}).get("mac")
++    r.cierto(mac, "package.json trae la sección de macOS")
++    if not mac:
++        return
++
++    arcos = set()
++    for t in mac.get("target", []):
++        arcos.update(t.get("arch", []) if isinstance(t, dict) else [])
++    r.igual(sorted(arcos), ["x64"],
++            "se arma para Intel (x64) y sólo para Intel: la Mac del taller es de 2017")
++
++    formatos = sorted(t["target"] for t in mac.get("target", []) if isinstance(t, dict))
++    r.igual(formatos, ["dmg", "zip"],
++            "salen las dos formas: el .dmg para instalar y el .zip por si el dmg no abre")
++
++    # -- 3 · no se pide un macOS que esa Mac no puede tener ------------------ #
++    minimo = str(mac.get("minimumSystemVersion", ""))
++    r.cierto(re.fullmatch(r"1[01]\.\d+", minimo),
++             "no se pide más que macOS 11: la Air 2017 se quedó en Monterey (12) para siempre",
++             f"pide {minimo!r}")
++    electron = cfg.get("devDependencies", {}).get("electron", "")
++    r.cierto(electron.lstrip("^~").startswith("33."),
++             "y sigue siendo Electron 33, que es el que pide macOS 11 — si sube, hay que "
++             "revisar que la Air todavía quepa", electron)
++
++    # -- 4 · la firma sigue apagada ----------------------------------------- #
++    r.cierto("identity" in mac and mac["identity"] is None,
++             "la firma está apagada a propósito; sin esto el armado se cae buscando "
++             "un certificado que no existe", repr(mac.get("identity", "no está")))
++    r.igual(mac.get("hardenedRuntime"), False,
++            "y el runtime endurecido también: sin firma, impediría que la app "
++            "cargue su propio Python")
++
++    # -- 5 · el guión y el flujo existen y son válidos ----------------------- #
++    sh = RAIZ / "build" / "python-mac.sh"
++    r.cierto(sh.exists(), "build/python-mac.sh está")
++    if sh.exists():
++        ok = subprocess.run(["bash", "-n", str(sh)], capture_output=True, text=True)
++        r.cierto(ok.returncode == 0, "y es bash válido", ok.stderr[:200])
++
++    flujo = RAIZ / "claude" / "armar-mac.yml"
++    r.cierto(flujo.exists(),
++             "el flujo de armado está en claude/, listo para pegar en .github/workflows/")
++    if flujo.exists():
++        texto = flujo.read_text(encoding="utf-8")
++        r.cierto("macos-15-intel" in texto,
++                 "y pide una máquina Intel: las demás de GitHub son Apple Silicon")
++        r.cierto("python verificar.py" in texto,
++                 "y corre la suite completa SOBRE macOS, que es lo único que dice si "
++                 "el motor se porta igual allá")
