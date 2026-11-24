@@ -1,0 +1,120 @@
+diff --git a/pruebas/t063_empaque_de_mac.py b/pruebas/t063_empaque_de_mac.py
+index 969ce3f..70874f4 100644
+--- a/pruebas/t063_empaque_de_mac.py
++++ b/pruebas/t063_empaque_de_mac.py
+@@ -29,11 +29,20 @@ LO QUE SE MIDE AQUÍ Y NO SE VE:
+ 
+   · QUE LA FIRMA SIGA APAGADA. Con `identity` sin poner, electron-builder se
+     pone a buscar un certificado en el llavero y TUMBA el armado en vez de
+     entregar una app sin firmar.
+ 
+-VERIFICADA ROMPIENDO EL CÓDIGO, una rotura a la vez. 18 roturas, 18 fallos:
++  · QUE NO SE METAN COMENTARIOS DENTRO DE «build». Esto se aprendió a la mala
++    DOS VECES. Armando la 0.20.16 se descubrió que electron-builder rechaza
++    cualquier clave que no conozca dentro de «build», aunque empiece con guión
++    bajo, y quedó escrito como advertencia en `package.json`. Armando la 0.27.0
++    se volvió a hacer igual, con claves «//mac», «//identity» y tres más: el
++    armado de Windows se cayó y la entrega no salió. Los comentarios van al
++    nivel de arriba de `package.json`, donde sí se puede, y aquí se vigila que
++    no vuelvan a bajar.
++
++VERIFICADA ROMPIENDO EL CÓDIGO, una rotura a la vez. 25 roturas, 25 fallos:
+ 
+   · quitar «ezdxf» de la línea de pip ............................ 1 fallo
+   · quitar «pillow» (el que viaja con otro nombre: PIL) .......... 1 fallo
+   · quitar «pypdfium2» .......................................... 1 fallo
+   · quitar «orjson» ............................................. 1 fallo
+@@ -49,10 +58,23 @@ VERIFICADA ROMPIENDO EL CÓDIGO, una rotura a la vez. 18 roturas, 18 fallos:
+   · que el flujo deje de buscar ramas claude/publicar-* ......... 1 fallo
+   · ordenarlas alfabético en vez de por versión ................. 1 fallo
+   · quitar el «env» que recibe lo que se teclea ................. 1 fallo
+   · interpolar lo teclado dentro del guión, dejando el env ...... 1 fallo
+   · interpolarlo en un echo de otro paso ........................ 1 fallo
++  · volver a meter «//mac» dentro de «build» ................... 2 fallos
++  · meter «_nota» (guión bajo) dentro de «build.mac» ........... 2 fallos
++  · meter «//x» dentro de extendInfo ........................... 1 fallo
++  · escribir mal una clave: «minimumSystemVersio» .............. 2 fallos
++  · poner un destino que no existe en mac.target ................ 1 fallo
++  · inventar una clave en «dmg» ................................. 1 fallo
++  · quitar todas las notas del nivel de arriba .................. 1 fallo
++
++  Los números de esas últimas dicen algo útil: «//x» dentro de extendInfo
++  falla UNA sola vez, porque el esquema de electron-builder deja meter
++  claves libres ahí —se escriben tal cual en el Info.plist— y es la
++  comprobación de los comentarios la que lo caza. Las de dos fallos las
++  cazan las dos cosas a la vez.
+ 
+   Y una rotura que REGRESÓ EN VERDE, por si sirve de aviso: al quitar
+   «ezdxf» con una búsqueda que cambiaba la primera aparición, lo que se
+   borró fue la palabra «ezdxf» de un COMENTARIO cinco líneas arriba, no
+   de la línea de pip. La prueba estaba bien; la rotura apuntaba a otro
+@@ -206,10 +228,69 @@ def correr(r: comun.Reporte) -> None:
+              "un certificado que no existe", repr(mac.get("identity", "no está")))
+     r.igual(mac.get("hardenedRuntime"), False,
+             "y el runtime endurecido también: sin firma, impediría que la app "
+             "cargue su propio Python")
+ 
++    # -- 4b · nada de comentarios dentro de «build» -------------------------- #
++    # Ésta es la que faltaba el 24-nov. Recorre «build» completo, a cualquier
++    # profundidad, incluido extendInfo: una clave «//» ahí no tumba el armado
++    # pero sí acabaría escrita dentro del Info.plist de la app.
++    def _colar(d, ruta="build"):
++        malas = []
++        if isinstance(d, dict):
++            for k, v in d.items():
++                if isinstance(k, str) and k.startswith(("//", "_")):
++                    malas.append(f"{ruta}.{k}")
++                malas += _colar(v, f"{ruta}.{k}")
++        elif isinstance(d, list):
++            for i, v in enumerate(d):
++                malas += _colar(v, f"{ruta}[{i}]")
++        return malas
++
++    r.igual(_colar(cfg["build"]), [],
++            "no hay comentarios dentro de «build»: ahí electron-builder rechaza "
++            "cualquier clave que no conozca y tumba el armado (0.20.16 y otra vez "
++            "en la 0.27.0). Van al nivel de arriba de package.json")
++    r.cierto(any(k.startswith("_") for k in cfg),
++             "y al nivel de arriba sí hay notas, que es donde se pueden poner",
++             str([k for k in cfg if k.startswith("_")]))
++
++    # -- 4c · la config, validada como la valida electron-builder ------------- #
++    # Lo de arriba caza los comentarios, que es lo que pasó. Pero una clave mal
++    # escrita —«minimumSystemVersio»— se le escaparía, y tumba el armado igual.
++    # Así que si están las dependencias de Electron se valida contra el esquema
++    # de verdad, el mismo archivo que usa electron-builder.
++    #
++    # En CI están: `npm ci` corre ANTES de las pruebas en los dos flujos. En el
++    # contenedor de pruebas normalmente no, y entonces esta parte no corre; por
++    # eso la comprobación de arriba existe aparte y no depende de esto.
++    esquema = RAIZ / "node_modules" / "app-builder-lib" / "scheme.json"
++    ajv = RAIZ / "node_modules" / "ajv"
++    if esquema.exists() and ajv.is_dir():
++        guion = """
++const Ajv = require(process.argv[1] + "/node_modules/ajv");
++const fs = require("fs");
++const esquema = JSON.parse(fs.readFileSync(process.argv[2], "utf8"));
++const cfg = JSON.parse(fs.readFileSync(process.argv[3], "utf8")).build;
++const ajv = new Ajv({ allErrors: true, extendRefs: "ignore", logger: false });
++try { require(process.argv[1] + "/node_modules/ajv-keywords")(ajv, ["typeof"]); } catch (e) {}
++ajv.addFormat("semver", () => true);
++const validar = ajv.compile(esquema);
++if (validar(cfg)) console.log("VALIDA");
++else console.log("RECHAZADA: " + validar.errors.slice(0, 6)
++  .map(e => (e.dataPath || "(raiz)") + " " + e.message +
++            (e.params && e.params.additionalProperty
++               ? " [" + e.params.additionalProperty + "]" : "")).join(" | "));
++"""
++        salida = subprocess.run(
++            ["node", "-e", guion, str(RAIZ), str(esquema), str(RAIZ / "package.json")],
++            capture_output=True, text=True, timeout=120)
++        r.cierto(salida.stdout.strip() == "VALIDA",
++                 "y la configuración entera pasa el esquema de electron-builder, el "
++                 "mismo que tumba el armado cuando no pasa",
++                 (salida.stdout + salida.stderr).strip()[:400])
++
+     # -- 5 · el guión y el flujo existen y son válidos ----------------------- #
+     sh = RAIZ / "build" / "python-mac.sh"
+     r.cierto(sh.exists(), "build/python-mac.sh está")
+     if sh.exists():
+         ok = subprocess.run(["bash", "-n", str(sh)], capture_output=True, text=True)
