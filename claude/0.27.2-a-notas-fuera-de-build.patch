@@ -1,0 +1,71 @@
+diff --git a/package.json b/package.json
+index f78514d..f53da0a 100644
+--- a/package.json
++++ b/package.json
+@@ -1,11 +1,12 @@
+ {
+   "name": "draw101",
+   "productName": "draw101",
+-  "version": "0.27.1",
+-  "_versionApp": "0.27.1 — la que enseña la app viene de core/version.py; ésta sólo existe porque electron-builder exige semver",
++  "version": "0.27.2",
++  "_versionApp": "0.27.2 — la que enseña la app viene de core/version.py; ésta sólo existe porque electron-builder exige semver",
+   "_notaAsociaciones": "draw101 aparece en «Abrir con» de los DXF y DWG y en Aplicaciones predeterminadas, pero NO se roba la asociación: quién los abre por omisión lo sigue decidiendo el usuario (regla de Mike, 0.11.2). electron-builder registra el ProgID; Windows decide. El .t101d sí es nuestro. Ojo: dentro de «build» electron-builder rechaza cualquier clave que no conozca, aunque empiece con guión bajo (se cazó armando la 0.20.16).",
++  "_notaMac": "24-nov-2026, Mike: «¿podemos hacer la version para macos?». La Mac es una MacBook Air 2017 con Intel y Monterey 12.7.6, así que x64 y nada de Apple Silicon; una app x64 además corre en las Mac con chip M por Rosetta, al revés no. Sin firmar a propósito: firmar pide cuenta de Apple (99 USD/año) y esta entrega es para probar. En Intel una app sin firmar SÍ arranca —en Apple Silicon ni siquiera eso—, con el rodeo de clic derecho → Abrir la primera vez. De ahí las tres claves que no se explican solas: «identity» en null apaga la firma, porque sin eso electron-builder busca un certificado, no lo encuentra y tumba el armado en vez de entregar una app sin firmar; «hardenedRuntime» en false porque el runtime endurecido sólo sirve con firma y notarización, y sin ellas impide que la app cargue su propio Python; y «minimumSystemVersion» en 11.0 porque es lo que pide Electron 33 —si algún día se sube de Electron hay que revisar esto, que la Air 2017 se quedó en Monterey y no puede subir más—. La ventana del .dmg lleva la app a la izquierda y Aplicaciones a la derecha, que es como se instala en Mac: se arrastra de una a otra. OJO, esto se aprendió a la mala en la 0.27.0: estos comentarios NO pueden vivir dentro de «build». Ahí electron-builder rechaza cualquier clave que no conozca, empiece con «//» o con guión bajo, y el armado se cae. Al nivel de aquí sí se puede. Lo vigila t063.",
+   "_notaEmpaque": "asar apagado a propósito: main.js busca server.py junto a electron/, y el motor de Python no puede vivir dentro de un asar. Y electron-builder saca cualquier node_modules de los globs de `files`, así que los dos motores de DWG (dwgjs/node_modules) se copian por extraResources o la app se queda sin leer DWG.",
+   "description": "CAD 2D de Taller 101 — leer, trazar, acotar e imprimir planos",
+   "main": "electron/main.js",
+   "author": "Taller 101",
+   "license": "UNLICENSED",
+@@ -19,11 +20,11 @@
+     "electron-builder": "^25.0.0"
+   },
+   "build": {
+     "appId": "mx.taller101.dibujador",
+     "productName": "draw101",
+-    "artifactName": "draw101-0.27.1-setup.${ext}",
++    "artifactName": "draw101-0.27.2-setup.${ext}",
+     "directories": {
+       "output": "dist",
+       "buildResources": "build"
+     },
+     "asar": false,
+@@ -48,37 +49,31 @@
+         "from": "dwgjs/node_modules",
+         "to": "app/dwgjs/node_modules"
+       }
+     ],
+     "publish": null,
+-    "//mac": "24-nov-2026, Mike: «¿podemos hacer la version para macos?». La Mac es una MacBook Air 2017 con Intel y Monterey 12.7.6, así que x64 y nada de Apple Silicon. Sin firmar a propósito: firmar pide cuenta de Apple (99 USD/año) y esta entrega es para probar, no para un cliente. En Intel una app sin firmar SÍ arranca —en Apple Silicon ni siquiera eso—, con el rodeo de clic derecho → Abrir la primera vez.",
+     "mac": {
+       "icon": "build/icon.png",
+       "category": "public.app-category.graphics-design",
+       "target": [
+         { "target": "dmg", "arch": ["x64"] },
+         { "target": "zip", "arch": ["x64"] }
+       ],
+-      "//identity": "null apaga la firma. Sin esto electron-builder busca un certificado, no lo encuentra y falla el armado en vez de entregar una app sin firmar.",
+       "identity": null,
+-      "//hardenedRuntime": "apagado a propósito: el runtime endurecido sólo tiene sentido con firma y notarización, y sin ellas impide que la app cargue su propio Python.",
+       "hardenedRuntime": false,
+       "darkModeSupport": true,
+-      "//minimumSystemVersion": "Electron 33 pide macOS 11 (Big Sur) o más nuevo; Monterey 12.7.6 queda arriba. Si algún día se sube de Electron hay que revisar esto: la Air 2017 se quedó en Monterey y no puede subir más.",
+       "minimumSystemVersion": "11.0",
+       "extendInfo": {
+-        "NSHumanReadableCopyright": "Taller 101",
+-        "//LSMinimumSystemVersion": "lo mismo que minimumSystemVersion, para que Finder lo diga antes de abrir."
++        "NSHumanReadableCopyright": "Taller 101"
+       },
+       "fileAssociations": [
+         { "ext": "t101d", "name": "Dibujo Taller 101", "role": "Editor" },
+         { "ext": "dxf", "name": "Dibujo DXF", "role": "Editor" },
+         { "ext": "dwg", "name": "Dibujo DWG", "role": "Viewer" }
+       ]
+     },
+     "dmg": {
+-      "//": "La ventana que se abre al montar el .dmg: la app a la izquierda y Aplicaciones a la derecha, que es como se instala en Mac — se arrastra de una a otra.",
+       "title": "draw101 ${version}",
+       "contents": [
+         { "x": 140, "y": 180, "type": "file" },
+         { "x": 400, "y": 180, "type": "link", "path": "/Applications" }
+       ]

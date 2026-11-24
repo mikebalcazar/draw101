@@ -1,0 +1,39 @@
+diff --git a/core/version.py b/core/version.py
+index 620ea11..9e27b6a 100644
+--- a/core/version.py
++++ b/core/version.py
+@@ -19,17 +19,33 @@ Numeración: `mayor.menor.parche`.
+     volver a AutoCAD.
+ """
+ 
+ from __future__ import annotations
+ 
+-VERSION = "0.27.1"
++VERSION = "0.27.2"
+ FECHA = "2026-11-24"
+ 
+ # Qué trae cada entrega, en el idioma del taller y no en el del código.
+ # La más nueva arriba. Lo que se lista aquí es lo que el comando VERSION
+ # enseña en la consola.
+ BITACORA: list[dict] = [
++    {
++        "version": "0.27.2",
++        "fecha": "2026-11-24",
++        "cambios": [
++            "Arreglo del armado. La 0.27.0 y la 0.27.1 no llegaron a salir: en "
++            "package.json se metieron comentarios DENTRO de la sección «build», "
++            "y ahí electron-builder rechaza cualquier clave que no conozca y "
++            "tumba el armado. Los comentarios se pasaron al nivel de arriba, "
++            "donde sí se pueden poner.",
++            "Es la segunda vez que pasa lo mismo —la primera fue armando la "
++            "0.20.16— así que ahora lo vigila una prueba: revisa que no haya "
++            "comentarios dentro de «build» y, cuando están las dependencias de "
++            "Electron, valida la configuración completa contra el mismo esquema "
++            "que usa electron-builder. Una clave mal escrita también se caza.",
++        ],
++    },
+     {
+         "version": "0.27.1",
+         "fecha": "2026-11-24",
+         "cambios": [
+             "El armado de Mac se pega UNA VEZ y ya. Antes había que volver a "
