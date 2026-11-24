@@ -1,0 +1,74 @@
+diff --git a/pruebas/t063_empaque_de_mac.py b/pruebas/t063_empaque_de_mac.py
+index 9dc9bab..969ce3f 100644
+--- a/pruebas/t063_empaque_de_mac.py
++++ b/pruebas/t063_empaque_de_mac.py
+@@ -29,11 +29,11 @@ LO QUE SE MIDE AQUÍ Y NO SE VE:
+ 
+   · QUE LA FIRMA SIGA APAGADA. Con `identity` sin poner, electron-builder se
+     pone a buscar un certificado en el llavero y TUMBA el armado en vez de
+     entregar una app sin firmar.
+ 
+-VERIFICADA ROMPIENDO EL CÓDIGO, una rotura a la vez. 13 roturas, 13 fallos:
++VERIFICADA ROMPIENDO EL CÓDIGO, una rotura a la vez. 18 roturas, 18 fallos:
+ 
+   · quitar «ezdxf» de la línea de pip ............................ 1 fallo
+   · quitar «pillow» (el que viaja con otro nombre: PIL) .......... 1 fallo
+   · quitar «pypdfium2» .......................................... 1 fallo
+   · quitar «orjson» ............................................. 1 fallo
+@@ -44,17 +44,29 @@ VERIFICADA ROMPIENDO EL CÓDIGO, una rotura a la vez. 13 roturas, 13 fallos:
+   · poner hardenedRuntime en true ............................... 1 fallo
+   · quitar toda la sección «mac» ................................ 1 fallo
+   · quitar el .zip y dejar sólo el .dmg ......................... 1 fallo
+   · poner el flujo en «macos-latest» (Apple Silicon) ............ 1 fallo
+   · sacar la suite del flujo .................................... 1 fallo
++  · que el flujo deje de buscar ramas claude/publicar-* ......... 1 fallo
++  · ordenarlas alfabético en vez de por versión ................. 1 fallo
++  · quitar el «env» que recibe lo que se teclea ................. 1 fallo
++  · interpolar lo teclado dentro del guión, dejando el env ...... 1 fallo
++  · interpolarlo en un echo de otro paso ........................ 1 fallo
+ 
+   Y una rotura que REGRESÓ EN VERDE, por si sirve de aviso: al quitar
+   «ezdxf» con una búsqueda que cambiaba la primera aparición, lo que se
+   borró fue la palabra «ezdxf» de un COMENTARIO cinco líneas arriba, no
+   de la línea de pip. La prueba estaba bien; la rotura apuntaba a otro
+   lado. Las cinco primeras de la lista se rehicieron apuntando a la
+   línea de pip de verdad.
++
++  Y una SEGUNDA que regresó en verde, ésta sí por culpa de la prueba:
++  la comprobación de la inyección miraba nada más que la línea «env»
++  estuviera en el flujo. Meter «${{ inputs.rama }}» dentro del guión
++  DEJANDO la línea env no la hacía fallar, que es justo el caso
++  peligroso. Rehecha: ahora cuenta que «inputs.» aparezca una sola vez
++  en todo el archivo y que sea la de env.
+ """
+ 
+ from __future__ import annotations
+ 
+ import json
+@@ -211,5 +223,26 @@ def correr(r: comun.Reporte) -> None:
+         r.cierto("macos-15-intel" in texto,
+                  "y pide una máquina Intel: las demás de GitHub son Apple Silicon")
+         r.cierto("python verificar.py" in texto,
+                  "y corre la suite completa SOBRE macOS, que es lo único que dice si "
+                  "el motor se porta igual allá")
++
++        # El flujo vive en `main`, que está vieja a propósito (ver el
++        # encabezado del .yml). Si no se cambiara de rama él solo, armaría la
++        # versión de main en vez de la publicada.
++        r.cierto("refs/remotes/origin/claude/publicar-*" in texto,
++                 "el flujo se cambia él solo a una rama claude/publicar-*, en vez de "
++                 "armar la rama desde donde se disparó")
++        r.cierto("--sort=-v:refname" in texto,
++                 "y la escoge por orden de VERSIÓN: al alfabético, la 0.9.0 le gana a "
++                 "la 0.30.0 y la 0.27.9 a la 0.27.10 (probado, 24-nov-2026)")
++        # Que la línea «env» exista NO basta: se pueden tener las dos, la
++        # variable y la interpolación, y entonces la inyección sigue abierta.
++        # Lo que se mide es que «inputs.» aparezca UNA sola vez en todo el
++        # archivo, y que sea precisamente la de env. (Comprobación rehecha: la
++        # primera versión miraba sólo que la línea env estuviera, y meter
++        # «${{ inputs.rama }}» dentro del guión no la hacía fallar.)
++        usos = [l.strip() for l in texto.splitlines() if "inputs." in l]
++        r.igual(usos, ["PEDIDA: ${{ inputs.rama }}"],
++                "lo que se teclea en el desplegable entra SÓLO por una variable de "
++                "entorno, nunca pegado dentro del guión, para que no pueda meter "
++                "comandos")
