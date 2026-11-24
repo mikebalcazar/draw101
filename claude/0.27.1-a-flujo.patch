@@ -1,0 +1,73 @@
+diff --git a/claude/armar-mac.yml b/claude/armar-mac.yml
+index 81bade9..0526a43 100644
+--- a/claude/armar-mac.yml
++++ b/claude/armar-mac.yml
+@@ -9,17 +9,30 @@
+ # Windows ni se entera.
+ #
+ # Se dispara A MANO (Actions → «Armar draw101 para macOS» → Run workflow).
+ # No se dispara al publicar: la entrega de Windows sigue su camino sola.
+ #
++# VA EN `main` Y SE CORRE DESDE `main`, aunque main esté vieja. Dos razones:
++# un flujo de disparo manual sólo aparece en Actions si el archivo está en la
++# rama por omisión; y la documentación de GitHub NO dice cuál copia del archivo
++# corre si eliges otra rama en el desplegable. Así que el flujo no se fía de
++# eso: se queda en main y ÉL SOLO se cambia a la rama publicada más nueva. Lo
++# bueno de hacerlo así es que esto se pega una vez y ya: en la entrega
++# siguiente no hay nada que volver a pegar.
++#
+ # QUÉ DEJA: el .dmg y el .zip como artefacto del run, para bajar. No publica
+ # release ni toca el manifiesto; eso se agrega cuando la versión de Mac deje
+ # de ser una prueba.
+ name: Armar draw101 para macOS
+ 
+ on:
+   workflow_dispatch:
++    inputs:
++      rama:
++        description: 'Rama a armar (déjalo vacío para la publicar-* más nueva)'
++        required: false
++        default: ''
+ 
+ permissions:
+   contents: read
+ 
+ concurrency:
+@@ -36,11 +49,37 @@ jobs:
+     timeout-minutes: 90
+     defaults:
+       run:
+         shell: bash
+     steps:
++      # fetch-depth 0 para que se bajen TODAS las ramas, no sólo main: de otro
++      # modo el paso siguiente no encontraría ninguna claude/publicar-*.
+       - uses: actions/checkout@v4
++        with:
++          fetch-depth: 0
++
++      - name: Cambiarse a la rama publicada
++        id: rama
++        env:
++          # Por env y no interpolado en el guión: lo que se teclea en el
++          # desplegable no debe poder meter comandos.
++          PEDIDA: ${{ inputs.rama }}
++        run: |
++          set -euo pipefail
++          if [ -n "${PEDIDA:-}" ]; then
++            R="$PEDIDA"
++          else
++            # --sort=-v:refname es orden de VERSIÓN, no alfabético: así la
++            # 0.27.0 queda arriba de la 0.9.0, que al alfabético no le pasa.
++            R=$(git for-each-ref --sort=-v:refname \
++                  --format='%(refname:strip=3)' \
++                  'refs/remotes/origin/claude/publicar-*' | head -1)
++            [ -n "$R" ] || { echo "no hay ninguna rama claude/publicar-*"; exit 1; }
++          fi
++          echo "armando desde: $R"
++          git checkout -q --detach "origin/$R"
++          echo "rama=$R" >> "$GITHUB_OUTPUT"
+ 
+       - name: Aplicar parches pendientes (claude/APLICAR.txt)
+         run: |
+           set -euo pipefail
+           if [ -f claude/APLICAR.txt ]; then

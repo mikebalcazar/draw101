@@ -1,0 +1,65 @@
+diff --git a/core/version.py b/core/version.py
+index c6b9847..620ea11 100644
+--- a/core/version.py
++++ b/core/version.py
+@@ -19,17 +19,29 @@ Numeración: `mayor.menor.parche`.
+     volver a AutoCAD.
+ """
+ 
+ from __future__ import annotations
+ 
+-VERSION = "0.27.0"
++VERSION = "0.27.1"
+ FECHA = "2026-11-24"
+ 
+ # Qué trae cada entrega, en el idioma del taller y no en el del código.
+ # La más nueva arriba. Lo que se lista aquí es lo que el comando VERSION
+ # enseña en la consola.
+ BITACORA: list[dict] = [
++    {
++        "version": "0.27.1",
++        "fecha": "2026-11-24",
++        "cambios": [
++            "El armado de Mac se pega UNA VEZ y ya. Antes había que volver a "
++            "pegar el archivo del flujo en cada entrega; ahora el flujo busca "
++            "él solo la rama publicada más nueva, así que en la entrega "
++            "siguiente no hay nada que tocar.",
++            "Y la busca por orden de VERSIÓN, no alfabético: al alfabético la "
++            "0.9.0 le gana a la 0.30.0 y la 0.27.9 a la 0.27.10.",
++        ],
++    },
+     {
+         "version": "0.27.0",
+         "fecha": "2026-11-24",
+         "cambios": [
+             "YA HAY VERSIÓN PARA MAC. La app se arma para las Mac con procesador "
+diff --git a/package.json b/package.json
+index 1f9bc0f..f78514d 100644
+--- a/package.json
++++ b/package.json
+@@ -1,10 +1,10 @@
+ {
+   "name": "draw101",
+   "productName": "draw101",
+-  "version": "0.27.0",
+-  "_versionApp": "0.27.0 — la que enseña la app viene de core/version.py; ésta sólo existe porque electron-builder exige semver",
++  "version": "0.27.1",
++  "_versionApp": "0.27.1 — la que enseña la app viene de core/version.py; ésta sólo existe porque electron-builder exige semver",
+   "_notaAsociaciones": "draw101 aparece en «Abrir con» de los DXF y DWG y en Aplicaciones predeterminadas, pero NO se roba la asociación: quién los abre por omisión lo sigue decidiendo el usuario (regla de Mike, 0.11.2). electron-builder registra el ProgID; Windows decide. El .t101d sí es nuestro. Ojo: dentro de «build» electron-builder rechaza cualquier clave que no conozca, aunque empiece con guión bajo (se cazó armando la 0.20.16).",
+   "_notaEmpaque": "asar apagado a propósito: main.js busca server.py junto a electron/, y el motor de Python no puede vivir dentro de un asar. Y electron-builder saca cualquier node_modules de los globs de `files`, así que los dos motores de DWG (dwgjs/node_modules) se copian por extraResources o la app se queda sin leer DWG.",
+   "description": "CAD 2D de Taller 101 — leer, trazar, acotar e imprimir planos",
+   "main": "electron/main.js",
+   "author": "Taller 101",
+@@ -19,11 +19,11 @@
+     "electron-builder": "^25.0.0"
+   },
+   "build": {
+     "appId": "mx.taller101.dibujador",
+     "productName": "draw101",
+-    "artifactName": "draw101-0.27.0-setup.${ext}",
++    "artifactName": "draw101-0.27.1-setup.${ext}",
+     "directories": {
+       "output": "dist",
+       "buildResources": "build"
+     },
+     "asar": false,
