@@ -1,0 +1,172 @@
+# Armado de draw101 para macOS (Intel)
+#
+# ESTE ARCHIVO VA EN:  .github/workflows/armar-mac.yml
+#
+# Lo pega Mike a mano, no el chat: el conector de GitHub da 403 al escribir
+# dentro de `.github/workflows/` (le falta el permiso «workflows»). Es un
+# archivo NUEVO a propósito, no un cambio al flujo de Windows: así no hay nada
+# que empalmar ni sangrías que cuadrar, y si algo sale mal, el armado de
+# Windows ni se entera.
+#
+# Se dispara A MANO (Actions → «Armar draw101 para macOS» → Run workflow).
+# No se dispara al publicar: la entrega de Windows sigue su camino sola.
+#
+# VA EN `main` Y SE CORRE DESDE `main`, aunque main esté vieja. Dos razones:
+# un flujo de disparo manual sólo aparece en Actions si el archivo está en la
+# rama por omisión; y la documentación de GitHub NO dice cuál copia del archivo
+# corre si eliges otra rama en el desplegable. Así que el flujo no se fía de
+# eso: se queda en main y ÉL SOLO se cambia a la rama publicada más nueva. Lo
+# bueno de hacerlo así es que esto se pega una vez y ya: en la entrega
+# siguiente no hay nada que volver a pegar.
+#
+# QUÉ DEJA: el .dmg y el .zip como artefacto del run, para bajar. No publica
+# release ni toca el manifiesto; eso se agrega cuando la versión de Mac deje
+# de ser una prueba.
+name: Armar draw101 para macOS
+
+on:
+  workflow_dispatch:
+    inputs:
+      rama:
+        description: 'Rama a armar (déjalo vacío para la publicar-* más nueva)'
+        required: false
+        default: ''
+
+permissions:
+  contents: read
+
+concurrency:
+  group: armar-mac
+  cancel-in-progress: false
+
+jobs:
+  mac:
+    # macos-15-intel es la máquina Intel. Las demás (macos-15, macos-26,
+    # macos-latest) son Apple Silicon, y la Mac del taller es una Air 2017 con
+    # Intel. Ojo si algún día GitHub la retira: habría que armar x64 sobre una
+    # máquina de chip M, que se puede pero ya no se podría PROBAR aquí.
+    runs-on: macos-15-intel
+    timeout-minutes: 90
+    defaults:
+      run:
+        shell: bash
+    steps:
+      # fetch-depth 0 para que se bajen TODAS las ramas, no sólo main: de otro
+      # modo el paso siguiente no encontraría ninguna claude/publicar-*.
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - name: Cambiarse a la rama publicada
+        id: rama
+        env:
+          # Por env y no interpolado en el guión: lo que se teclea en el
+          # desplegable no debe poder meter comandos.
+          PEDIDA: ${{ inputs.rama }}
+        run: |
+          set -euo pipefail
+          if [ -n "${PEDIDA:-}" ]; then
+            R="$PEDIDA"
+          else
+            # --sort=-v:refname es orden de VERSIÓN, no alfabético: así la
+            # 0.27.0 queda arriba de la 0.9.0, que al alfabético no le pasa.
+            R=$(git for-each-ref --sort=-v:refname \
+                  --format='%(refname:strip=3)' \
+                  'refs/remotes/origin/claude/publicar-*' | head -1)
+            [ -n "$R" ] || { echo "no hay ninguna rama claude/publicar-*"; exit 1; }
+          fi
+          echo "armando desde: $R"
+          git checkout -q --detach "origin/$R"
+          echo "rama=$R" >> "$GITHUB_OUTPUT"
+
+      - name: Aplicar parches pendientes (claude/APLICAR.txt)
+        run: |
+          set -euo pipefail
+          if [ -f claude/APLICAR.txt ]; then
+            while read -r p; do
+              p="${p%$'\r'}"
+              [ -z "$p" ] && continue
+              echo "aplicando claude/$p"
+              git apply --check "claude/$p"
+              git apply "claude/$p"
+            done < claude/APLICAR.txt
+          else
+            echo "sin parches pendientes"
+          fi
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.11'
+
+      - name: Qué versión se está armando
+        id: version
+        run: |
+          set -euo pipefail
+          VER=$(python -c "import core.version as v; print(v.VERSION)")
+          echo "version=$VER" >> "$GITHUB_OUTPUT"
+          echo "core/version.py dice $VER"
+          grep -q "\"version\": \"$VER\"" package.json || { echo "package.json no dice $VER"; exit 1; }
+
+      # Lo que hace y por qué, en build/python-mac.sh. Resumen: baja un CPython
+      # portable para macOS Intel y le instala los paquetes del motor.
+      - name: Python empotrado para macOS
+        run: bash build/python-mac.sh
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '20'
+          cache: npm
+
+      - name: Dependencias de Electron
+        run: npm ci --no-audit --no-fund
+
+      - name: Motores DWG presentes
+        run: |
+          set -euo pipefail
+          test -f dwgjs/node_modules/@mlightcad/libredwg-web/wasm/libredwg-web.wasm
+          test -d dwgjs/node_modules/@node-projects/acad-ts/dist
+          echo "los dos motores de DWG están"
+
+      # LA PARTE QUE DE VERDAD IMPORTA: la suite completa corriendo sobre
+      # macOS, no sobre Linux ni Windows. Es lo único que dice si el motor se
+      # porta igual en Mac, y por eso el armado se cae si falla.
+      - name: Pruebas sobre macOS (python verificar.py)
+        run: |
+          set -euo pipefail
+          python -m pip install --quiet --upgrade pip
+          python -m pip install --quiet ezdxf fastapi httpx2 uvicorn numpy pillow \
+            reportlab pymupdf pypdfium2 orjson playwright
+          # Chromium sólo si las pruebas de navegador van a correr de verdad:
+          # en el corredor se saltan solas (pruebas/navegador.py, hay_navegador)
+          # salvo que T101_PRUEBAS_COMPLETAS esté puesta. Igual que en el flujo
+          # de Windows: bajarlo en cada armado son minutos por pruebas que no
+          # corren. Y «--with-deps» aquí no va: eso instala paquetes de sistema
+          # con apt, que es cosa de Linux.
+          if [ -n "${T101_PRUEBAS_COMPLETAS:-}" ]; then python -m playwright install chromium; fi
+          python verificar.py
+
+      - name: Armar la app
+        env:
+          # Sin esto electron-builder se pone a buscar un certificado en el
+          # llavero, no encuentra ninguno y tumba el armado en vez de entregar
+          # una app sin firmar, que es justo lo que se quiere aquí.
+          CSC_IDENTITY_AUTO_DISCOVERY: 'false'
+        run: npx electron-builder --mac --x64
+
+      - name: Qué salió
+        run: |
+          set -euo pipefail
+          ls -lh dist/*.dmg dist/*.zip 2>/dev/null || { echo "no salió ni dmg ni zip:"; ls -la dist; exit 1; }
+          for f in dist/*.dmg dist/*.zip; do
+            echo "$(basename "$f")  ·  $(du -h "$f" | cut -f1)  ·  sha256 $(shasum -a 256 "$f" | cut -c1-16)…"
+          done
+
+      - name: Guardar para bajar
+        uses: actions/upload-artifact@v4
+        with:
+          name: draw101-mac-${{ steps.version.outputs.version }}
+          path: |
+            dist/*.dmg
+            dist/*.zip
+          retention-days: 30
+          if-no-files-found: error
